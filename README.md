@@ -21,6 +21,7 @@ Open-source AI browser agent for Chrome and Firefox. Chat with any web page, aut
 - **Copy Support** — Copy buttons on code blocks and full messages
 - **Page Inspection Banner** — Visual indicator when the agent is interacting with the page
 - **Stop Button** — Abort the agent mid-execution at any time
+- **Deterministic Act Mode** — Act mode uses temperature `0.15` for browser-control decisions; Ask mode uses `0.3`, and dedicated vision screenshot descriptions use `0`
 
 ## Quick Start
 

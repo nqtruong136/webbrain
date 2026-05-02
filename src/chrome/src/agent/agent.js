@@ -4216,6 +4216,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
     const provider = this.providerManager.getActive();
     const tools = getToolsForMode(mode);
+    const plannerTemperature = mode === 'act' ? 0.15 : 0.3;
     let steps = 0;
     let finalResponse = '';
 
@@ -4260,7 +4261,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       let result;
       try {
         const useTools = provider.supportsTools;
-        const chatOpts = { tools: useTools ? tools : undefined, temperature: 0.3, maxTokens: 4096 };
+        const chatOpts = { tools: useTools ? tools : undefined, temperature: plannerTemperature, maxTokens: 4096 };
         const prunedMessages = this._pruneOldImages(messages, provider);
         this._logDebug({ type: 'llm_request', step: steps, provider: provider.constructor.name, messages: prunedMessages, options: chatOpts });
         if (runId) trace.recordLLMRequest(runId, steps, { providerClass: provider.constructor.name, model: provider.model, messageCount: prunedMessages.length, toolsCount: (chatOpts.tools || []).length });
@@ -4277,7 +4278,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           this._emergencyTrim(messages);
           try {
             const useTools = provider.supportsTools;
-            const chatOpts = { tools: useTools ? tools : undefined, temperature: 0.3, maxTokens: 4096 };
+            const chatOpts = { tools: useTools ? tools : undefined, temperature: plannerTemperature, maxTokens: 4096 };
             const prunedMessages = this._pruneOldImages(messages, provider);
             this._logDebug({ type: 'llm_request_retry', step: steps, provider: provider.constructor.name, messages: prunedMessages, options: chatOpts });
             result = await provider.chat(prunedMessages, chatOpts);
@@ -4295,7 +4296,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           await new Promise(r => setTimeout(r, 2000));
           try {
             const useTools2 = provider.supportsTools;
-            const chatOpts2 = { tools: useTools2 ? tools : undefined, temperature: 0.3, maxTokens: 4096 };
+            const chatOpts2 = { tools: useTools2 ? tools : undefined, temperature: plannerTemperature, maxTokens: 4096 };
             result = await provider.chat(this._pruneOldImages(messages, provider), chatOpts2);
             this._logDebug({ type: 'llm_response_after_retry', step: steps, content: result.content, toolCalls: result.toolCalls });
           } catch (e2) {
@@ -4391,6 +4392,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
     const provider = this.providerManager.getActive();
     const tools = getToolsForMode(mode);
+    const plannerTemperature = mode === 'act' ? 0.15 : 0.3;
     let steps = 0;
 
     this.abortFlags.delete(tabId);
@@ -4413,7 +4415,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         let toolCallsAccumulator = {};
         let hasToolCalls = false;
 
-        const streamOpts = { tools: provider.supportsTools ? tools : undefined, temperature: 0.3, maxTokens: 4096 };
+        const streamOpts = { tools: provider.supportsTools ? tools : undefined, temperature: plannerTemperature, maxTokens: 4096 };
         const prunedMessages = this._pruneOldImages(messages, provider);
         this._logDebug({ type: 'llm_stream_request', step: steps, provider: provider.constructor.name, messages: prunedMessages, options: streamOpts });
 
