@@ -169,20 +169,47 @@ export class Agent {
   /**
    * Add a tab to the "WebBrain" tab group — reused by both the explicit
    * `new_tab` tool and the click handler's target=_blank redirect fallback.
-   * Preserves the source tab's existing group when present so multi-tab
-   * research chains stay visually together.
+   *
+   * We look up the WebBrain group by title within the source tab's
+   * window rather than by source-tab-membership: if the source is in a
+   * user-owned group (e.g. "Dev", "Research"), we don't drag agent-
+   * spawned tabs into that group. The user's own grouping stays intact;
+   * agent outputs live in their own WebBrain group.
+   *
+   * If no WebBrain group exists yet for the window, we create a fresh one
+   * containing only the new tab (NOT the source tab) — leaving the
+   * source where the user put it. Background.js's action.onClicked
+   * handler is the canonical place that opts the source tab into the
+   * group, via `ensureWebBrainGroup`.
    *
    * Returns the group id (or -1 if grouping isn't supported / failed).
    */
   async _addToWebBrainGroup(sourceTab, tabId) {
     if (!chrome.tabGroups || !sourceTab?.id || tabId == null) return -1;
     try {
-      if (typeof sourceTab.groupId === 'number' && sourceTab.groupId >= 0) {
-        await chrome.tabs.group({ groupId: sourceTab.groupId, tabIds: [tabId] });
-        return sourceTab.groupId;
+      // Find an existing WebBrain group in this window, if any.
+      let existing = null;
+      try {
+        const groups = await chrome.tabGroups.query({
+          title: 'WebBrain',
+          windowId: sourceTab.windowId,
+        });
+        if (Array.isArray(groups) && groups.length > 0) existing = groups[0];
+      } catch { /* tabGroups.query unsupported on very old Chromes */ }
+
+      if (existing) {
+        await chrome.tabs.group({ groupId: existing.id, tabIds: [tabId] });
+        return existing.id;
       }
-      const gid = await chrome.tabs.group({ tabIds: [sourceTab.id, tabId] });
-      await chrome.tabGroups.update(gid, { title: 'WebBrain', color: 'blue', collapsed: false });
+
+      // No WebBrain group yet — create one with just the new tab. We
+      // deliberately do NOT include sourceTab here, because if the user
+      // put it in their own "Dev" group, pulling it out is hostile.
+      // The first action.onClicked elsewhere will opt the source tab in.
+      const gid = await chrome.tabs.group({ tabIds: [tabId] });
+      await chrome.tabGroups.update(gid, {
+        title: 'WebBrain', color: 'blue', collapsed: false,
+      });
       return gid;
     } catch (_) { return -1; }
   }
@@ -1018,6 +1045,38 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    *
    * Returns { dataUrl, width, height } (in image pixels) or null.
    */
+  /**
+   * Wrap a screenshot capture in messages that ask the agent-visual-
+   * indicator content script to hide its pulsing border + Stop button
+   * for the duration of the capture. Without this, the agent's own
+   * indicator gets baked into every screenshot it sends to the vision
+   * model — which is both ugly and a small token-budget tax.
+   *
+   * Best-effort: if the content script isn't loaded (chrome:// /
+   * chrome-extension:// / file:// pages), the sendMessage rejects and
+   * we capture as-is. Same on tabs the user opened before the extension
+   * had a chance to inject.
+   */
+  async _withIndicatorsHidden(tabId, fn) {
+    let needsRestore = false;
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'WB_HIDE_FOR_TOOL_USE' });
+      needsRestore = true;
+      // One paint frame for Chrome to apply the display:none the
+      // content script just set, before CDP grabs the surface.
+      await new Promise((r) => setTimeout(r, 16));
+    } catch { /* content script absent — that's fine, no UI to hide */ }
+    try {
+      return await fn();
+    } finally {
+      if (needsRestore) {
+        try {
+          chrome.tabs.sendMessage(tabId, { type: 'WB_SHOW_AFTER_TOOL_USE' }).catch(() => {});
+        } catch { /* ignore */ }
+      }
+    }
+  }
+
   async _captureAutoScreenshot(tabId, { coordAligned = false } = {}) {
     try {
       await cdpClient.attach(tabId);
@@ -1038,11 +1097,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         // We DO still run the byte-ceiling fallback afterwards: if the
         // CSS viewport happens to be huge, we'd rather lose some JPEG
         // quality than overflow the provider's image cap.
-        const shot = await cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
-          format: 'jpeg',
-          quality: 60,
-          clip: { x: 0, y: 0, width: cssW, height: cssH, scale: 1 },
-        });
+        const shot = await this._withIndicatorsHidden(tabId, () =>
+          cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
+            format: 'jpeg',
+            quality: 60,
+            clip: { x: 0, y: 0, width: cssW, height: cssH, scale: 1 },
+          })
+        );
         if (!shot?.data) return null;
         const rawDataUrl = `data:image/jpeg;base64,${shot.data}`;
         const shrunk = await this._compressJpegToByteCeiling(rawDataUrl);
@@ -1055,12 +1116,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // then have to decode and resize in the service worker.
       const [targetW, targetH] = Agent._fitImageDimensions(cssW, cssH);
       const scale = targetW < cssW ? targetW / cssW : 1;
-      const shot = await cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
-        format: 'jpeg',
-        quality: Math.round(Agent.IMAGE_BUDGET.initialJpegQuality * 100),
-        fromSurface: true,
-        clip: { x: 0, y: 0, width: cssW, height: cssH, scale },
-      });
+      const shot = await this._withIndicatorsHidden(tabId, () =>
+        cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
+          format: 'jpeg',
+          quality: Math.round(Agent.IMAGE_BUDGET.initialJpegQuality * 100),
+          fromSurface: true,
+          clip: { x: 0, y: 0, width: cssW, height: cssH, scale },
+        })
+      );
       if (!shot?.data) return null;
       const rawDataUrl = `data:image/jpeg;base64,${shot.data}`;
 
@@ -2183,11 +2246,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             // Pixel-accuracy mode: image pixels must equal CSS pixels so
             // click({x,y}) off the screenshot lands on the real element.
             // PNG (lossless, no quality knob) so no artifacts at glyph edges.
-            const screenshot = await cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
-              format: 'png',
-              fromSurface: true,
-              clip: { x: 0, y: 0, width: cssW, height: cssH, scale: 1 },
-            });
+            const screenshot = await this._withIndicatorsHidden(tabId, () =>
+              cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
+                format: 'png',
+                fromSurface: true,
+                clip: { x: 0, y: 0, width: cssW, height: cssH, scale: 1 },
+              })
+            );
             dataUrl = `data:image/png;base64,${screenshot.data}`;
             description = `Screenshot captured via CDP (${screenshot.data.length} bytes, CSS-pixel aligned for pixel clicks)`;
             // Byte-ceiling fallback only — we don't resize in coord mode.
@@ -2198,12 +2263,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             // the iterative-quality fallback if bytes are still over.
             const [targetW, targetH] = Agent._fitImageDimensions(cssW, cssH);
             const scale = targetW < cssW ? targetW / cssW : 1;
-            const screenshot = await cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
-              format: 'jpeg',
-              quality: Math.round(Agent.IMAGE_BUDGET.initialJpegQuality * 100),
-              fromSurface: true,
-              clip: { x: 0, y: 0, width: cssW, height: cssH, scale },
-            });
+            const screenshot = await this._withIndicatorsHidden(tabId, () =>
+              cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
+                format: 'jpeg',
+                quality: Math.round(Agent.IMAGE_BUDGET.initialJpegQuality * 100),
+                fromSurface: true,
+                clip: { x: 0, y: 0, width: cssW, height: cssH, scale },
+              })
+            );
             const rawUrl = `data:image/jpeg;base64,${screenshot.data}`;
             dataUrl = await this._compressJpegToByteCeiling(rawUrl);
             const resized = scale < 1 ? ` (resized ${cssW}×${cssH} → ${targetW}×${targetH} for vision-token budget)` : '';
@@ -2298,9 +2365,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           // reflects what the user would actually see.
           const probe = await this._captureViewportProbe(tabId);
           await this._bringToFrontForCapture(tabId);
-          const shot = await cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
-            format: 'png', quality: 80, fromSurface: true,
-          });
+          const shot = await this._withIndicatorsHidden(tabId, () =>
+            cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
+              format: 'png', quality: 80, fromSurface: true,
+            })
+          );
           let imageDataUrl = `data:image/png;base64,${shot.data}`;
           // If we remember the rect of the last ax interaction on this tab,
           // outline it on the screenshot so the model can anchor its review
@@ -2441,7 +2510,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       try {
         await cdpClient.attach(tabId);
         await this._bringToFrontForCapture(tabId);
-        const imageData = await cdpClient.captureFullPageScreenshot(tabId);
+        const imageData = await this._withIndicatorsHidden(tabId, () =>
+          cdpClient.captureFullPageScreenshot(tabId)
+        );
         const rawUrl = `data:image/png;base64,${imageData}`;
 
         // Full-page captures are the worst case for size — a 1920×8000
@@ -2526,9 +2597,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         try {
           await cdpClient.sendCommand(tabId, 'Page.enable');
           await this._bringToFrontForCapture(tabId);
-          const shot = await cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
-            format: 'png', quality: 100, fromSurface: true,
-          });
+          const shot = await this._withIndicatorsHidden(tabId, () =>
+            cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
+              format: 'png', quality: 100, fromSurface: true,
+            })
+          );
           result.image = `data:image/png;base64,${shot.data}`;
         } catch {
           result.screenshotFailed = true;
