@@ -252,6 +252,43 @@ async function disablePanelOnAllTabs() {
 }
 disablePanelOnAllTabs();
 
+// ────────────────────────────────────────────────────────────────────────
+// Agent visual indicator (content-script bridge)
+//
+// While an agent run is in flight, we ask the page's content script to
+// render a pulsing purple inset glow around the viewport plus a
+// "Stop WebBrain" floating button. The chat / chat_stream / continue
+// handlers wrap their await with sendIndicatorMessage(tabId, 'SHOW' / 'HIDE').
+// agent.js fires HIDE_FOR_TOOL_USE / SHOW_AFTER_TOOL_USE around screenshot
+// capture so the agent doesn't see its own border in the pixels it sends
+// to the vision model.
+// ────────────────────────────────────────────────────────────────────────
+
+/**
+ * Tell a tab's content script to show/hide the agent indicator. Best-
+ * effort: silently no-ops on chrome:// / chrome-extension:// tabs (no
+ * content script there) and on tabs that haven't loaded yet. We don't
+ * await — these are decorative and shouldn't block the run.
+ */
+function sendIndicatorMessage(tabId, type) {
+  if (tabId == null || !type) return;
+  try {
+    chrome.tabs.sendMessage(tabId, { type }).catch(() => { /* expected */ });
+  } catch { /* ignore */ }
+}
+
+// Stop button on the page → abort the agent run for that tab. Mirrors
+// the sidepanel's Stop button.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== 'WB_STOP_AGENT') return; // not ours
+  const tabId = sender?.tab?.id;
+  if (tabId != null) {
+    try { agent.abort(tabId); } catch { /* ignore */ }
+  }
+  sendResponse({ ok: true });
+  // Synchronous response — return undefined.
+});
+
 chrome.tabs.onCreated.addListener((tab) => {
   if (tab?.id == null) return;
   // New tab inherits "panel off" unless it lands in a WebBrain group
@@ -391,18 +428,27 @@ async function handleMessage(msg, sender) {
       // service worker restart.
       if (msg.apiMutationsAllowed) agent.setApiMutationsAllowed(tabId, true);
 
-      const updates = [];
-      const result = await agent.processMessage(tabId, msg.text, (type, data) => {
-        updates.push({ type, data });
-        chrome.runtime.sendMessage({
-          target: 'sidepanel',
-          action: 'agent_update',
-          type,
-          data,
-        }).catch(() => {});
-      }, mode);
+      // Show the on-page glow + Stop button while the run is in flight.
+      // Best-effort: silently no-ops on tabs where the content script
+      // isn't present (chrome://, chrome-extension://, etc.).
+      sendIndicatorMessage(tabId, 'WB_SHOW_AGENT_INDICATORS');
 
-      return { content: result, updates };
+      const updates = [];
+      try {
+        const result = await agent.processMessage(tabId, msg.text, (type, data) => {
+          updates.push({ type, data });
+          chrome.runtime.sendMessage({
+            target: 'sidepanel',
+            action: 'agent_update',
+            type,
+            data,
+          }).catch(() => {});
+        }, mode);
+
+        return { content: result, updates };
+      } finally {
+        sendIndicatorMessage(tabId, 'WB_HIDE_AGENT_INDICATORS');
+      }
     }
 
     case 'chat_stream': {
@@ -412,16 +458,21 @@ async function handleMessage(msg, sender) {
 
       if (msg.apiMutationsAllowed) agent.setApiMutationsAllowed(tabId, true);
 
-      const result = await agent.processMessageStream(tabId, msg.text, (type, data) => {
-        chrome.runtime.sendMessage({
-          target: 'sidepanel',
-          action: 'agent_update',
-          type,
-          data,
-        }).catch(() => {});
-      }, mode);
+      sendIndicatorMessage(tabId, 'WB_SHOW_AGENT_INDICATORS');
+      try {
+        const result = await agent.processMessageStream(tabId, msg.text, (type, data) => {
+          chrome.runtime.sendMessage({
+            target: 'sidepanel',
+            action: 'agent_update',
+            type,
+            data,
+          }).catch(() => {});
+        }, mode);
 
-      return { content: result };
+        return { content: result };
+      } finally {
+        sendIndicatorMessage(tabId, 'WB_HIDE_AGENT_INDICATORS');
+      }
     }
 
     case 'continue': {
@@ -429,16 +480,21 @@ async function handleMessage(msg, sender) {
       if (!tabId) throw new Error('No tab ID');
       const mode = msg.mode || 'ask';
 
-      const result = await agent.continueProcessing(tabId, (type, data) => {
-        chrome.runtime.sendMessage({
-          target: 'sidepanel',
-          action: 'agent_update',
-          type,
-          data,
-        }).catch(() => {});
-      }, mode);
+      sendIndicatorMessage(tabId, 'WB_SHOW_AGENT_INDICATORS');
+      try {
+        const result = await agent.continueProcessing(tabId, (type, data) => {
+          chrome.runtime.sendMessage({
+            target: 'sidepanel',
+            action: 'agent_update',
+            type,
+            data,
+          }).catch(() => {});
+        }, mode);
 
-      return { content: result };
+        return { content: result };
+      } finally {
+        sendIndicatorMessage(tabId, 'WB_HIDE_AGENT_INDICATORS');
+      }
     }
 
     case 'clear_conversation': {
