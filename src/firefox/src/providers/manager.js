@@ -1,6 +1,6 @@
 import { LlamaCppProvider } from './llamacpp.js';
 import { OpenAICompatibleProvider } from './openai.js';
-import { AnthropicProvider } from './anthropic.js';
+import { AnthropicProvider, AnthropicOAuthProvider } from './anthropic.js';
 
 /**
  * Manages LLM provider instances and persists configuration.
@@ -95,6 +95,16 @@ export class ProviderManager {
         apiKey: '',
         enabled: false,
       },
+      // Subscription auth (OAuth) entry, kept distinct from the API-key
+      // entry above so a user can have both configured. Tokens live in
+      // `browser.storage.local` under `anthropicOauthTokens` (see
+      // oauth-claude.js), not in this config.
+      claude_subscription: {
+        type: 'anthropic_oauth',
+        label: 'Claude (Pro/Max subscription)',
+        model: 'claude-sonnet-4-20250514',
+        enabled: false,
+      },
       webbrain: {
         type: 'openai',
         label: 'WebBrain Cloud',
@@ -115,6 +125,8 @@ export class ProviderManager {
         return new OpenAICompatibleProvider(config);
       case 'anthropic':
         return new AnthropicProvider(config);
+      case 'anthropic_oauth':
+        return new AnthropicOAuthProvider(config);
       default:
         throw new Error(`Unknown provider type: ${config.type}`);
     }
