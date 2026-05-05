@@ -102,20 +102,64 @@ register them via `client.plugins.setToolsProvider(...)`.
 
 ## Safety notes
 
-- **URL guard.** By default, requests to RFC1918 (`10.*`,
-  `172.16-31.*`, `192.168.*`), loopback (`127.*`, `::1`), link-local
-  (`169.254.*`, `fe80::/10`), unique-local IPv6 (`fc00::/7`),
-  cloud-metadata IPs, and `*.local` / `*.internal` / `*.lan` domains
-  are blocked. This keeps a confused or maliciously-prompted model
-  from being directed at AWS/GCP metadata endpoints or the user's
-  intranet. Set `allowPrivate: true` on a per-call basis to opt in
-  when you actually want the plugin to talk to localhost services.
+The plugin runs in the user's local Node process, so anything
+reachable from that process is reachable from the LLM. The defenses
+below are layered — each closes a class of bypass the previous one
+missed — but DNS rebinding is a known residual gap (see the bottom
+of this section).
+
+- **URL guard, structural (sync).** By default, requests to RFC1918
+  (`10.*`, `172.16-31.*`, `192.168.*`), loopback (`127.*`, `::1`),
+  link-local (`169.254.*`, `fe80::/10`), unique-local IPv6
+  (`fc00::/7`), cloud-metadata IPs, and `*.local` / `*.internal` /
+  `*.lan` / `*.home` / `*.corp` / `*.intranet` domains are blocked.
+  Non-`http(s)` protocols (`file://`, `ftp://`, `gopher://`,
+  `javascript:`) are blocked too.
+- **DNS resolution check.** Before each hop, the hostname is
+  resolved via `dns.lookup({all: true})` and every returned A/AAAA
+  address is checked against the same private ranges. This closes
+  the bypass where `attacker.example A 127.0.0.1` would otherwise
+  pass the syntactic check.
+- **Per-redirect re-validation.** Redirects are followed manually
+  (5 hops max). Each `Location` header runs through both the
+  structural and DNS-resolution checks before we follow it. A
+  public URL cannot 302 to `http://169.254.169.254/...` and have
+  the plugin happily fetch it.
+- **Cross-origin header stripping.** When a redirect crosses
+  origins, `Authorization`, `Cookie`, `Proxy-Authorization`, and
+  `Proxy-Authenticate` request headers are dropped. Same-origin
+  redirects keep the full header set. This stops credentials
+  passed via the per-call `headers` arg from leaking through an
+  open-redirect chain.
+- **Streaming response cap.** Bodies are read with a hard byte
+  ceiling (4 MB for `fetch_url`, 6 MB for `research_url`). Past
+  the cap, the underlying stream is cancelled and the result is
+  marked `truncated: true`. A malicious or misconfigured server
+  that sends a 1 GB response can no longer OOM the plugin.
 - **No `credentials: 'include'`.** Unlike the Chrome extension
-  (which forwards the user's browser cookies via `credentials:
-  'include'`), this plugin makes anonymous requests. The model
-  cannot reach pages behind your existing browser logins.
+  (which forwards the user's browser cookies), this plugin makes
+  anonymous requests. The model cannot reach pages behind your
+  existing browser logins.
 - **Timeouts.** Default 30 s, hard cap 120 s. Long-tail sites that
   hang forever won't lock up the model's tool-call loop.
+
+Set `allowPrivate: true` on a per-call basis to opt out of the URL
+guard + DNS check for that one call — useful when you actually want
+the plugin to talk to localhost services.
+
+### Known residual gap: DNS rebinding
+
+An attacker controlling a domain with TTL=0 can return a public IP
+when our guard runs `dns.lookup` and a private IP a moment later
+when `fetch` connects. Closing this fully requires pinning the
+resolved IP via a custom `undici` Agent's `connect.lookup` hook so
+the connection uses the exact address we validated. That's tracked
+as a follow-up — the current layered defense raises the bar enough
+to stop drive-by SSRF from open redirects and naive hostname tricks
+but is not a hardened sandbox. If you're running this on a cloud
+VM with sensitive instance-metadata endpoints, run it under a
+network policy that blocks 169.254.169.254 outbound rather than
+relying solely on this plugin's checks.
 
 ## File layout
 
@@ -132,7 +176,8 @@ lmstudio-plugin/
     │   └── researchUrl.ts← research_url implementation
     └── util/
         ├── htmlToText.ts ← regex HTML stripper
-        └── urlGuard.ts   ← private-IP / file:// blocker
+        ├── safeFetch.ts  ← redirect-revalidating wrapper + streaming cap
+        └── urlGuard.ts   ← private-IP / file:// blocker (sync structural check)
 ```
 
 `tools/` and `util/` are pure functions with no SDK dependency —

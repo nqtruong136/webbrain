@@ -13,12 +13,19 @@
  *      default. Opt out per-call with `allowPrivate: true`.
  */
 
-import { assertSafeUrl } from "../util/urlGuard.js";
 import { htmlToText } from "../util/htmlToText.js";
+import { safeFetch, readBodyCapped } from "../util/safeFetch.js";
 
 const FETCH_TEXT_LIMIT = 8000;
 const FETCH_JSON_LIMIT = 16000;
 const DEFAULT_TIMEOUT_MS = 30_000;
+// Hard byte ceiling for the streamed body. Sized to comfortably fit
+// the largest "useful" response while still bounding worst-case memory
+// use of the plugin process. We slice down to FETCH_TEXT_LIMIT /
+// FETCH_JSON_LIMIT for the model after this — the body cap exists to
+// stop an attacker from streaming a gigabyte of garbage into our
+// buffer before we get a chance to truncate.
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024; // 4 MB
 
 export interface FetchUrlArgs {
   url: string;
@@ -68,13 +75,6 @@ export interface FetchUrlResult {
 export async function fetchUrl(args: FetchUrlArgs): Promise<FetchUrlResult> {
   if (!args?.url) return { success: false, error: "url is required" };
 
-  let parsed: URL;
-  try {
-    parsed = assertSafeUrl(args.url, { allowPrivate: !!args.allowPrivate });
-  } catch (e) {
-    return { success: false, error: (e as Error).message };
-  }
-
   const timeoutMs = Math.min(
     Math.max(args.timeout ?? DEFAULT_TIMEOUT_MS, 1000),
     120_000,
@@ -83,12 +83,16 @@ export async function fetchUrl(args: FetchUrlArgs): Promise<FetchUrlResult> {
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(parsed.toString(), {
+    // safeFetch handles: URL guard → DNS check → manual redirect loop
+    // (revalidating each Location through both checks) → cross-origin
+    // header stripping. If any hop is a private IP / hostname, this
+    // throws synchronously inside the await.
+    const res = await safeFetch(args.url, {
       method: args.method || "GET",
       headers: args.headers || {},
       body: args.body,
-      redirect: "follow",
       signal: controller.signal,
+      allowPrivate: !!args.allowPrivate,
     });
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
     const status = res.status;
@@ -96,7 +100,7 @@ export async function fetchUrl(args: FetchUrlArgs): Promise<FetchUrlResult> {
 
     // JSON: pretty-print, cap separately (JSON is denser than prose).
     if (contentType.includes("json")) {
-      const text = await res.text();
+      const { text, truncated: bodyTruncated } = await readBodyCapped(res, MAX_RESPONSE_BYTES);
       let pretty = text;
       try {
         pretty = JSON.stringify(JSON.parse(text), null, 2);
@@ -109,14 +113,14 @@ export async function fetchUrl(args: FetchUrlArgs): Promise<FetchUrlResult> {
         contentType,
         url: finalUrl,
         json: pretty.slice(0, FETCH_JSON_LIMIT),
-        truncated: pretty.length > FETCH_JSON_LIMIT,
+        truncated: pretty.length > FETCH_JSON_LIMIT || bodyTruncated,
         originalLength: pretty.length,
       };
     }
 
     // HTML: strip to readable text and capture <title>.
     if (contentType.includes("html") || contentType.includes("xhtml")) {
-      const html = await res.text();
+      const { text: html, truncated: bodyTruncated } = await readBodyCapped(res, MAX_RESPONSE_BYTES);
       const { title, text } = htmlToText(html);
       return {
         success: true,
@@ -125,7 +129,7 @@ export async function fetchUrl(args: FetchUrlArgs): Promise<FetchUrlResult> {
         url: finalUrl,
         title,
         text: text.slice(0, FETCH_TEXT_LIMIT),
-        truncated: text.length > FETCH_TEXT_LIMIT,
+        truncated: text.length > FETCH_TEXT_LIMIT || bodyTruncated,
         originalLength: text.length,
       };
     }
@@ -139,14 +143,14 @@ export async function fetchUrl(args: FetchUrlArgs): Promise<FetchUrlResult> {
       contentType.includes("markdown") ||
       contentType === ""
     ) {
-      const text = await res.text();
+      const { text, truncated: bodyTruncated } = await readBodyCapped(res, MAX_RESPONSE_BYTES);
       return {
         success: true,
         status,
         contentType,
         url: finalUrl,
         text: text.slice(0, FETCH_TEXT_LIMIT),
-        truncated: text.length > FETCH_TEXT_LIMIT,
+        truncated: text.length > FETCH_TEXT_LIMIT || bodyTruncated,
         originalLength: text.length,
       };
     }

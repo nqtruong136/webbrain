@@ -29,11 +29,16 @@
  * page that hydrates from JSON, you'll see a near-empty result.
  */
 
-import { assertSafeUrl } from "../util/urlGuard.js";
 import { htmlToText } from "../util/htmlToText.js";
+import { safeFetch, readBodyCapped } from "../util/safeFetch.js";
 
 const RESEARCH_TEXT_LIMIT = 16_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
+// Hard byte ceiling for the streamed body. Slightly larger than
+// fetchUrl's 4 MB because research_url is biased toward whole HTML
+// articles (which can run long), but small enough to bound worst-case
+// memory if a server replies with a giant SPA bundle.
+const MAX_RESPONSE_BYTES = 6 * 1024 * 1024; // 6 MB
 
 export interface ResearchUrlArgs {
   url: string;
@@ -133,13 +138,6 @@ function extractLinks(html: string, base: string): ResearchUrlLink[] {
 export async function researchUrl(args: ResearchUrlArgs): Promise<ResearchUrlResult> {
   if (!args?.url) return { success: false, error: "url is required" };
 
-  let parsed: URL;
-  try {
-    parsed = assertSafeUrl(args.url, { allowPrivate: !!args.allowPrivate });
-  } catch (e) {
-    return { success: false, error: (e as Error).message };
-  }
-
   const timeoutMs = Math.min(
     Math.max(args.timeout ?? DEFAULT_TIMEOUT_MS, 1000),
     120_000,
@@ -148,13 +146,15 @@ export async function researchUrl(args: ResearchUrlArgs): Promise<ResearchUrlRes
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(parsed.toString(), {
+    // safeFetch handles URL guard + DNS check + per-redirect re-validation
+    // and cross-origin header stripping. See safeFetch.ts for design.
+    const res = await safeFetch(args.url, {
       method: "GET",
-      redirect: "follow",
       signal: controller.signal,
+      allowPrivate: !!args.allowPrivate,
       headers: {
         // Some sites gate on User-Agent. Pretend to be a recent
-        // desktop Chrome — same MO as curl/wget defaults.
+        // desktop Firefox — same MO as curl/wget defaults.
         "User-Agent":
           "Mozilla/5.0 (LMStudio WebBrain Tools) Gecko/20100101 Firefox/142.0",
       },
@@ -178,7 +178,7 @@ export async function researchUrl(args: ResearchUrlArgs): Promise<ResearchUrlRes
       };
     }
 
-    const html = await res.text();
+    const { text: html, truncated: bodyTruncated } = await readBodyCapped(res, MAX_RESPONSE_BYTES);
     const finalUrl = res.url;
 
     // Title comes from the full document, not the cropped region —
@@ -200,7 +200,7 @@ export async function researchUrl(args: ResearchUrlArgs): Promise<ResearchUrlRes
       url: finalUrl,
       title,
       text: text.slice(0, RESEARCH_TEXT_LIMIT),
-      truncated: text.length > RESEARCH_TEXT_LIMIT,
+      truncated: text.length > RESEARCH_TEXT_LIMIT || bodyTruncated,
       originalLength: text.length,
       links,
       ...(spaSuspected ? { spaSuspected: true } : {}),

@@ -10,15 +10,32 @@
  * process is reachable from the LLM: localhost services, intranet
  * apps, cloud-metadata endpoints (169.254.169.254), file:// URLs.
  *
- * `assertSafeUrl(url)` rejects:
+ * `assertSafeUrl(url)` (sync) rejects:
  *   - non-http(s) protocols (file://, ftp://, gopher://, javascript:)
- *   - hostnames that resolve to RFC1918 / loopback / link-local /
- *     unique-local IPv6 — both literal IPs and the common DNS spellings
- *     (localhost, *.local, *.internal, *.lan)
- *   - cloud metadata IPs (169.254.169.254, fd00::/8 ULAs)
+ *   - literal RFC1918 / loopback / link-local / ULA IPv6 hostnames
+ *   - common private DNS spellings (localhost, *.local, *.internal, *.lan)
+ *
+ * The DNS-resolution-aware check
+ * (`assertHostnameDoesNotResolveToPrivate`) lives in `safeFetch.ts`
+ * because it requires `node:dns` and is awaited once per redirect hop
+ * inside the `safeFetch` wrapper. That additional layer closes the case
+ * where a public-looking hostname has an A record pointing into
+ * RFC1918 / loopback / link-local space, e.g. `attacker.example A
+ * 127.0.0.1`. `isPrivateIpv4` / `isPrivateIpv6` are exported so the
+ * resolver-side check reuses the same range definitions.
+ *
+ * Residual gap: DNS rebinding. An attacker controlling a domain with
+ * TTL=0 can return a public IP at the time of the guard check and a
+ * private IP at the time `fetch` connects. Closing this fully requires
+ * pinning the resolved IP via a custom undici Agent + `lookup` hook —
+ * tracked as a follow-up. The current layered defense (sync check +
+ * DNS check + per-redirect re-validation) raises the bar enough to
+ * stop drive-by SSRF from open redirects and naive hostname tricks
+ * but is NOT a hardened sandbox.
  *
  * To opt-out (e.g. you really do want to point this at your intranet)
- * call assertSafeUrl(url, { allowPrivate: true }).
+ * call assertSafeUrl(url, { allowPrivate: true }) and pass the same
+ * flag through to safeFetch.
  */
 
 const PRIVATE_IPV4_RANGES: Array<[number, number]> = [
@@ -38,7 +55,7 @@ function ipv4ToBytes(ip: string): number[] | null {
   return bytes;
 }
 
-function isPrivateIpv4(ip: string): boolean {
+export function isPrivateIpv4(ip: string): boolean {
   const bytes = ipv4ToBytes(ip);
   if (!bytes || bytes.length < 4) return false;
   const a = bytes[0]!;
@@ -51,7 +68,7 @@ function isPrivateIpv4(ip: string): boolean {
   return false;
 }
 
-function isPrivateIpv6(host: string): boolean {
+export function isPrivateIpv6(host: string): boolean {
   const lower = host.toLowerCase();
   // Loopback ::1, link-local fe80::/10, ULAs fc00::/7 (fc00..fdff),
   // mapped IPv4 ::ffff:<ipv4> if the inner ipv4 is private.
