@@ -46,6 +46,9 @@ export class Agent {
     this.recentCoordClicks = new Map();
     this.apiAllowedTabs = new Set();
     this.apiAllowedInjected = new Set();
+    // Cache for `_isPdfTab` HEAD probes — see Chrome agent.js for
+    // design notes. Same (tabId,url) → isPdf shape.
+    this._isPdfTabCache = new Map();
   }
 
   setApiMutationsAllowed(tabId, allowed) {
@@ -700,6 +703,36 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    * Returns the group id, or -1 on Firefox <142 (no tabGroups API)
    * or any failure.
    */
+  /**
+   * Decide whether `pageUrl` is a PDF tab the content-script path
+   * cannot reach. URL-pattern fast path + credentialed HEAD probe
+   * fallback for Content-Type-only PDFs (e.g. `/download?id=42`
+   * returning `application/pdf`). Result cached per (tabId, pageUrl).
+   * See Chrome agent.js for the full design notes.
+   */
+  async _isPdfTab(tabId, pageUrl) {
+    if (!pageUrl) return false;
+    if (isPdfUrl(pageUrl)) return true;
+
+    const cached = this._isPdfTabCache.get(tabId);
+    if (cached && cached.url === pageUrl) return cached.isPdf;
+
+    let isPdf = false;
+    if (/^https?:/i.test(pageUrl)) {
+      try {
+        const res = await fetch(pageUrl, {
+          method: 'HEAD',
+          credentials: 'include',
+        });
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('application/pdf')) isPdf = true;
+      } catch { /* fall through with isPdf = false */ }
+    }
+
+    this._isPdfTabCache.set(tabId, { url: pageUrl, isPdf });
+    return isPdf;
+  }
+
   async _addToWebBrainGroup(sourceTab, tabId) {
     if (!browser.tabGroups || !sourceTab?.id || tabId == null) return -1;
     try {
@@ -1811,7 +1844,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     try {
       const tabForPdfCheck = await browser.tabs.get(tabId);
       const pageUrl = tabForPdfCheck?.url || '';
-      if (isPdfUrl(pageUrl)) {
+      // _isPdfTab does sync URL-pattern match + credentialed HEAD
+      // fallback so PDFs served from extension-less paths (e.g.
+      // `/download?id=42` with `Content-Type: application/pdf`) are
+      // also caught. Cached per (tabId, pageUrl).
+      if (await this._isPdfTab(tabId, pageUrl)) {
         if (name === 'read_page') {
           const pdfResult = await this.executeTool(tabId, 'read_pdf', { url: pageUrl });
           return {

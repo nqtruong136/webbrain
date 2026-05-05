@@ -83,6 +83,12 @@ export class Agent {
     // model can see which element it last touched. Lives for the tab's
     // lifetime; overwritten on each ax interaction, cleared on tab close.
     this._lastInteractionRect = new Map(); // tabId -> { x, y, w, h, ts }
+    // Cache for `_isPdfTab` — the URL-pattern check is sync and free,
+    // but the HEAD fallback for "Content-Type: application/pdf at a
+    // URL that doesn't end in .pdf" costs a round-trip. We cache the
+    // resolved is-PDF flag per (tabId,url) so the agent doesn't probe
+    // on every executeTool call within a turn.
+    this._isPdfTabCache = new Map(); // tabId -> { url, isPdf }
   }
 
   /**
@@ -191,6 +197,54 @@ export class Agent {
    *
    * Returns the group id (or -1 if grouping isn't supported / failed).
    */
+  /**
+   * Decide whether `pageUrl` is a PDF tab the content-script path
+   * cannot reach. Two paths:
+   *   - Fast path: URL pattern (`isPdfUrl`). Catches `*.pdf` paths and
+   *     `?file=*.pdf` viewer URLs — the bulk of cases.
+   *   - Slow path: HEAD probe with credentials. Catches PDFs served
+   *     from endpoints whose URL doesn't reveal the type, e.g.
+   *     `/download?id=42` returning `Content-Type: application/pdf`.
+   *
+   * Result is cached per `(tabId, pageUrl)` so we probe at most once
+   * per tab+URL combination. The cache is invalidated implicitly when
+   * the URL changes (next `_isPdfTab` call sees a different URL and
+   * re-probes).
+   *
+   * Failure modes:
+   *   - HEAD blocked / 405 / network error → assume non-PDF, fall
+   *     through to existing content-script path. Worst case we don't
+   *     redirect; same outcome as before this fix.
+   *   - chrome:// / about:// / non-http(s) URLs → fast path returns
+   *     false, no probe attempted.
+   */
+  async _isPdfTab(tabId, pageUrl) {
+    if (!pageUrl) return false;
+    if (isPdfUrl(pageUrl)) return true;
+
+    // Cache hit?
+    const cached = this._isPdfTabCache.get(tabId);
+    if (cached && cached.url === pageUrl) return cached.isPdf;
+
+    // Only probe http(s). Other schemes can't be PDF tabs we'd want to
+    // route to read_pdf, and a fetch against chrome:// or about:// just
+    // throws.
+    let isPdf = false;
+    if (/^https?:/i.test(pageUrl)) {
+      try {
+        const res = await fetch(pageUrl, {
+          method: 'HEAD',
+          credentials: 'include',
+        });
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('application/pdf')) isPdf = true;
+      } catch { /* fall through with isPdf = false */ }
+    }
+
+    this._isPdfTabCache.set(tabId, { url: pageUrl, isPdf });
+    return isPdf;
+  }
+
   async _addToWebBrainGroup(sourceTab, tabId) {
     if (!chrome.tabGroups || !sourceTab?.id || tabId == null) return -1;
     try {
@@ -4200,7 +4254,12 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     try {
       const tabForPdfCheck = await chrome.tabs.get(tabId);
       const pageUrl = tabForPdfCheck?.url || '';
-      if (isPdfUrl(pageUrl)) {
+      // _isPdfTab does sync URL-pattern match first, then a HEAD probe
+      // (credentialed) so PDFs served from extension-less paths like
+      // `/download?id=42` with `Content-Type: application/pdf` are
+      // caught too. Cached per (tabId, pageUrl) — at most one probe
+      // per tab+URL.
+      if (await this._isPdfTab(tabId, pageUrl)) {
         if (name === 'read_page') {
           const pdfResult = await this.executeTool(tabId, 'read_pdf', { url: pageUrl });
           return {

@@ -84,7 +84,14 @@ export function isPdfUrl(url) {
 export async function fetchPdfBytes(url) {
   let res;
   try {
-    res = await fetch(url);
+    // `credentials: 'include'` forwards the user's cookies for this
+    // origin so PDFs gated behind a session (dashboards, internal
+    // docs, signed-in apps) are reachable by the same identity that
+    // can view the file in-tab. Without it, the extension's fetch is
+    // anonymous and we get back a login page or 403 even though the
+    // user is signed in. Same posture as `network-tools.js#fetchUrl`.
+    // No-op for file:// URLs.
+    res = await fetch(url, { credentials: 'include' });
   } catch (e) {
     if (typeof url === 'string' && url.startsWith('file://')) {
       throw new Error(
