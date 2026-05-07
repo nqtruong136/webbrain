@@ -1,0 +1,136 @@
+import { useState } from 'react';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View as RNView,
+} from 'react-native';
+
+import { Text, View } from '@/components/Themed';
+import { useColorScheme } from '@/components/useColorScheme';
+import { useAgent } from '@/context/AgentContext';
+
+export default function ChatScreen() {
+  const { messages, working, sendMessage } = useAgent();
+  const [draft, setDraft] = useState('');
+  const isDark = (useColorScheme() ?? 'light') === 'dark';
+
+  function onSend() {
+    const text = draft.trim();
+    if (!text) return;
+    sendMessage(text);
+    setDraft('');
+  }
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={styles.container}
+      keyboardVerticalOffset={90}>
+      <ScrollView
+        style={styles.messages}
+        contentContainerStyle={styles.messagesContent}
+        keyboardDismissMode="interactive">
+        {messages.length === 0 && (
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>WebBrain Mobile</Text>
+            <Text style={styles.emptyHint}>
+              Ask the agent to do something. Switch to the Browser tab to watch.
+            </Text>
+          </View>
+        )}
+        {messages.map((m, i) => (
+          <RNView
+            key={i}
+            style={[
+              styles.bubble,
+              m.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant,
+            ]}>
+            <Text style={m.role === 'user' ? styles.userText : undefined}>
+              {m.content}
+            </Text>
+          </RNView>
+        ))}
+        {working && (
+          <RNView style={[styles.bubble, styles.bubbleAssistant]}>
+            <Text style={styles.workingText}>working…</Text>
+          </RNView>
+        )}
+      </ScrollView>
+
+      <RNView
+        style={[
+          styles.inputRow,
+          { borderTopColor: isDark ? '#333' : '#ddd' },
+        ]}>
+        <TextInput
+          style={[
+            styles.input,
+            {
+              color: isDark ? '#fff' : '#000',
+              backgroundColor: isDark ? '#222' : '#f0f0f0',
+            },
+          ]}
+          value={draft}
+          onChangeText={setDraft}
+          placeholder="Ask WebBrain to do something…"
+          placeholderTextColor={isDark ? '#888' : '#999'}
+          multiline
+        />
+        <Pressable style={styles.sendButton} onPress={onSend}>
+          <Text style={styles.sendButtonText}>Send</Text>
+        </Pressable>
+      </RNView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  messages: { flex: 1 },
+  messagesContent: { padding: 12, gap: 8 },
+  empty: { alignItems: 'center', marginTop: 40, gap: 8, backgroundColor: 'transparent' },
+  emptyTitle: { fontSize: 22, fontWeight: 'bold' },
+  emptyHint: {
+    fontSize: 14,
+    opacity: 0.6,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  bubble: { padding: 10, borderRadius: 12, maxWidth: '85%' },
+  bubbleUser: {
+    alignSelf: 'flex-end',
+    backgroundColor: '#2f95dc',
+  },
+  bubbleAssistant: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(127,127,127,0.18)',
+  },
+  userText: { color: '#fff' },
+  workingText: { fontStyle: 'italic', opacity: 0.7 },
+  inputRow: {
+    flexDirection: 'row',
+    padding: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: 8,
+    alignItems: 'flex-end',
+  },
+  input: {
+    flex: 1,
+    minHeight: 40,
+    maxHeight: 120,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  sendButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: '#2f95dc',
+  },
+  sendButtonText: { color: '#fff', fontWeight: '600' },
+});
