@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   Pressable,
   StyleSheet,
   TextInput,
@@ -17,7 +18,9 @@ export default function BrowserScreen() {
   const { url, setUrl, working, registerWebView, onWebViewMessage } = useAgent();
   const [draft, setDraft] = useState(url);
   const [loading, setLoading] = useState(false);
+  const [focused, setFocused] = useState(false);
   const webRef = useRef<WebView>(null);
+  const inputRef = useRef<TextInput>(null);
   const isDark = (useColorScheme() ?? 'light') === 'dark';
 
   // Register the WebView with the agent context so tools can reach it.
@@ -38,11 +41,25 @@ export default function BrowserScreen() {
     if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
     setUrl(u);
     setDraft(u);
+    Keyboard.dismiss();
+  }
+
+  function clearUrl() {
+    setDraft('');
+    // Keep focus so the user can immediately type a new URL.
+    inputRef.current?.focus();
+  }
+
+  function dismissKeyboard() {
+    Keyboard.dismiss();
   }
 
   function handleMessage(event: WebViewMessageEvent) {
     onWebViewMessage(event.nativeEvent.data);
   }
+
+  const fieldBg = isDark ? '#222' : '#f0f0f0';
+  const fieldText = isDark ? '#fff' : '#000';
 
   return (
     <View style={styles.container}>
@@ -51,24 +68,46 @@ export default function BrowserScreen() {
           styles.urlBar,
           { borderBottomColor: isDark ? '#333' : '#ddd' },
         ]}>
-        <TextInput
-          style={[
-            styles.urlInput,
-            {
-              color: isDark ? '#fff' : '#000',
-              backgroundColor: isDark ? '#222' : '#f0f0f0',
-            },
-          ]}
-          value={draft}
-          onChangeText={setDraft}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-          onSubmitEditing={go}
-          placeholder="https://…"
-          placeholderTextColor={isDark ? '#888' : '#999'}
-          returnKeyType="go"
-        />
+        <RNView style={[styles.urlInputWrap, { backgroundColor: fieldBg }]}>
+          <TextInput
+            ref={inputRef}
+            style={[styles.urlInput, { color: fieldText }]}
+            value={draft}
+            onChangeText={setDraft}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            onSubmitEditing={go}
+            placeholder="https://…"
+            placeholderTextColor={isDark ? '#888' : '#999'}
+            returnKeyType="go"
+            // selectTextOnFocus highlights the entire URL when the user taps
+            // the bar — the standard mobile-browser pattern, so a single tap
+            // followed by typing replaces the URL instead of inserting at
+            // the caret.
+            selectTextOnFocus
+          />
+          {draft.length > 0 && (
+            <Pressable
+              style={styles.clearButton}
+              onPress={clearUrl}
+              hitSlop={8}
+              accessibilityLabel="Clear URL">
+              <Text style={[styles.clearButtonText, { color: isDark ? '#bbb' : '#666' }]}>
+                ×
+              </Text>
+            </Pressable>
+          )}
+        </RNView>
+
+        {focused && (
+          <Pressable onPress={dismissKeyboard} hitSlop={6} accessibilityLabel="Dismiss keyboard">
+            <Text style={styles.doneButtonText}>Done</Text>
+          </Pressable>
+        )}
+
         <Pressable style={styles.goButton} onPress={go}>
           <Text style={styles.goButtonText}>Go</Text>
         </Pressable>
@@ -111,11 +150,36 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
   },
+  urlInputWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 18,
+    paddingRight: 4,
+  },
   urlInput: {
     flex: 1,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 18,
+  },
+  clearButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 4,
+  },
+  clearButtonText: {
+    fontSize: 18,
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+  doneButtonText: {
+    color: '#2f95dc',
+    fontSize: 15,
+    fontWeight: '600',
+    paddingHorizontal: 4,
   },
   goButton: {
     paddingHorizontal: 14,
