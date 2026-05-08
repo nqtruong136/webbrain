@@ -303,7 +303,21 @@ browser.runtime.onMessage.addListener((msg) => {
       if (currentAssistantEl && data.content) {
         const textEl = currentAssistantEl.querySelector('.message-text');
         if (textEl) {
-          textEl.innerHTML = formatMarkdown(data.content);
+          if (verboseMode) {
+            // Verbose mode: append each turn's reasoning as its own
+            // paragraph so intermediate prose ("I'll click X", "the modal
+            // is still open", "page changed, retrying") is preserved
+            // alongside the steps log instead of being overwritten by the
+            // next turn's blurb.
+            const para = document.createElement('div');
+            para.className = 'reasoning-step';
+            para.innerHTML = formatMarkdown(data.content);
+            textEl.appendChild(para);
+          } else {
+            // Compact mode keeps only the latest blurb. Toggle Verbose
+            // (V button) to retain the full reasoning trail.
+            textEl.innerHTML = formatMarkdown(data.content);
+          }
           // Add copy button if not already present
           if (!currentAssistantEl.querySelector('.msg-copy-btn')) {
             addMessageCopyButton(currentAssistantEl);

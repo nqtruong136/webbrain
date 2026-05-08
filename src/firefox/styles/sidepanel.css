@@ -264,6 +264,25 @@ body {
 }
 
 
+/* Verbose mode: each turn's reasoning blurb is appended as its own dim
+   paragraph instead of overwriting the previous one, so the full chain
+   of intermediate thinking is preserved alongside the steps log. */
+.reasoning-step {
+  border-left: 2px solid var(--border);
+  padding: 4px 0 4px 8px;
+  margin: 6px 0;
+  opacity: 0.85;
+  font-size: 13px;
+}
+.reasoning-step + .reasoning-step {
+  margin-top: 4px;
+}
+.reasoning-step:last-child {
+  opacity: 1;
+  border-left-color: var(--accent, var(--border));
+}
+
+
 /* ==========================================================================
    COMPACT TOOL STEPS (default mode) — human-friendly activity trail
    ========================================================================== */
