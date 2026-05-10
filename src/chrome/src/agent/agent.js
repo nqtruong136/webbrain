@@ -26,6 +26,7 @@ export class Agent {
     this.providerManager = providerManager;
     this.conversations = new Map(); // tabId -> messages[]
     this.conversationModes = new Map(); // tabId -> 'ask' | 'act'
+    this.conversationIds = new Map(); // tabId -> stable conversationId (regenerated on clearConversation)
     this.hydratedTabs = new Set(); // tabIds we've already pulled from storage
     this.persistTimers = new Map(); // tabId -> debounce handle
     this.abortFlags = new Map(); // tabId -> boolean
@@ -1627,6 +1628,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           this.conversationModes.set(tabId, entry.mode);
           this._conversationMode = entry.mode;
         }
+        // Restore the conversationId so traces from before the SW restart
+        // and traces from after it stay grouped together.
+        if (entry.conversationId) {
+          this.conversationIds.set(tabId, entry.conversationId);
+        }
       }
     } catch (e) { /* session storage may be unavailable */ }
   }
@@ -1644,9 +1650,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       const messages = this.conversations.get(tabId);
       if (!messages) return;
       const mode = this.conversationModes.get(tabId) || 'ask';
+      const conversationId = this.conversationIds.get(tabId) || null;
       try {
         chrome.storage.session.set({
-          [this._convKey(tabId)]: { mode, messages },
+          [this._convKey(tabId)]: { mode, messages, conversationId },
         }).catch(() => {});
       } catch (e) { /* ignore */ }
     }, 300);
@@ -1742,6 +1749,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       ]);
       this.conversationModes.set(tabId, mode);
       this._conversationMode = mode;
+      // New conversation → mint a new conversationId. Stable for the
+      // lifetime of this conversation (until clearConversation), so every
+      // trace produced from this chat carries the same id and the Traces
+      // viewer can group sibling turns.
+      if (!this.conversationIds.has(tabId)) {
+        this.conversationIds.set(tabId, `conv_${tabId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+      }
     }
     // If mode changed, update the system prompt
     const lastMode = this.conversationModes.get(tabId);
@@ -1762,6 +1776,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   clearConversation(tabId) {
     this.conversations.delete(tabId);
     this.conversationModes.delete(tabId);
+    this.conversationIds.delete(tabId); // next getConversation() mints a fresh id
     this.hydratedTabs.delete(tabId);
     this.apiAllowedTabs.delete(tabId);
     this.apiAllowedInjected.delete(tabId);
@@ -4510,6 +4525,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       providerClass: provider.constructor.name,
       userMessage: typeof userMessage === 'string' ? userMessage : JSON.stringify(userMessage).slice(0, 2000),
       tabUrl, tabTitle, mode,
+      conversationId: this.conversationIds.get(tabId) || null,
     });
     if (runId) this.currentRunId.set(tabId, runId);
 

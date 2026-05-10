@@ -39,8 +39,14 @@ function htmlToText(html) {
   return { title, text: s };
 }
 
-const FETCH_TEXT_LIMIT = 8000;
-const FETCH_JSON_LIMIT = 16000;
+// Per-call response size caps. The cost here is LLM context (and prompt-
+// cache write on the first turn) — not browser memory — so we keep these
+// generous enough to fit even long Wikipedia articles in a single call.
+// TEXT ~192k chars ≈ 48k tokens; JSON ~96k chars ≈ 24k tokens. Modern
+// frontier models have 200k+ context windows and prompt caching amortizes
+// repeated reads, so the marginal cost of a generous cap is near-zero.
+const FETCH_TEXT_LIMIT = 192000;
+const FETCH_JSON_LIMIT = 96000;
 
 /**
  * Validate a URL before the agent fetches it.

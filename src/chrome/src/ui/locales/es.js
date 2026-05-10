@@ -180,6 +180,10 @@ export default {
   'tr.no_match': 'Ninguna ejecución coincide.',
   'tr.no_task': '(sin tarea)',
 
+  'tr.conversation.label': 'Conversación',
+  'tr.conversation.turn_of': 'turno {n} de {total}',
+  'tr.conversation.tooltip': 'Forma parte de una conversación de {n} turnos ({id}). Abre la ejecución para saltar entre turnos.',
+
   'tr.empty.title': 'Ninguna ejecución seleccionada.',
   'tr.empty.hint_html': 'Elige una ejecución a la izquierda para ver su línea de tiempo paso a paso. Pulsa <b>Comparar</b> para elegir dos ejecuciones y verlas lado a lado.',
 

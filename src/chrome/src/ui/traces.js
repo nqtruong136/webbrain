@@ -23,10 +23,32 @@ let selectedRunId = null;
 let compareMode = false;
 let compareIds = []; // length 0..2
 
+// conversationId → [runs, oldest first]. Rebuilt from allRuns on every refresh.
+let conversationMap = new Map();
+
+function rebuildConversationMap() {
+  conversationMap = new Map();
+  for (const r of allRuns) {
+    if (!r.conversationId) continue;
+    const arr = conversationMap.get(r.conversationId) || [];
+    arr.push(r);
+    conversationMap.set(r.conversationId, arr);
+  }
+  for (const arr of conversationMap.values()) {
+    arr.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+  }
+}
+
+function siblingsOf(run) {
+  if (!run || !run.conversationId) return [];
+  return conversationMap.get(run.conversationId) || [];
+}
+
 // ----- List -----------------------------------------------------------------
 
 async function refresh() {
   allRuns = await listRuns({ limit: 500 });
+  rebuildConversationMap();
   countPill.textContent = t(allRuns.length === 1 ? 'tr.run' : 'tr.runs', { n: allRuns.length });
   // Populate model filter.
   const models = Array.from(new Set(allRuns.map(r => r.model).filter(Boolean))).sort();
@@ -62,9 +84,13 @@ function renderList() {
       compareIds.includes(r.runId) ? 'compare' : '',
     ].filter(Boolean).join(' ');
     const title = r.userMessage || t('tr.no_task');
+    const siblings = siblingsOf(r);
+    const convChip = siblings.length > 1
+      ? `<span class="conv-chip" title="${escapeAttr(t('tr.conversation.tooltip', { n: siblings.length, id: r.conversationId }))}">🧵 ${siblings.length}</span>`
+      : '';
     return `
       <div class="${cls}" data-run-id="${escapeAttr(r.runId)}">
-        <div class="run-title"><span class="status-dot ${status}"></span>${escapeHtml(title.slice(0, 120))}</div>
+        <div class="run-title"><span class="status-dot ${status}"></span>${escapeHtml(title.slice(0, 120))}${convChip}</div>
         <div class="run-meta">
           <span class="run-model">${escapeHtml(r.model || '?')}</span>
           <span>${escapeHtml(r.providerId || '')}</span>
@@ -123,6 +149,33 @@ async function renderCompare(aId, bId) {
   wireTimelineImages(mainPane);
 }
 
+/**
+ * Render a "Conversation" panel listing sibling runs (turns of the same
+ * chat) so users can jump between them. Hidden in compare mode (panes are
+ * already two-up) and when there's only one run in the conversation.
+ */
+function renderConversationPanel(run, compact) {
+  if (compact) return '';
+  const siblings = siblingsOf(run);
+  if (siblings.length < 2) return '';
+  const turnNumber = siblings.findIndex(r => r.runId === run.runId) + 1;
+  const items = siblings.map((r, i) => {
+    const isCurrent = r.runId === run.runId;
+    const label = (r.userMessage || t('tr.no_task')).slice(0, 60);
+    const cls = `conv-turn${isCurrent ? ' current' : ''}`;
+    return `<button class="${cls}" data-jump-run-id="${escapeAttr(r.runId)}" title="${escapeAttr(r.userMessage || '')}">
+      <span class="conv-turn-n">#${i + 1}</span>
+      <span class="conv-turn-msg">${escapeHtml(label)}</span>
+    </button>`;
+  }).join('');
+  return `
+    <div class="conv-panel">
+      <div class="conv-panel-label">${escapeHtml(t('tr.conversation.label'))} · ${escapeHtml(t('tr.conversation.turn_of', { n: turnNumber, total: siblings.length }))}</div>
+      <div class="conv-turns">${items}</div>
+    </div>
+  `;
+}
+
 async function buildRunView(run, events, compact) {
   const header = `
     <div class="run-header">
@@ -136,6 +189,7 @@ async function buildRunView(run, events, compact) {
       <span class="stat">${escapeHtml(t('tr.intokens.label'))} <b>${(run.totalInputTokens || 0).toLocaleString()}</b></span>
       <span class="stat">${escapeHtml(t('tr.outtokens.label'))} <b>${(run.totalOutputTokens || 0).toLocaleString()}</b></span>
     </div>
+    ${renderConversationPanel(run, compact)}
     <div class="run-task">${escapeHtml(run.userMessage || '')}</div>
     ${run.finalContent ? `<div class="run-task" style="border-left-color:var(--success);"><b style="color:var(--success);">${escapeHtml(t('tr.final_label'))}</b> ${escapeHtml(run.finalContent)}</div>` : ''}
   `;
@@ -258,6 +312,16 @@ function wireTimelineImages(root) {
     img.addEventListener('click', () => {
       imgModalImg.src = img.src;
       imgModal.classList.add('show');
+    });
+  });
+  // Conversation panel: jumping between sibling runs.
+  root.querySelectorAll('button[data-jump-run-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.jumpRunId;
+      if (!id || id === selectedRunId) return;
+      selectedRunId = id;
+      renderList();
+      renderRun(id);
     });
   });
 }

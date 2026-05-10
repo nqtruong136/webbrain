@@ -57,8 +57,20 @@ function htmlToText(html) {
 
 // ─── fetch_url ──────────────────────────────────────────────────────────
 
-const FETCH_TEXT_LIMIT = 8000;
-const FETCH_JSON_LIMIT = 16000;
+// Per-call response size caps. The cost here is LLM context (and prompt-
+// cache write on the first turn) — not browser memory — so we keep these
+// generous enough to fit even long Wikipedia articles in a single call.
+//   - TEXT (~192k chars ≈ 48k tokens) covers HTML stripped to readable text
+//     plus text/* responses. Catches the long tail of Wikipedia articles,
+//     biographies, big GitHub READMEs, etc.
+//   - JSON (~96k chars ≈ 24k tokens) — JSON is denser per token (repeated
+//     keys) so it scales sub-linearly with text.
+// Modern frontier models have 200k+ context windows and prompt caching
+// amortizes repeated reads, so the marginal cost of a generous cap is
+// near-zero in practice. Most responses come in well under these limits;
+// the cap only bites on the long tail.
+const FETCH_TEXT_LIMIT = 192000;
+const FETCH_JSON_LIMIT = 96000;
 
 /**
  * Validate a URL before the agent fetches it.

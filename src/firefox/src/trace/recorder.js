@@ -100,6 +100,11 @@ export async function startRun(meta) {
     const runId = meta.runId || `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const record = {
       runId,
+      // Stable per-conversation id so the Traces UI can group sibling runs
+      // (= turns of the same chat). Set by the agent from its conversationIds
+      // map keyed by tabId. Older runs have null here — viewer treats those
+      // as singletons.
+      conversationId: meta.conversationId || null,
       startedAt: Date.now(),
       endedAt: null,
       durationMs: null,

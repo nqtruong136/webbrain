@@ -180,6 +180,10 @@ export default {
   'tr.no_match': 'Aucune exécution ne correspond.',
   'tr.no_task': '(pas de tâche)',
 
+  'tr.conversation.label': 'Conversation',
+  'tr.conversation.turn_of': 'tour {n} sur {total}',
+  'tr.conversation.tooltip': 'Fait partie d\'une conversation à {n} tours ({id}). Ouvrez le run pour naviguer entre les tours.',
+
   'tr.empty.title': 'Aucune exécution sélectionnée.',
   'tr.empty.hint_html': 'Choisissez une exécution à gauche pour voir sa chronologie étape par étape. Cliquez sur <b>Comparer</b> pour choisir deux exécutions et les voir côte à côte.',
 

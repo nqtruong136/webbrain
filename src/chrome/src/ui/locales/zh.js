@@ -180,6 +180,10 @@ export default {
   'tr.no_match': '没有匹配的运行。',
   'tr.no_task': '（无任务）',
 
+  'tr.conversation.label': '对话',
+  'tr.conversation.turn_of': '第 {n} 轮 / 共 {total} 轮',
+  'tr.conversation.tooltip': '属于一个 {n} 轮对话（{id}）。打开运行以在各轮之间跳转。',
+
   'tr.empty.title': '未选中任何运行。',
   'tr.empty.hint_html': '从左侧选一个运行以查看其逐步时间线。点击<b>对比</b>选择两次运行并排查看。',
 

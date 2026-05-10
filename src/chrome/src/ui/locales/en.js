@@ -185,6 +185,10 @@ export default {
   'tr.no_match': 'No runs match.',
   'tr.no_task': '(no task)',
 
+  'tr.conversation.label': 'Conversation',
+  'tr.conversation.turn_of': 'turn {n} of {total}',
+  'tr.conversation.tooltip': 'Part of a {n}-turn conversation ({id}). Open the run to jump between turns.',
+
   'tr.empty.title': 'No run selected.',
   'tr.empty.hint_html': 'Pick a run from the left to see its step-by-step timeline. Click <b>Compare</b> to pick two runs and view them side-by-side.',
 

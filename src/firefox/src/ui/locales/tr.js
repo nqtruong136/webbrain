@@ -180,6 +180,10 @@ export default {
   'tr.no_match': 'Eşleşen çalışma yok.',
   'tr.no_task': '(görev yok)',
 
+  'tr.conversation.label': 'Sohbet',
+  'tr.conversation.turn_of': 'tur {n}/{total}',
+  'tr.conversation.tooltip': '{n} turluk sohbetin parçası ({id}). Turlar arasında gezinmek için çalışmayı aç.',
+
   'tr.empty.title': 'Seçili çalışma yok.',
   'tr.empty.hint_html': 'Adım adım zaman çizgisini görmek için soldan bir çalışma seç. İki çalışmayı yan yana görmek için <b>Karşılaştır</b>\'a tıkla.',
 

@@ -24,6 +24,7 @@ export class Agent {
   constructor(providerManager) {
     this.providerManager = providerManager;
     this.conversations = new Map(); // tabId -> messages[]
+    this.conversationIds = new Map(); // tabId -> stable conversationId (regenerated on clearConversation)
     this.conversationModes = new Map(); // tabId -> 'ask' | 'act'
     this.abortFlags = new Map(); // tabId -> boolean
     this.currentRunId = new Map(); // tabId -> active trace runId
@@ -1032,6 +1033,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         { role: 'system', content: this._buildSystemPrompt(mode) },
       ]);
       this._conversationMode = mode;
+      // New conversation → mint a new conversationId. Stable for the
+      // lifetime of this conversation (until clearConversation), so every
+      // trace produced from this chat carries the same id and the Traces
+      // viewer can group sibling turns.
+      if (!this.conversationIds.has(tabId)) {
+        this.conversationIds.set(tabId, `conv_${tabId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+      }
     }
     // If mode changed, update the system prompt
     if (this._conversationMode !== mode) {
@@ -1049,6 +1057,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    */
   clearConversation(tabId) {
     this.conversations.delete(tabId);
+    this.conversationIds.delete(tabId); // next getConversation() mints a fresh id
     if (this._doneBlockCount) this._doneBlockCount.delete(tabId);
     this._clearLoopState(tabId);
   }
@@ -2066,6 +2075,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         providerClass: provider.constructor.name,
         userMessage: typeof userMessage === 'string' ? userMessage : JSON.stringify(userMessage).slice(0, 2000),
         tabUrl, tabTitle, mode,
+        conversationId: this.conversationIds.get(tabId) || null,
       });
       if (runId) this.currentRunId.set(tabId, runId);
     } catch {}
