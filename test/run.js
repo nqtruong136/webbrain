@@ -53,7 +53,7 @@ const { resourceBucket: resourceBucketFx, bucketArgsKey: bucketArgsKeyFx } = awa
 
 // bump-version.mjs is the version-bump CLI but exports its pure helpers
 // for testing. The CLI body is guarded so importing it is side-effect-free.
-const { bumpSemver, rewriteVersionInJsonText, rewriteVersionByAnchor } = await import(
+const { bumpSemver, rewriteVersionInJsonText, rewriteVersionByAnchor, isReleaseBoundary } = await import(
   'file://' + path.join(ROOT, 'scripts/bump-version.mjs').replace(/\\/g, '/')
 );
 
@@ -1146,6 +1146,48 @@ test('rewriteVersionByAnchor: escapes regex metacharacters in oldVersion', () =>
     before, '1.0+abc', '1.0+xyz', `(marker\\[)__OLD__(\\])`
   );
   assert.equal(after, 'marker[1.0+xyz]end');
+});
+
+test('isReleaseBoundary: true for major X.0.0 versions', () => {
+  assert.equal(isReleaseBoundary('1.0.0'), true);
+  assert.equal(isReleaseBoundary('7.0.0'), true);
+  assert.equal(isReleaseBoundary('99.0.0'), true);
+  // The all-zeros edge case is technically a boundary too — it's `patch == 0`.
+  assert.equal(isReleaseBoundary('0.0.0'), true);
+});
+
+test('isReleaseBoundary: true for minor X.Y.0 versions (Y > 0)', () => {
+  assert.equal(isReleaseBoundary('7.1.0'), true);
+  assert.equal(isReleaseBoundary('7.42.0'), true);
+  assert.equal(isReleaseBoundary('1.99.0'), true);
+});
+
+test('isReleaseBoundary: false for patch X.Y.Z versions (Z > 0)', () => {
+  assert.equal(isReleaseBoundary('7.0.1'), false);
+  assert.equal(isReleaseBoundary('7.1.1'), false);
+  assert.equal(isReleaseBoundary('7.4.9'), false);
+  assert.equal(isReleaseBoundary('1.0.99'), false);
+});
+
+test('isReleaseBoundary: throws on malformed input', () => {
+  assert.throws(() => isReleaseBoundary('not-a-version'), /Not MAJOR\.MINOR\.PATCH/);
+  assert.throws(() => isReleaseBoundary('1.2'), /Not MAJOR\.MINOR\.PATCH/);
+  assert.throws(() => isReleaseBoundary('1.2.3.4'), /Not MAJOR\.MINOR\.PATCH/);
+  assert.throws(() => isReleaseBoundary('1.2.3-beta'), /Not MAJOR\.MINOR\.PATCH/);
+  assert.throws(() => isReleaseBoundary(''), /Not MAJOR\.MINOR\.PATCH/);
+});
+
+test('isReleaseBoundary: composes with bumpSemver to classify the next version', () => {
+  // The use-case in the CLI: bump → classify → maybe tag.
+  // Bumping minor or major from any starting point must produce a boundary;
+  // bumping patch must not.
+  assert.equal(isReleaseBoundary(bumpSemver('7.0.5', 'minor')), true);   // 7.1.0
+  assert.equal(isReleaseBoundary(bumpSemver('7.0.5', 'major')), true);   // 8.0.0
+  assert.equal(isReleaseBoundary(bumpSemver('7.0.5', 'patch')), false);  // 7.0.6
+  assert.equal(isReleaseBoundary(bumpSemver('7.1.0', 'patch')), false);  // 7.1.1
+  // Explicit override path also routes through correctly.
+  assert.equal(isReleaseBoundary(bumpSemver('7.0.5', '8.2.0')), true);
+  assert.equal(isReleaseBoundary(bumpSemver('7.0.5', '8.2.3')), false);
 });
 
 await run();

@@ -10,7 +10,8 @@
     "test:anonymous": "node test/anonymous/run.mjs",
     "build:web": "node web/build/build.mjs",
     "build:zip": "node scripts/build-zip.mjs",
-    "bump": "node scripts/bump-version.mjs"
+    "bump": "node scripts/bump-version.mjs",
+    "release": "node scripts/bump-version.mjs --release"
   },
   "devDependencies": {
     "playwright": "^1.48.0"
