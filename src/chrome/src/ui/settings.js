@@ -566,6 +566,11 @@ function renderProviderFilterBar() {
     btn.textContent = t(f.labelKey);
     btn.addEventListener('click', () => {
       if (providerFilter === f.key) return;
+      // Snapshot whatever the user has typed but not yet saved BEFORE we
+      // rebuild the DOM — otherwise input values for the currently-rendered
+      // cards are lost (e.g. typed an API key, then clicked a filter pill
+      // to compare two providers).
+      syncInputsIntoProvidersData();
       providerFilter = f.key;
       try { chrome.storage.local.set({ providerFilter: f.key }); } catch {}
       renderProviders();
@@ -611,6 +616,9 @@ function wrapCollapsibleCard(id, config, isActive, bodyHtml) {
     // Ignore clicks that originated on inputs/buttons inside the header
     // (none today, but future-proof).
     if (e.target.closest('button, input, a, select')) return;
+    // Snapshot unsaved typing in other expanded cards before we rebuild
+    // the DOM — same reason as the filter-pill handler above.
+    syncInputsIntoProvidersData();
     if (expandedProviders.has(id)) expandedProviders.delete(id);
     else expandedProviders.add(id);
     renderProviders();
