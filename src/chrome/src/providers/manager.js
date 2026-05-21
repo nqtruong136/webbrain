@@ -150,6 +150,27 @@ export class ProviderManager {
         apiKey: '',
         enabled: false,
       },
+      // Nvidia NIM (cloud / self-hosted inference microservice)
+      nvidia: {
+        type: 'openai',
+        category: 'cloud',
+        label: 'Nvidia NIM',
+        providerName: 'nvidia',
+        baseUrl: 'https://integrate.api.nvidia.com/v1',
+        model: 'meta/llama-3.1-8b-instruct',
+        apiKey: '',
+        enabled: false,
+      },
+      groq: {
+        type: 'openai',
+        category: 'cloud',
+        label: 'Groq',
+        providerName: 'groq',
+        baseUrl: 'https://api.groq.com/openai/v1',
+        model: 'llama-3.3-70b-versatile',
+        apiKey: '',
+        enabled: false,
+      },
       openrouter: {
         type: 'openai',
         category: 'router',
