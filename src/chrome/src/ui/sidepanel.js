@@ -617,6 +617,11 @@ hydrateRecordingFromBackground();
 // These are intentionally NOT scoped by tabId because the recording banner
 // is global (a panel on any tab in the window should reflect that a record
 // is in progress on tab X).
+// Holds the latest finished recording result (filename + optional
+// transcript) so Phase 3's "Summarize" CTA can read it.
+let lastRecordingResult = null;
+let lastTranscript = null;
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.target !== 'sidepanel' || msg.action !== 'recording_update') return;
   if (msg.event === 'started') {
@@ -624,8 +629,77 @@ chrome.runtime.onMessage.addListener((msg) => {
     setRecordingUI(true);
   } else if (msg.event === 'stopped') {
     setRecordingUI(false);
+    lastRecordingResult = msg.result || null;
+    if (lastRecordingResult?.transcribeAfter) {
+      showRecordingStatus(t('sp.record.transcribing'));
+    } else if (lastRecordingResult?.filename) {
+      showRecordingStatus(t('sp.record.saved', { filename: lastRecordingResult.filename }), { autoHide: 6000 });
+    }
+  } else if (msg.event === 'transcribing') {
+    showRecordingStatus(t('sp.record.transcribing'));
+  } else if (msg.event === 'transcribed') {
+    if (msg.result?.ok) {
+      lastTranscript = msg.result.text || null;
+      showRecordingStatus(
+        t('sp.record.transcribed', { filename: msg.result.transcriptFilename || 'transcript.txt' }),
+        { autoHide: 8000, summarizable: true }
+      );
+    } else {
+      showRecordingStatus(t('sp.record.transcribe_failed', { error: msg.result?.error || 'unknown' }), { autoHide: 8000 });
+    }
   }
 });
+
+// Minimal status strip just below the (now-hidden) recording banner.
+// Carries post-recording notifications: "saved to Downloads", "transcribing…",
+// "transcript ready" + optional Summarize CTA (Phase 3).
+function showRecordingStatus(text, opts = {}) {
+  let el = document.getElementById('recording-status');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'recording-status';
+    el.className = 'recording-status';
+    const banner = document.getElementById('recording-banner');
+    if (banner && banner.parentNode) {
+      banner.parentNode.insertBefore(el, banner.nextSibling);
+    } else {
+      document.body.appendChild(el);
+    }
+  }
+  el.innerHTML = ''; // reset
+  const span = document.createElement('span');
+  span.textContent = text;
+  el.appendChild(span);
+  if (opts.summarizable && lastTranscript) {
+    const btn = document.createElement('button');
+    btn.textContent = t('sp.record.summarize');
+    btn.className = 'btn-summarize-recording';
+    btn.addEventListener('click', () => summarizeLastTranscript());
+    el.appendChild(btn);
+  }
+  el.classList.remove('hidden');
+  if (opts.autoHide) {
+    clearTimeout(el._hideTimer);
+    el._hideTimer = setTimeout(() => el.classList.add('hidden'), opts.autoHide);
+  }
+}
+
+// Phase 3 placeholder — wired below when we add the summarize message
+// handoff. Defined here so showRecordingStatus can reference it.
+function summarizeLastTranscript() {
+  if (!lastTranscript) return;
+  // The sidepanel's send-message path expects a user-typed string. Drop the
+  // transcript in as if the user pasted it with a summary instruction.
+  const prompt =
+    `I just recorded a tab. Here is the Whisper transcript — please summarize it ` +
+    `in 5-8 bullet points and extract any action items, decisions, and open ` +
+    `questions. Be concise.\n\n----- TRANSCRIPT -----\n${lastTranscript}\n----- END TRANSCRIPT -----`;
+  if (inputEl) {
+    inputEl.value = prompt;
+    inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  if (sendBtn) sendBtn.click();
+}
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.target !== 'sidepanel' || msg.action !== 'agent_update') return;

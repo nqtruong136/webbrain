@@ -8,6 +8,7 @@ import {
 } from './providers/oauth-claude.js';
 import { getBalance as capsolverGetBalance } from './agent/captcha-solver.js';
 import { ensureOffscreen } from './offscreen/ensure.js';
+import { transcribeAudio } from './agent/transcribe.js';
 
 /**
  * WebBrain Service Worker (Background Script)
@@ -171,6 +172,92 @@ function saveRecordingState() {
   chrome.storage.session?.set({ [RECORDING_STATE_KEY]: recordingState }).catch(() => {});
 }
 loadRecordingState();
+
+/**
+ * Phase 2: Run Whisper transcription on a finished recording.
+ *
+ * Called fire-and-forget from `stop_tab_recording` when the user had
+ * "Transcribe after recording" toggled on. The webm is already saved to
+ * Downloads by the time we get here, so any failure just means "no .txt
+ * companion file" — the user still has their recording.
+ *
+ * Surface
+ *   Broadcasts recording_update events:
+ *     event:'transcribing'                          — start, sidepanel shows spinner
+ *     event:'transcribed', result:{ok, ...}         — done; if ok, transcriptDownloadId
+ *                                                     points at the .txt; if not,
+ *                                                     result.error has the reason.
+ */
+async function runTranscription({ dataUrl, mimeType, baseFilename }) {
+  try {
+    chrome.runtime.sendMessage({
+      target: 'sidepanel',
+      action: 'recording_update',
+      event: 'transcribing',
+    }).catch(() => {});
+  } catch {}
+
+  // Convert the data URL back to a Blob. fetch(dataUrl) is the cheapest
+  // way and works in MV3 service workers.
+  let blob;
+  try {
+    const r = await fetch(dataUrl);
+    blob = await r.blob();
+  } catch (e) {
+    return broadcastTranscribed({ ok: false, error: `Couldn't read recording bytes: ${e.message}` });
+  }
+
+  const ext = mimeType?.startsWith('audio/') ? 'webm' : 'webm';
+  const result = await transcribeAudio(providerManager.providers, blob, {
+    filename: `${baseFilename}.${ext}`,
+  });
+
+  if (!result.ok) {
+    return broadcastTranscribed({ ok: false, error: result.error });
+  }
+
+  // Save .txt next to the .webm.
+  const txtFilename = `${baseFilename}.txt`;
+  const txtDataUrl = 'data:text/plain;charset=utf-8,' + encodeURIComponent(result.text);
+  let downloadId = null;
+  try {
+    downloadId = await chrome.downloads.download({
+      url: txtDataUrl,
+      filename: txtFilename,
+      saveAs: false,
+    });
+  } catch (e) {
+    return broadcastTranscribed({
+      ok: false,
+      error: `Transcript text generated but download failed: ${e.message}`,
+      text: result.text,           // include text inline so sidepanel can still show it
+      providerId: result.providerId,
+      model: result.model,
+    });
+  }
+
+  return broadcastTranscribed({
+    ok: true,
+    text: result.text,
+    transcriptDownloadId: downloadId,
+    transcriptFilename: txtFilename,
+    providerId: result.providerId,
+    model: result.model,
+    latencyMs: result.latencyMs,
+  });
+}
+
+function broadcastTranscribed(result) {
+  try {
+    chrome.runtime.sendMessage({
+      target: 'sidepanel',
+      action: 'recording_update',
+      event: 'transcribed',
+      result,
+    }).catch(() => {});
+  } catch {}
+  return result;
+}
 
 // Per-window WebBrain group ID. windowId -> tabGroups groupId.
 const webBrainGroupByWindow = new Map();
@@ -763,6 +850,7 @@ async function handleMessage(msg, sender) {
         return { ok: false, error: `download failed: ${e.message}` };
       }
 
+      const wantTranscribe = recordingState.transcribeAfter;
       const final = {
         ok: true,
         filename,
@@ -770,14 +858,11 @@ async function handleMessage(msg, sender) {
         sizeBytes: res.sizeBytes,
         durationMs: res.durationMs,
         mimeType: res.mimeType,
-        transcribeAfter: recordingState.transcribeAfter,
-        // Hand the dataUrl through so Phase 2 (transcription) can pick
-        // it up without re-reading the saved file. Caller decides what
-        // to do with it.
-        dataUrl: res.dataUrl,
+        transcribeAfter: wantTranscribe,
       };
 
-      // Reset state.
+      // Reset state. Transcription happens AFTER the webm is saved so the
+      // user has the recording even if the transcription provider is down.
       recordingState = { active: false };
       saveRecordingState();
 
@@ -786,9 +871,21 @@ async function handleMessage(msg, sender) {
           target: 'sidepanel',
           action: 'recording_update',
           event: 'stopped',
-          result: { ...final, dataUrl: undefined }, // don't push huge blob through extra hop
+          result: final,
         }).catch(() => {});
       } catch {}
+
+      if (wantTranscribe) {
+        // Fire-and-forget — the user is no longer blocked on the call. The
+        // sidepanel listens for 'transcribing' / 'transcribed' events.
+        runTranscription({
+          dataUrl: res.dataUrl,
+          mimeType: res.mimeType,
+          baseFilename: filename.replace(/\.webm$/, ''),
+        }).catch((e) => {
+          console.error('[WebBrain] runTranscription crashed:', e);
+        });
+      }
 
       return final;
     }
