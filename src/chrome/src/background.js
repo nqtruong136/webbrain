@@ -7,8 +7,14 @@ import {
   getClaudeOAuthStatus,
 } from './providers/oauth-claude.js';
 import { getBalance as capsolverGetBalance } from './agent/captcha-solver.js';
-import { ensureOffscreen } from './offscreen/ensure.js';
-import { transcribeAudio } from './agent/transcribe.js';
+// (ensureOffscreen + transcribeAudio used to be imported here; both are
+// now consumed inside src/recorder/host.js, which background.js calls into.)
+import {
+  startTabRecording,
+  stopTabRecording,
+  getRecordingState,
+  setProviderManager as setRecorderProviderManager,
+} from './recorder/host.js';
 
 /**
  * WebBrain Service Worker (Background Script)
@@ -17,6 +23,11 @@ import { transcribeAudio } from './agent/transcribe.js';
 
 const providerManager = new ProviderManager();
 const agent = new Agent(providerManager);
+
+// Wire the recorder to our provider manager so its transcription path
+// can look up the user's configured Whisper-compatible provider. Must
+// happen AFTER providerManager is constructed.
+setRecorderProviderManager(providerManager);
 
 // Load maxSteps setting
 async function loadMaxSteps() {
@@ -155,109 +166,10 @@ function savePanelTabs() {
 }
 loadPanelTabs();
 
-// ── Tab Recorder state (v7.4) ──────────────────────────────────────
-// In-memory state, mirrored to chrome.storage.session so a service-worker
-// restart mid-recording lets the sidepanel still show the banner with the
-// right tabId / startedAt. The MediaRecorder itself lives in the offscreen
-// document, which persists across SW restarts on its own.
-let recordingState = { active: false };
-const RECORDING_STATE_KEY = 'recordingState';
-async function loadRecordingState() {
-  try {
-    const stored = await chrome.storage.session.get(RECORDING_STATE_KEY);
-    if (stored[RECORDING_STATE_KEY]) recordingState = stored[RECORDING_STATE_KEY];
-  } catch { /* session storage unavailable */ }
-}
-function saveRecordingState() {
-  chrome.storage.session?.set({ [RECORDING_STATE_KEY]: recordingState }).catch(() => {});
-}
-loadRecordingState();
-
-/**
- * Phase 2: Run Whisper transcription on a finished recording.
- *
- * Called fire-and-forget from `stop_tab_recording` when the user had
- * "Transcribe after recording" toggled on. The webm is already saved to
- * Downloads by the time we get here, so any failure just means "no .txt
- * companion file" — the user still has their recording.
- *
- * Surface
- *   Broadcasts recording_update events:
- *     event:'transcribing'                          — start, sidepanel shows spinner
- *     event:'transcribed', result:{ok, ...}         — done; if ok, transcriptDownloadId
- *                                                     points at the .txt; if not,
- *                                                     result.error has the reason.
- */
-async function runTranscription({ dataUrl, mimeType, baseFilename }) {
-  try {
-    chrome.runtime.sendMessage({
-      target: 'sidepanel',
-      action: 'recording_update',
-      event: 'transcribing',
-    }).catch(() => {});
-  } catch {}
-
-  // Convert the data URL back to a Blob. fetch(dataUrl) is the cheapest
-  // way and works in MV3 service workers.
-  let blob;
-  try {
-    const r = await fetch(dataUrl);
-    blob = await r.blob();
-  } catch (e) {
-    return broadcastTranscribed({ ok: false, error: `Couldn't read recording bytes: ${e.message}` });
-  }
-
-  const ext = mimeType?.startsWith('audio/') ? 'webm' : 'webm';
-  const result = await transcribeAudio(providerManager.providers, blob, {
-    filename: `${baseFilename}.${ext}`,
-  });
-
-  if (!result.ok) {
-    return broadcastTranscribed({ ok: false, error: result.error });
-  }
-
-  // Save .txt next to the .webm.
-  const txtFilename = `${baseFilename}.txt`;
-  const txtDataUrl = 'data:text/plain;charset=utf-8,' + encodeURIComponent(result.text);
-  let downloadId = null;
-  try {
-    downloadId = await chrome.downloads.download({
-      url: txtDataUrl,
-      filename: txtFilename,
-      saveAs: false,
-    });
-  } catch (e) {
-    return broadcastTranscribed({
-      ok: false,
-      error: `Transcript text generated but download failed: ${e.message}`,
-      text: result.text,           // include text inline so sidepanel can still show it
-      providerId: result.providerId,
-      model: result.model,
-    });
-  }
-
-  return broadcastTranscribed({
-    ok: true,
-    text: result.text,
-    transcriptDownloadId: downloadId,
-    transcriptFilename: txtFilename,
-    providerId: result.providerId,
-    model: result.model,
-    latencyMs: result.latencyMs,
-  });
-}
-
-function broadcastTranscribed(result) {
-  try {
-    chrome.runtime.sendMessage({
-      target: 'sidepanel',
-      action: 'recording_update',
-      event: 'transcribed',
-      result,
-    }).catch(() => {});
-  } catch {}
-  return result;
-}
+// (Tab recorder state + Whisper-transcription helpers moved to
+// src/recorder/host.js so the agent's prompt-driven tools can share
+// the exact same orchestration with the sidepanel button. background.js
+// just exposes routes that call into the module.)
 
 // Per-window WebBrain group ID. windowId -> tabGroups groupId.
 const webBrainGroupByWindow = new Map();
@@ -725,173 +637,19 @@ async function handleMessage(msg, sender) {
         return { ok: false, error: e.message };
       }
     }
-    // ── Tab Recorder (v7.4) ────────────────────────────────────────
-    // Records the active tab's video + audio + mic into a webm file.
-    // The MediaRecorder + Web Audio mixer live in the offscreen document
-    // (service workers can't host them). This handler:
-    //   1. Resolves the tabId,
-    //   2. Asks chrome.tabCapture for a streamId tied to that tab,
-    //   3. Boots the offscreen doc if needed (shared with the fetch proxy),
-    //   4. Forwards the start request via runtime.sendMessage.
+    // ── Tab Recorder routes (v7.4) ────────────────────────────────
+    // Thin wrappers around src/recorder/host.js. Same module is also
+    // imported by agent.js so the prompt-driven `record_tab` and
+    // `stop_recording` tools share the exact same orchestration.
     case 'start_tab_recording': {
-      if (recordingState.active) {
-        return { ok: false, error: 'A recording is already in progress on tab ' + recordingState.tabId + '.' };
-      }
       const tabId = msg.tabId || sender.tab?.id;
-      if (!tabId) return { ok: false, error: 'No tab ID' };
-
-      // tabCapture.getMediaStreamId requires the target tab to be active
-      // in its window. Make sure that's the case before we ask Chrome.
-      try {
-        const tab = await chrome.tabs.get(tabId);
-        if (tab && !tab.active) {
-          await chrome.tabs.update(tabId, { active: true });
-        }
-      } catch { /* tab missing — let getMediaStreamId fail with its own error */ }
-
-      let streamId;
-      try {
-        streamId = await new Promise((resolve, reject) => {
-          chrome.tabCapture.getMediaStreamId(
-            { targetTabId: tabId },
-            (id) => {
-              const err = chrome.runtime.lastError;
-              if (err || !id) reject(new Error(err?.message || 'getMediaStreamId returned no id'));
-              else resolve(id);
-            }
-          );
-        });
-      } catch (e) {
-        return { ok: false, error: `tabCapture failed: ${e.message}` };
-      }
-
-      try {
-        await ensureOffscreen();
-      } catch (e) {
-        return { ok: false, error: `offscreen setup failed: ${e.message}` };
-      }
-
-      const options = msg.options || {};
-      let recResult;
-      try {
-        recResult = await chrome.runtime.sendMessage({
-          type: 'recorder-start',
-          streamId,
-          tabId,
-          options: {
-            video: options.video !== false,    // default true
-            mic: options.mic !== false,        // default true
-            mimeType: options.mimeType || null,
-          },
-        });
-      } catch (e) {
-        return { ok: false, error: `recorder-start dispatch failed: ${e.message}` };
-      }
-      if (!recResult?.ok) {
-        return { ok: false, error: recResult?.error || 'recorder failed to start' };
-      }
-
-      recordingState = {
-        active: true,
-        tabId,
-        startedAt: Date.now(),
-        mimeType: recResult.mimeType,
-        hasVideo: recResult.hasVideo,
-        hasMic: recResult.hasMic,
-        micError: recResult.micError || null,
-        transcribeAfter: !!options.transcribeAfter,
-      };
-      saveRecordingState();
-
-      // Notify any open sidepanels so their banner appears immediately,
-      // even on tabs the recording isn't anchored to.
-      try {
-        chrome.runtime.sendMessage({
-          target: 'sidepanel',
-          action: 'recording_update',
-          event: 'started',
-          state: recordingState,
-        }).catch(() => {});
-      } catch {}
-
-      return { ok: true, state: recordingState };
+      return await startTabRecording(tabId, msg.options || {});
     }
-
     case 'stop_tab_recording': {
-      if (!recordingState.active) {
-        return { ok: false, error: 'No active recording.' };
-      }
-      let res;
-      try {
-        res = await chrome.runtime.sendMessage({ type: 'recorder-stop' });
-      } catch (e) {
-        return { ok: false, error: `recorder-stop dispatch failed: ${e.message}` };
-      }
-      if (!res?.ok) {
-        return { ok: false, error: res?.error || 'recorder failed to stop' };
-      }
-
-      // Save webm to Downloads.
-      const stamp = new Date()
-        .toISOString()
-        .replace(/[:.]/g, '-')
-        .replace(/T/, '_')
-        .slice(0, 19);
-      const ext = res.mimeType.startsWith('audio/') ? 'webm' : 'webm';
-      const filename = `webbrain-recording-${stamp}.${ext}`;
-      let downloadId = null;
-      try {
-        downloadId = await chrome.downloads.download({
-          url: res.dataUrl,
-          filename,
-          saveAs: false,
-        });
-      } catch (e) {
-        return { ok: false, error: `download failed: ${e.message}` };
-      }
-
-      const wantTranscribe = recordingState.transcribeAfter;
-      const final = {
-        ok: true,
-        filename,
-        downloadId,
-        sizeBytes: res.sizeBytes,
-        durationMs: res.durationMs,
-        mimeType: res.mimeType,
-        transcribeAfter: wantTranscribe,
-      };
-
-      // Reset state. Transcription happens AFTER the webm is saved so the
-      // user has the recording even if the transcription provider is down.
-      recordingState = { active: false };
-      saveRecordingState();
-
-      try {
-        chrome.runtime.sendMessage({
-          target: 'sidepanel',
-          action: 'recording_update',
-          event: 'stopped',
-          result: final,
-        }).catch(() => {});
-      } catch {}
-
-      if (wantTranscribe) {
-        // Fire-and-forget — the user is no longer blocked on the call. The
-        // sidepanel listens for 'transcribing' / 'transcribed' events.
-        runTranscription({
-          dataUrl: res.dataUrl,
-          mimeType: res.mimeType,
-          baseFilename: filename.replace(/\.webm$/, ''),
-        }).catch((e) => {
-          console.error('[WebBrain] runTranscription crashed:', e);
-        });
-      }
-
-      return final;
+      return await stopTabRecording();
     }
-
     case 'get_recording_state': {
-      return { ok: true, state: recordingState };
+      return { ok: true, state: getRecordingState() };
     }
 
     // --- Page Info (quick, no agent loop) ---

@@ -21,16 +21,12 @@ const modeActBtn = document.getElementById('btn-mode-act');
 const actWarning = document.getElementById('act-warning');
 const inputArea = document.getElementById('input-area');
 const stopBtn = document.getElementById('btn-stop');
-// Tab Recorder (v7.4) — toolbar button, options popover, live banner.
+// Tab Recorder (v7.4) — toolbar Stop button + live banner. Recording is
+// started by the agent's `record_tab` tool in response to a prompt; the
+// toolbar button is hidden until a recording is in flight, then becomes
+// a Stop affordance (so the user can halt it without typing "stop
+// recording").
 const recordBtn = document.getElementById('btn-record');
-const recordIconIdle = document.getElementById('btn-record-icon-idle');
-const recordIconActive = document.getElementById('btn-record-icon-active');
-const recordPopover = document.getElementById('record-popover');
-const recordOptVideo = document.getElementById('record-opt-video');
-const recordOptMic = document.getElementById('record-opt-mic');
-const recordOptTranscribe = document.getElementById('record-opt-transcribe');
-const recordStartBtn = document.getElementById('btn-record-start');
-const recordCancelBtn = document.getElementById('btn-record-cancel');
 const recordingBanner = document.getElementById('recording-banner');
 const recordingTimerEl = document.getElementById('recording-timer');
 const recordingStopBtn = document.getElementById('btn-recording-stop');
@@ -450,20 +446,11 @@ async function sendMessage() {
 }
 
 // ─── Tab Recorder (v7.4) ────────────────────────────────────────────
-// State machine: idle ↔ popover-open ↔ recording.
-//
-// Idle → popover-open: user clicks the record button.
-// popover-open → idle: outside click, cancel button, or Esc.
-// popover-open → recording: user clicks Start; we POST start_tab_recording
-//                           to background which calls getMediaStreamId and
-//                           forwards to the offscreen MediaRecorder.
-// recording → idle:        user clicks Stop, or background broadcasts
-//                          recording_update event:'stopped' (e.g. tab closed
-//                          mid-record → underlying stream ended).
-//
-// The banner timer is driven by the elapsed time from recordingState.startedAt,
-// so it survives panel re-mount (Cmd+T, switch tab, reload sidepanel) — we
-// re-hydrate from background on every panel boot.
+// State: idle ↔ recording. The agent's `record_tab` tool is what flips
+// the panel into recording mode (background broadcasts a started event);
+// the toolbar Stop button + the banner Stop button are the two ways to
+// flip back. The banner timer is driven off recordingState.startedAt
+// (received from background), so it survives panel re-mount.
 
 let recordingTimerInterval = null;
 let recordingStartedAt = null;
@@ -476,13 +463,9 @@ function formatRecordTimer(ms) {
 }
 
 function setRecordingUI(active) {
-  if (recordIconIdle && recordIconActive) {
-    recordIconIdle.classList.toggle('hidden', active);
-    recordIconActive.classList.toggle('hidden', !active);
-  }
   if (recordBtn) {
+    recordBtn.classList.toggle('hidden', !active);
     recordBtn.classList.toggle('active', active);
-    recordBtn.setAttribute('title', active ? t('sp.btn.record.active') : t('sp.btn.record'));
   }
   if (recordingBanner) recordingBanner.classList.toggle('hidden', !active);
   if (active) {
@@ -506,13 +489,6 @@ function setRecordingUI(active) {
   }
 }
 
-function toggleRecordPopover(open) {
-  if (!recordPopover || !recordBtn) return;
-  const willOpen = open == null ? recordPopover.classList.contains('hidden') : open;
-  recordPopover.classList.toggle('hidden', !willOpen);
-  recordBtn.setAttribute('aria-expanded', String(willOpen));
-}
-
 async function hydrateRecordingFromBackground() {
   try {
     const res = await sendToBackground('get_recording_state');
@@ -525,71 +501,9 @@ async function hydrateRecordingFromBackground() {
   } catch { /* background not ready yet, ignore */ }
 }
 
-if (recordBtn) {
-  recordBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    // If recording, the button itself is a quick-stop too — same as the
-    // banner's Stop button. If idle, toggle the options popover.
-    if (recordBtn.classList.contains('active')) {
-      stopRecording();
-    } else {
-      toggleRecordPopover();
-    }
-  });
-}
-
-// Close the popover on outside click / Esc — matches user expectation
-// for a transient floating panel.
-document.addEventListener('click', (e) => {
-  if (!recordPopover || recordPopover.classList.contains('hidden')) return;
-  if (recordPopover.contains(e.target) || (recordBtn && recordBtn.contains(e.target))) return;
-  toggleRecordPopover(false);
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && recordPopover && !recordPopover.classList.contains('hidden')) {
-    toggleRecordPopover(false);
-  }
-});
-
-if (recordCancelBtn) {
-  recordCancelBtn.addEventListener('click', () => toggleRecordPopover(false));
-}
-
-if (recordStartBtn) {
-  recordStartBtn.addEventListener('click', async () => {
-    if (!currentTabId) return;
-    const options = {
-      video: !!(recordOptVideo && recordOptVideo.checked),
-      mic: !!(recordOptMic && recordOptMic.checked),
-      transcribeAfter: !!(recordOptTranscribe && recordOptTranscribe.checked),
-    };
-    toggleRecordPopover(false);
-    recordStartBtn.disabled = true;
-    try {
-      const res = await sendToBackground('start_tab_recording', {
-        tabId: currentTabId,
-        options,
-      });
-      if (!res?.ok) {
-        // TODO: prettier toast UI; alert is loud but visible.
-        alert(t('sp.record.error', { error: res?.error || 'unknown' }));
-        return;
-      }
-      recordingStartedAt = res.state?.startedAt || Date.now();
-      setRecordingUI(true);
-      if (res.state?.micError && options.mic) {
-        // Mic was requested but failed (likely permission denied). Inform
-        // the user; recording continues without mic.
-        console.warn('[WebBrain] Mic capture failed:', res.state.micError);
-      }
-    } finally {
-      recordStartBtn.disabled = false;
-    }
-  });
-}
-
 async function stopRecording() {
   if (recordingStopBtn) recordingStopBtn.disabled = true;
+  if (recordBtn) recordBtn.disabled = true;
   try {
     const res = await sendToBackground('stop_tab_recording');
     if (!res?.ok) {
@@ -597,18 +511,18 @@ async function stopRecording() {
       return;
     }
     setRecordingUI(false);
-    // TODO: surface a transient success toast with the filename; for now
-    // chrome.downloads' built-in shelf does the job.
-    // Phase 2 (transcription) hooks in here.
   } finally {
     if (recordingStopBtn) recordingStopBtn.disabled = false;
+    if (recordBtn) recordBtn.disabled = false;
   }
 }
 
+// Both surfaces (toolbar button + banner button) do the same thing.
+if (recordBtn) recordBtn.addEventListener('click', stopRecording);
 if (recordingStopBtn) recordingStopBtn.addEventListener('click', stopRecording);
 
-// Hydrate on panel boot and whenever the user switches tabs — the banner
-// is global to the recording, not to whichever tab they're looking at.
+// Hydrate on panel boot — the agent may have started a recording before
+// this panel even mounted (Cmd+T to a new tab, then switch back).
 hydrateRecordingFromBackground();
 
 // --- Listen for Agent Updates ---
