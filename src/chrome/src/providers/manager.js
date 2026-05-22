@@ -90,7 +90,7 @@ export class ProviderManager {
         category: 'local',
         label: 'Qwen 3 0.6B (WebGPU, in-browser)',
         model: 'onnx-community/Qwen3-0.6B-ONNX',
-        dtype: 'q4',
+        dtype: 'q4f16',
         device: 'webgpu',
         supportsVision: false,
         useCompactPrompt: true,

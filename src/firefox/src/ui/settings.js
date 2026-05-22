@@ -396,7 +396,7 @@ function renderProviders() {
     webgpu_qwen3: {
       fields: [
         { key: 'model', labelKey: 'st.provider.field.model', type: 'text', placeholder: 'onnx-community/Qwen3-0.6B-ONNX' },
-        { key: 'dtype', labelKey: 'st.provider.field.dtype', type: 'text', placeholder: 'q4' },
+        { key: 'dtype', labelKey: 'st.provider.field.dtype', type: 'text', placeholder: 'q4f16' },
         { key: 'useCompactPrompt', labelKey: 'st.provider.field.compact_prompt', type: 'checkbox' },
       ],
     },

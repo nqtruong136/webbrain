@@ -27,7 +27,7 @@
  * settings UI nudges users toward Ask mode for this provider; Act mode is
  * available with a "small model, expect breakage" hint.
  *
- * First-run cost: ~500MB download (q4 quant of Qwen3-0.6B). Cached in
+ * First-run cost: ~500MB download (q4f16 quant of Qwen3-0.6B). Cached in
  * IndexedDB by transformers.js so subsequent runs are instant.
  *
  * Library vendoring: the @huggingface/transformers ESM build is large (~5MB
@@ -42,7 +42,12 @@ export class WebGPUProvider extends BaseLLMProvider {
   constructor(config = {}) {
     super(config);
     this.model = config.model || 'onnx-community/Qwen3-0.6B-ONNX';
-    this.dtype = config.dtype || 'q4';
+    // dtype: 'q4f16' = 4-bit weights + fp16 activations. Plain 'q4' uses
+    // fp32 activations, whose intermediate buffers blow past the WASM
+    // 2GB heap mid-inference (std::bad_alloc out of OrtRun). 'q4f16' is
+    // also the dtype the transformers.js team recommends for Qwen 3 on
+    // WebGPU. Override via config.dtype if you want fp16/int8/etc.
+    this.dtype = config.dtype || 'q4f16';
     // device:'webgpu' is the default; setting it explicitly here lets us
     // override to 'wasm' in tests or as a fallback when WebGPU is absent.
     this.device = config.device || 'webgpu';
