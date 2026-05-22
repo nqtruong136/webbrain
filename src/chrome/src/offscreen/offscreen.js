@@ -120,6 +120,34 @@ async function getPipeline(modelId, dtype, device) {
   if (_activePipeline && _activeModelId === modelId) return _activePipeline;
   const lib = await loadLibrary();
   const { pipeline } = lib;
+  // Diagnostic: log the actual runtime state so users hitting OOM /
+  // overflow errors can tell whether WebGPU is really being used or the
+  // runtime silently fell back to the WASM CPU backend (which has a 2GB
+  // heap limit that any sub-1B model will blow). Check the offscreen
+  // doc's DevTools console (chrome://extensions → Inspect views).
+  try {
+    const gpuAvailable = typeof navigator !== 'undefined' && 'gpu' in navigator;
+    let adapterInfo = null;
+    if (gpuAvailable) {
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        adapterInfo = adapter ? {
+          // The 1-line summary that tells you whether you're on a real
+          // GPU vs. SwiftShader / llvmpipe (software). isFallbackAdapter
+          // is the official "this is software" signal.
+          isFallbackAdapter: adapter.isFallbackAdapter,
+          features: [...(adapter.features || [])].slice(0, 5),
+        } : null;
+      } catch (e) { adapterInfo = { error: e.message }; }
+    }
+    console.log('[webgpu] pipeline init', {
+      modelId, dtype, device,
+      libraryVersion: _libraryVersion,
+      navigatorGpu: gpuAvailable,
+      adapter: adapterInfo,
+      onnxBackends: lib.env?.backends ? Object.keys(lib.env.backends) : null,
+    });
+  } catch { /* logging must never break inference */ }
   // Free the previous pipeline before loading a new one — two 500MB
   // models pinned in GPU memory is a recipe for OOM on integrated GPUs.
   if (_activePipeline && _activePipeline.dispose) {
@@ -196,11 +224,33 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // user actually runs a chat).
       await loadLibrary();
       const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator;
+      // Probe the adapter so the side panel can warn "you're on a software
+      // adapter, inference will OOM" before the user wastes 500MB on a
+      // download that can't run. isFallbackAdapter=true is the
+      // WebGPU-spec way of saying SwiftShader / Lavapipe / etc.
+      let isFallbackAdapter = null;
+      let adapterFeatures = null;
+      if (hasWebGPU) {
+        try {
+          const adapter = await navigator.gpu.requestAdapter();
+          if (adapter) {
+            isFallbackAdapter = adapter.isFallbackAdapter;
+            adapterFeatures = [...(adapter.features || [])].slice(0, 8);
+          } else {
+            // navigator.gpu existed but requestAdapter returned null —
+            // means WebGPU is API-visible but no usable backend. Common
+            // on Linux with default graphics drivers.
+            isFallbackAdapter = true;
+          }
+        } catch { /* report what we can */ }
+      }
       sendResponse({
         ok: true,
         libraryVersion: _libraryVersion,
         device: hasWebGPU ? 'webgpu' : 'wasm',
         hasWebGPU,
+        isFallbackAdapter,
+        adapterFeatures,
       });
     } catch (e) {
       sendResponse({ ok: false, error: e.message });

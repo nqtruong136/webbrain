@@ -125,11 +125,33 @@ export class WebGPUProvider extends BaseLLMProvider {
       if (!res || res.error) {
         return { ok: false, error: res?.error || 'offscreen probe failed' };
       }
+      // Surface the "software WebGPU adapter" case as a failed
+      // testConnection — running a sub-1B model on SwiftShader / Lavapipe
+      // OOMs the WASM heap before generating a single token. Better to
+      // warn here than to silently waste a 500MB download.
+      if (res.hasWebGPU === false) {
+        return {
+          ok: false,
+          error: 'WebGPU not available in this browser. Open chrome://gpu and ' +
+            'check the "WebGPU" row — if it says Disabled or Software only, ' +
+            'this provider can\'t run on this machine.',
+        };
+      }
+      if (res.isFallbackAdapter === true) {
+        return {
+          ok: false,
+          error: 'WebGPU is using a software fallback adapter (SwiftShader / ' +
+            'Lavapipe). Inference will exhaust the WASM heap. Enable hardware ' +
+            'WebGPU at chrome://flags/#enable-unsafe-webgpu, or run on a ' +
+            'machine with a supported GPU.',
+        };
+      }
       return {
         ok: true,
         model: this.model,
         device: res.device || this.device,
-        librarVersion: res.libraryVersion || null,
+        libraryVersion: res.libraryVersion || null,
+        adapterFeatures: res.adapterFeatures || null,
       };
     } catch (e) {
       return { ok: false, error: e.message };
