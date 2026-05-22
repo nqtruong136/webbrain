@@ -127,7 +127,13 @@ async function getPipeline(modelId, dtype, device) {
   }
   _activePipeline = await pipeline('text-generation', modelId, {
     device: device || 'webgpu',
-    dtype: dtype || 'q4',
+    // Default to q4f16 (4-bit weights + fp16 activations) — smallest that
+    // fits the WASM 2GB heap. If you hit "Integer overflow" in safeint.h
+    // during OrtRun, switch this to 'fp16' via Settings — the q4f16 kernel
+    // path on some Chrome/GPU combos has an int32 shape calc that
+    // overflows. fp16 doubles the download (~1.2GB) but uses stable
+    // single-precision kernels throughout.
+    dtype: dtype || 'q4f16',
     // Stream download progress to the side panel. Without this the UI
     // shows nothing for ~30-60s on first run while ~500MB of weights
     // pull from the HF Hub, which is indistinguishable from a hang.

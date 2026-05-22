@@ -101,6 +101,18 @@ sed -i 's|"onnxruntime-common"|"./onnxruntime-common/index.js"|' \
 Then bump the version row in the table above, commit, and re-run the
 extension to verify Qwen 3 still loads.
 
+## Troubleshooting
+
+Error cascade you may walk through on first wiring up a new model:
+
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `Failed to resolve module specifier "onnxruntime-web/webgpu"` (or `"onnxruntime-common"`) | The vendored `transformers.web.js` wasn't sed-patched. | Re-run the two `sed` commands above. |
+| `Failed to fetch dynamically imported module .../ort-wasm-simd-threaded.asyncify.mjs` | The runtime fell through from WebGPU/JSEP to the asyncify WASM path (some op the GPU can't run); the asyncify pair wasn't vendored. | Copy `ort-wasm-simd-threaded.asyncify.{mjs,wasm}` next to the other vendored files. |
+| `std::bad_alloc` from `OrtRun` | dtype `q4` allocates fp32 activations that blow the WASM 2GB heap. | Switch the provider to `dtype: 'q4f16'` (default since 7.4.0). |
+| `Integer overflow` from `safeint.h:17` during `OrtRun` | The `q4f16` kernel path for Qwen 3 has an int32 shape calc that overflows on some Chrome/GPU combos. | Settings → WebGPU provider → set `dtype` to `fp16`. Doubles the download (~1.2GB) but uses stable single-precision kernels throughout. |
+| `no available backend found` (no specific error after) | WebGPU adapter unavailable AND no WASM fallback variants vendored. | Confirm `chrome://gpu` shows WebGPU enabled; otherwise vendor the plain `ort-wasm-simd-threaded.{mjs,wasm}` pair. |
+
 ## Why vendored and not loaded from a CDN?
 
 Manifest V3 extensions' CSP is `script-src 'self' 'wasm-unsafe-eval'`.
