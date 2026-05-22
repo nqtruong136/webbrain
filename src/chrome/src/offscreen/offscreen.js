@@ -98,34 +98,29 @@ async function loadLibrary() {
       // gives us the "big first download, instant subsequent runs" UX.
       lib.env.allowLocalModels = false;
       lib.env.allowRemoteModels = true;
-      // Pin the WASM file URLs to OUR vendor dir AND force the .jsep
-      // variant. Two things are happening here:
+      // Pin wasmPaths to OUR vendor dir, asyncify variant. In
+      // onnxruntime-web 1.20+ the variant naming is counterintuitive:
       //
-      // (1) Path pin: without this, the onnxruntime-web loader would
-      //     resolve the wasm relative to transformers.web.js's URL.
-      //     That happens to work today (siblings in vendor/) but is
-      //     fragile.
+      //   asyncify.{mjs,wasm} = WebGPU EP + Asyncify (the one we want)
+      //   jsep.{mjs,wasm}     = older JSEP variant (no `webgpu*` exports)
+      //   plain {mjs,wasm}    = CPU only
       //
-      // (2) Variant pin: this is the critical one. transformers.js's
-      //     init code (line ~7786 of transformers.web.js) auto-picks
-      //     `ort-wasm-simd-threaded.asyncify.{mjs,wasm}` for non-Safari
-      //     browsers. The asyncify wasm has Asyncify stack-switching
-      //     support but NO JSEP (JavaScript Execution Provider) exports
-      //     — and the WebGPU EP is plumbed THROUGH JSEP. ort.webgpu.mjs
-      //     calls things like `wasm2.jsepOnCreateSession?.()` with
-      //     optional chaining; when those are undefined, WebGPU init
-      //     silently no-ops and inference falls back to the WASM CPU
-      //     backend, OOMing the 2GB heap on any sub-1B model.
+      // I checked the exports — `webgpuInit`, `webgpuRegisterDevice`,
+      // `webgpuOnCreateSession` etc. are only in asyncify.mjs.
+      // ort.webgpu.mjs calls `getInstance().webgpuInit(...)`, so loading
+      // jsep gets you "webgpuInit is not a function" and falls back to
+      // CPU. transformers.js's init code already picks asyncify for
+      // non-Safari — we just need to redirect the URL from the
+      // jsdelivr CDN (CSP-blocked in MV3) to our vendor dir.
       //
-      //     The .jsep wasm exports the jsep* functions WebGPU needs.
-      //     Hard-set wasmPaths as the {mjs,wasm} object form so it
-      //     bypasses normalizeUrl entirely (urlOverride path in
-      //     ort.webgpu.mjs).
+      // Use the object form `{mjs, wasm}` so the runtime takes the
+      // urlOverride fast path in ort.webgpu.mjs and skips its own
+      // path normalization.
       try {
         if (lib.env.backends?.onnx?.wasm) {
           lib.env.backends.onnx.wasm.wasmPaths = {
-            mjs: chrome.runtime.getURL('vendor/transformers/ort-wasm-simd-threaded.jsep.mjs'),
-            wasm: chrome.runtime.getURL('vendor/transformers/ort-wasm-simd-threaded.jsep.wasm'),
+            mjs: chrome.runtime.getURL('vendor/transformers/ort-wasm-simd-threaded.asyncify.mjs'),
+            wasm: chrome.runtime.getURL('vendor/transformers/ort-wasm-simd-threaded.asyncify.wasm'),
           };
         }
       } catch { /* if the shape moves between library versions, fall back to defaults */ }
@@ -169,6 +164,13 @@ async function getPipeline(modelId, dtype, device) {
       // WebGPU bindings registered; if undefined, we're CPU-only.
       hasWebgpuBackend: !!lib.env?.backends?.onnx?.webgpu,
       wasmPaths: lib.env?.backends?.onnx?.wasm?.wasmPaths,
+      // Cross-origin isolation: required for SharedArrayBuffer, which the
+      // threaded asyncify wasm uses for its heap. Without it, allocations
+      // beyond ~tens of MB std::bad_alloc even though chrome://gpu looks
+      // fine. Manifest needs cross_origin_embedder_policy +
+      // cross_origin_opener_policy; check those if SAB is undefined here.
+      crossOriginIsolated: typeof crossOriginIsolated !== 'undefined' ? crossOriginIsolated : 'n/a',
+      hasSharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
     });
   } catch { /* logging must never break inference */ }
   // Free the previous pipeline before loading a new one — two 500MB
