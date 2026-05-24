@@ -210,7 +210,7 @@ export class Agent {
   }
 
   static NAV_TOOLS = new Set(['navigate', 'new_tab']);
-  static STATE_CHANGE_TOOLS = new Set(['navigate', 'new_tab', 'click', 'type_text', 'press_keys', 'scroll']);
+  static STATE_CHANGE_TOOLS = new Set(['navigate', 'new_tab', 'click', 'type_text', 'press_keys', 'scroll', 'hover', 'drag_drop']);
 
   // System prompt for the dedicated "vision model" sub-call. Kept terse and
   // format-oriented so the description is actually useful to the planning
@@ -2192,12 +2192,17 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       'scroll': 'scroll',
       'extract_data': 'extract_data',
       'wait_for_element': 'wait_for_element',
+      'wait_for_stable': 'wait_for_stable',
       'get_selection': 'get_selection',
       'execute_js': 'execute_js',
       'get_accessibility_tree': 'get_accessibility_tree',
       'click_ax': 'click_ax',
       'type_ax': 'type_ax',
       'set_field': 'set_field',
+      // hover + drag_drop are content-script-only on Firefox (no CDP).
+      // The handlers in content.js do the synthetic-event work.
+      'hover': 'hover',
+      'drag_drop': 'drag_drop',
     };
 
     const action = actionMap[name];
@@ -2247,8 +2252,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           name === 'click' || name === 'click_ax' ||
           name === 'type_text' || name === 'type_ax' || name === 'set_field' ||
           name === 'press_keys' || name === 'scroll' ||
+          name === 'hover' || name === 'drag_drop' ||
           name === 'get_accessibility_tree' || name === 'get_interactive_elements' ||
-          name === 'extract_data' || name === 'wait_for_element' ||
+          name === 'extract_data' || name === 'wait_for_element' || name === 'wait_for_stable' ||
           name === 'get_selection' || name === 'execute_js'
         ) {
           return {

@@ -1678,6 +1678,150 @@
           return { success: false, error: e.message };
         }
       },
+      // ── ref_id → on-screen rect resolver ─────────────────────────────────
+      // Helper for the CDP-backed pointer tools (hover, right_click,
+      // drag_drop). The agent calls this from background.js to get viewport
+      // coords for a ref_id, then dispatches trusted Input events via CDP at
+      // those coords. We do scrollIntoView here so the element is reachable
+      // when CDP fires the pointer event ~milliseconds later. Returns the
+      // same rect shape click_ax / type_ax already return; suggestions on
+      // miss are identical so error messages stay consistent.
+      'ax_resolve_rect': () => {
+        try {
+          const { ref_id } = msg.params || {};
+          if (typeof ref_id !== 'string') return { success: false, error: 'ref_id (string, e.g. "ref_42") is required' };
+          if (typeof window.__wb_ax_lookup !== 'function') return { success: false, error: 'accessibility-tree.js not injected' };
+          const el = window.__wb_ax_lookup(ref_id);
+          if (!el) {
+            let suggestions = [];
+            try { if (typeof window.__wb_ax_suggest === 'function') suggestions = window.__wb_ax_suggest(ref_id, 6); } catch {}
+            const refStr = String(ref_id);
+            const looksLikeDomId = !/^ref_\d+$/.test(refStr);
+            const formatNote = looksLikeDomId
+              ? ` "${refStr}" is not a valid ref_id. Valid ref_ids have the form ref_N (e.g. ref_42) and appear in square brackets in get_accessibility_tree output — do not use DOM ids, CSS selectors, or placeholder words from the prompt.`
+              : '';
+            const hint = suggestions.length
+              ? ' Nearest existing refs: ' + suggestions.map(s => `${s.ref} (${s.role}${s.name ? ' "' + s.name + '"' : ''})`).join(', ') + '.'
+              : '';
+            return { success: false, error: `ref_id ${ref_id} not found.${formatNote} The element may have been removed or the page replaced.${hint} Re-read the accessibility tree to get fresh ids.`, suggestions };
+          }
+          try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
+          const r = el.getBoundingClientRect();
+          const cx = r.left + r.width / 2;
+          const cy = r.top + r.height / 2;
+          const vw = window.innerWidth, vh = window.innerHeight;
+          const inViewport = r.width > 0 && r.height > 0 && cx >= 0 && cy >= 0 && cx <= vw && cy <= vh;
+          let name = '';
+          try {
+            name = (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title')))
+              || (el.innerText && el.innerText.trim().slice(0, 80))
+              || '';
+          } catch {}
+          return {
+            success: true,
+            ref_id,
+            tag: el.tagName ? el.tagName.toLowerCase() : '',
+            name,
+            x: Math.round(cx),
+            y: Math.round(cy),
+            rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+            inViewport,
+          };
+        } catch (e) {
+          return { success: false, error: e && e.message || String(e) };
+        }
+      },
+      // ── wait_for_stable ──────────────────────────────────────────────────
+      // Resolve when N consecutive milliseconds pass with no DOM mutations
+      // AND no in-flight fetch/XHR. wait_for_element answers "did X appear";
+      // this answers "is the page done shuffling". Common use: right after
+      // navigate / set_field({submit:true}) before reading the tree, so the
+      // model doesn't grab a half-rendered DOM. Network idle is best-effort
+      // — we wrap fetch + XMLHttpRequest in window once per page; we don't
+      // see WebSocket frames or chunked SSE. That's fine: the MutationObserver
+      // is the load-bearing signal, network-idle is a tightener.
+      'wait_for_stable': () => {
+        return new Promise((resolve) => {
+          const params = msg.params || {};
+          const timeout = Math.max(200, Math.min(20000, Number(params.timeout) || 5000));
+          const quietMs = Math.max(100, Math.min(3000, Number(params.quietMs) || 500));
+          const checkNetwork = params.checkNetwork !== false; // default on
+          let mutationCount = 0;
+
+          // Lazy-install network-idle counter on window. Single-shot per page.
+          if (checkNetwork && !window.__wbNetIdleInstalled) {
+            try {
+              window.__wbNetIdleInstalled = true;
+              window.__wbInFlight = 0;
+              const origFetch = window.fetch;
+              if (typeof origFetch === 'function') {
+                window.fetch = function patchedFetch() {
+                  window.__wbInFlight = (window.__wbInFlight | 0) + 1;
+                  return origFetch.apply(this, arguments).finally(() => {
+                    window.__wbInFlight = Math.max(0, (window.__wbInFlight | 0) - 1);
+                  });
+                };
+              }
+              const XHR = window.XMLHttpRequest;
+              if (XHR && XHR.prototype && XHR.prototype.send) {
+                const origSend = XHR.prototype.send;
+                XHR.prototype.send = function patchedSend() {
+                  window.__wbInFlight = (window.__wbInFlight | 0) + 1;
+                  const done = () => { window.__wbInFlight = Math.max(0, (window.__wbInFlight | 0) - 1); };
+                  this.addEventListener('loadend', done, { once: true });
+                  return origSend.apply(this, arguments);
+                };
+              }
+            } catch { /* best effort */ }
+          }
+
+          const startedAt = Date.now();
+          let quietStart = Date.now();
+          const observer = new MutationObserver((records) => {
+            mutationCount += records.length;
+            quietStart = Date.now();
+          });
+          try {
+            observer.observe(document.documentElement || document.body, {
+              childList: true, subtree: true, attributes: true, characterData: true,
+            });
+          } catch {
+            resolve({ success: true, stable: true, elapsedMs: 0, reason: 'observer-failed' });
+            return;
+          }
+
+          const interval = setInterval(() => {
+            const now = Date.now();
+            const quiet = now - quietStart;
+            const elapsed = now - startedAt;
+            const netIdle = !checkNetwork || ((window.__wbInFlight | 0) === 0);
+            if (quiet >= quietMs && netIdle) {
+              clearInterval(interval);
+              observer.disconnect();
+              resolve({
+                success: true,
+                stable: true,
+                elapsedMs: elapsed,
+                quietMs: quiet,
+                mutations: mutationCount,
+                inFlightAtExit: window.__wbInFlight | 0,
+              });
+            } else if (elapsed >= timeout) {
+              clearInterval(interval);
+              observer.disconnect();
+              resolve({
+                success: true,
+                stable: false,
+                timedOut: true,
+                elapsedMs: elapsed,
+                mutations: mutationCount,
+                inFlightAtExit: window.__wbInFlight | 0,
+                hint: 'Page never went quiet within the timeout. The page may be polling, animating, or streaming — proceed and read the tree anyway, or pass a longer timeout.',
+              });
+            }
+          }, 100);
+        });
+      },
     };
 
     const handler = handlers[msg.action];
