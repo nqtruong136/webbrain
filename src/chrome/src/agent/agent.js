@@ -467,7 +467,7 @@ export class Agent {
   // Tools whose successful completion should trigger an auto-screenshot when
   // the corresponding mode is active.
   static NAV_TOOLS = new Set(['navigate', 'new_tab']);
-  static STATE_CHANGE_TOOLS = new Set(['navigate', 'new_tab', 'click', 'type_text', 'press_keys', 'scroll']);
+  static STATE_CHANGE_TOOLS = new Set(['navigate', 'new_tab', 'click', 'type_text', 'press_keys', 'scroll', 'hover', 'drag_drop']);
 
   // System prompt for the dedicated "vision model" sub-call. Kept terse and
   // format-oriented so the description is actually useful to the planning
@@ -4790,6 +4790,141 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       }
     }
 
+    // ── hover / drag_drop — CDP-trusted pointer tools ──────────────────────
+    //
+    // ref_id → on-screen coords are resolved by content.js (`ax_resolve_rect`,
+    // which also scrollIntoView's the element). The actual pointer events go
+    // out via CDP Input.dispatchMouseEvent so they are isTrusted — page
+    // handlers that gate on event.isTrusted (reveal-on-hover menus,
+    // pointer-event drag handlers) see real events instead of synthetic ones.
+    if (name === 'hover') {
+      const refId = args.ref_id || args.refId;
+      if (typeof refId !== 'string') {
+        return { success: false, error: 'hover: ref_id (string, e.g. "ref_42") is required' };
+      }
+      try {
+        const rectResp = await chrome.tabs.sendMessage(tabId, {
+          target: 'content', action: 'ax_resolve_rect', params: { ref_id: refId },
+        });
+        if (!rectResp || !rectResp.success) {
+          return rectResp || { success: false, error: 'hover: failed to resolve ref_id' };
+        }
+        if (!rectResp.inViewport) {
+          // scrollIntoView happened in content.js — wait a tick for it to settle,
+          // then re-resolve so we use the post-scroll coords.
+          await new Promise(r => setTimeout(r, 80));
+          const r2 = await chrome.tabs.sendMessage(tabId, {
+            target: 'content', action: 'ax_resolve_rect', params: { ref_id: refId },
+          });
+          if (r2 && r2.success) Object.assign(rectResp, r2);
+        }
+        await cdpClient.attach(tabId);
+        const x = rectResp.x;
+        const y = rectResp.y;
+        // mouseMoved with button=none is enough for reveal-on-hover handlers
+        // listening to mouseenter/mouseover/pointerover. We move twice (once
+        // ~10px outside, once at center) so sites that only fire on the
+        // first crossing of the element boundary still see a transition.
+        await cdpClient.sendCommand(tabId, 'Input.dispatchMouseEvent', {
+          type: 'mouseMoved', x: Math.max(0, x - 10), y, button: 'none', buttons: 0,
+        });
+        await cdpClient.sendCommand(tabId, 'Input.dispatchMouseEvent', {
+          type: 'mouseMoved', x, y, button: 'none', buttons: 0,
+        });
+        return {
+          success: true,
+          method: 'cdp-hover',
+          ref_id: refId,
+          tag: rectResp.tag,
+          name: rectResp.name,
+          rect: rectResp.rect,
+          hint: 'A hover-revealed menu/tooltip typically renders in a React portal at the end of <body>. Re-read the tree with get_accessibility_tree({filter:"visible"}) — do NOT pass a ref_id (subtree filter will miss the portal).',
+        };
+      } catch (e) {
+        return { success: false, error: `hover failed: ${e.message || e}` };
+      }
+    }
+
+    if (name === 'drag_drop') {
+      const fromRef = args.fromRefId || args.from_ref_id;
+      const toRef = args.toRefId || args.to_ref_id;
+      if (typeof fromRef !== 'string' || typeof toRef !== 'string') {
+        return { success: false, error: 'drag_drop: fromRefId and toRefId (both strings, e.g. "ref_42") are required' };
+      }
+      const stepsRaw = Number(args.steps ?? 10);
+      const steps = Math.max(2, Math.min(40, Number.isFinite(stepsRaw) ? Math.floor(stepsRaw) : 10));
+      try {
+        // Single round-trip: content.js scrolls source-then-dest and
+        // measures BOTH rects in the same viewport snapshot. The previous
+        // three-call dance (resolve fromRef → resolve toRef → re-resolve
+        // fromRef) had a scroll race: the re-resolve scrolled source back
+        // into view and invalidated the dest coords we'd just measured.
+        const rectsResp = await chrome.tabs.sendMessage(tabId, {
+          target: 'content',
+          action: 'ax_resolve_two_rects',
+          params: { fromRefId: fromRef, toRefId: toRef },
+        });
+        if (!rectsResp || !rectsResp.success) {
+          return { success: false, error: `drag_drop: ${rectsResp?.error || 'resolve failed'}` };
+        }
+        const from = rectsResp.from;
+        const toResp = rectsResp.to;
+
+        // Both elements scrolled into view but if source and dest are far
+        // apart vertically the final viewport (centered on dest) may have
+        // pushed source off-screen. CDP mouse events at off-screen coords
+        // don't hit anything, so the drag silently no-ops. Surface a clear
+        // error in that case rather than going through the motions.
+        if (!from.inViewport || !toResp.inViewport) {
+          return {
+            success: false,
+            error: `drag_drop: source and destination are too far apart to fit in the viewport simultaneously (from inViewport=${from.inViewport}, to inViewport=${toResp.inViewport}). CDP mouse events at off-screen coordinates don't land. Workaround: scroll the page so both elements fit, OR use keyboard-based reordering if the site exposes it (Tab + arrow keys on many drag handles).`,
+            from: { ref_id: fromRef, ...from },
+            to: { ref_id: toRef, ...toResp },
+          };
+        }
+
+        await cdpClient.attach(tabId);
+        const x1 = from.x, y1 = from.y, x2 = toResp.x, y2 = toResp.y;
+
+        // mouseMoved (no button) → mousePressed at source → N waypoints
+        // (mouseMoved with buttons=1) → mouseReleased at destination. The
+        // mid-drag waypoints are what HTML5 dnd dragenter/dragover handlers
+        // listen to; Trello/Linear/Notion need at least a handful so the
+        // drop indicator can settle before the release.
+        await cdpClient.sendCommand(tabId, 'Input.dispatchMouseEvent', {
+          type: 'mouseMoved', x: x1, y: y1, button: 'none', buttons: 0,
+        });
+        await cdpClient.sendCommand(tabId, 'Input.dispatchMouseEvent', {
+          type: 'mousePressed', x: x1, y: y1, button: 'left', buttons: 1, clickCount: 1,
+        });
+        for (let i = 1; i <= steps; i++) {
+          const t = i / steps;
+          const ix = Math.round(x1 + (x2 - x1) * t);
+          const iy = Math.round(y1 + (y2 - y1) * t);
+          await cdpClient.sendCommand(tabId, 'Input.dispatchMouseEvent', {
+            type: 'mouseMoved', x: ix, y: iy, button: 'left', buttons: 1,
+          });
+          // Tiny pause so framework dnd state machines (drag-over throttling)
+          // get a chance to tick between waypoints. Total ~steps*15ms = ~150ms.
+          await new Promise(r => setTimeout(r, 15));
+        }
+        await cdpClient.sendCommand(tabId, 'Input.dispatchMouseEvent', {
+          type: 'mouseReleased', x: x2, y: y2, button: 'left', buttons: 0, clickCount: 1,
+        });
+        return {
+          success: true,
+          method: 'cdp-drag',
+          from: { ref_id: fromRef, x: x1, y: y1, name: from.name },
+          to: { ref_id: toRef, x: x2, y: y2, name: toResp.name },
+          steps,
+          hint: 'Re-read the accessibility tree to confirm the order/position changed. If nothing moved, the site may use HTML5 drag-and-drop with custom DataTransfer payloads that CDP cannot fully emulate — try the drag again with higher `steps` (15–20) or fall back to keyboard-based reorder controls if the site exposes them.',
+        };
+      } catch (e) {
+        return { success: false, error: `drag_drop failed: ${e.message || e}` };
+      }
+    }
+
     // Map tool names to content script actions
     const actionMap = {
       'read_page': 'get_page_info_cdp',
@@ -4806,6 +4941,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       'scroll': 'scroll',
       'extract_data': 'extract_data',
       'wait_for_element': 'wait_for_element',
+      'wait_for_stable': 'wait_for_stable',
       'get_selection': 'get_selection',
       'execute_js': 'execute_js',
     };
@@ -4844,7 +4980,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           name === 'type_text' || name === 'type_ax' || name === 'set_field' ||
           name === 'press_keys' || name === 'scroll' ||
           name === 'get_accessibility_tree' || name === 'get_interactive_elements' ||
-          name === 'extract_data' || name === 'wait_for_element' ||
+          name === 'extract_data' || name === 'wait_for_element' || name === 'wait_for_stable' ||
           name === 'get_selection' || name === 'execute_js'
         ) {
           return {
