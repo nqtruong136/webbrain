@@ -190,19 +190,26 @@ export function parseA1(range) {
     throw new Error(`parseA1: range must specify at least one column or row: ${JSON.stringify(range)}`);
   }
 
-  // Whole column ("A:C" or "A:A") — start/end specify columns but no rows.
+  // Whole column ("A:C" or "A:A", and reversed "C:A") — start/end
+  // specify columns but no rows. Normalize endpoints so reversed input
+  // produces a positive colCount, matching how the rectangular-range
+  // branch below normalizes "C10:A1".
   if (hasEnd && !sRow && !eRow && sCol && eCol) {
+    const lo = Math.min(startCol, endCol);
+    const hi = Math.max(startCol, endCol);
     return {
-      sheet, row: 0, col: startCol,
-      rowCount: -1, colCount: endCol - startCol + 1,
+      sheet, row: 0, col: lo,
+      rowCount: -1, colCount: hi - lo + 1,
       wholeColumn: true,
     };
   }
-  // Whole row ("1:5" or "1:1") — start/end specify rows but no columns.
+  // Whole row ("1:5" or "1:1", and reversed "5:1") — same normalization.
   if (hasEnd && !sCol && !eCol && sRow && eRow) {
+    const lo = Math.min(startRow, endRow);
+    const hi = Math.max(startRow, endRow);
     return {
-      sheet, row: startRow, col: 0,
-      rowCount: endRow - startRow + 1, colCount: -1,
+      sheet, row: lo, col: 0,
+      rowCount: hi - lo + 1, colCount: -1,
       wholeRow: true,
     };
   }

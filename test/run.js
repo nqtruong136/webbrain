@@ -1561,11 +1561,28 @@ test('parseA1: whole-column range A:C', () => {
   assert.equal(r.wholeColumn, true);
   assert.equal(r.colCount, 3);
 });
+test('parseA1: whole-column reversed C:A normalizes to A:C', () => {
+  // Same shape as the rectangular-range normalization (C10:A1 → A1:C10).
+  // Without normalization colCount comes out negative and downstream
+  // backends mis-size the selection.
+  const r = parseA1('C:A');
+  assert.equal(r.wholeColumn, true);
+  assert.equal(r.col, 0);
+  assert.equal(r.colCount, 3);
+  assert.equal(r.rowCount, -1);
+});
 test('parseA1: whole row 1:1', () => {
   const r = parseA1('1:1');
   assert.equal(r.wholeRow, true);
   assert.equal(r.row, 0);
   assert.equal(r.rowCount, 1);
+  assert.equal(r.colCount, -1);
+});
+test('parseA1: whole-row reversed 5:1 normalizes to 1:5', () => {
+  const r = parseA1('5:1');
+  assert.equal(r.wholeRow, true);
+  assert.equal(r.row, 0);
+  assert.equal(r.rowCount, 5);
   assert.equal(r.colCount, -1);
 });
 test('parseA1: sheet prefix Sheet2!A1:C3', () => {
