@@ -13,7 +13,7 @@ Open-source AI browser agent for Chrome and Firefox. Chat with any web page, aut
 - **Continue from Limit** — When the agent hits the step limit, click Continue to keep going
 - **Multi-Provider LLM** — Supports local and cloud models:
   - **llama.cpp** (local, default) — No API key needed. Also **Ollama** and **LM Studio**
-  - **OpenAI** (GPT-5.3, etc.)
+  - **OpenAI** (GPT-5.5, etc.)
   - **OpenRouter** (access 100+ models)
   - **Anthropic Claude** (native API)
   - **Claude (Pro/Max subscription)** — sign in with your Claude.ai account via OAuth instead of an API key. See *Known Issues* below for the ToS / reliability caveats.
