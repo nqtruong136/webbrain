@@ -29,7 +29,7 @@
 
   // Restore the last-viewed tab so the page doesn't snap back to Display
   // every reload — makes iterating on a single section less annoying.
-  let initial = 'display';
+  let initial = 'providers';
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved && document.querySelector(`.tab-btn[data-tab="${saved}"]`)) {
