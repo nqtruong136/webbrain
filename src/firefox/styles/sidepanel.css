@@ -198,24 +198,6 @@ body {
   border-radius: var(--radius-sm);
 }
 
-.ob-settings-btn {
-  margin-top: 14px;
-  background: none;
-  border: 1px solid var(--accent);
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
-  padding: 8px 20px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.ob-settings-btn:hover {
-  background: var(--accent);
-  color: #fff;
-}
-
 .ob-nav {
   display: flex;
   justify-content: space-between;
@@ -260,6 +242,39 @@ body {
 
 .ob-btn.hidden {
   visibility: hidden;
+}
+
+.ob-btn-settings {
+  background: var(--accent);
+  color: #fff;
+}
+
+.ob-btn-settings:hover {
+  background: var(--accent-hover);
+}
+
+.ob-btn-settings.hidden {
+  display: none;
+}
+
+.ob-skip {
+  display: block;
+  margin: 12px auto 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 8px;
+  transition: color 0.15s;
+}
+
+.ob-skip:hover {
+  color: var(--text-secondary);
+}
+
+.ob-skip.hidden {
+  display: none;
 }
 
 

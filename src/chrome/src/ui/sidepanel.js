@@ -22,8 +22,14 @@ import { sanitizeMarkdownLinks } from './markdown-link.js';
   const nextBtn = document.getElementById('ob-next');
   const backBtn = document.getElementById('ob-back');
   const settingsBtn = document.getElementById('ob-open-settings');
+  const skipBtn = document.getElementById('ob-skip');
   const totalSteps = steps.length;
   let current = 0;
+
+  function dismissOnboarding() {
+    chrome.storage.local.set({ onboardingComplete: true }).catch(() => {});
+    overlay.classList.add('hidden');
+  }
 
   function goTo(idx) {
     steps[current].classList.remove('active');
@@ -38,17 +44,16 @@ import { sanitizeMarkdownLinks } from './markdown-link.js';
       d.classList.toggle('done', i < current);
     });
 
+    const isLast = current === totalSteps - 1;
     backBtn.classList.toggle('hidden', current === 0);
-    nextBtn.textContent = current === totalSteps - 1 ? t('ob.btn.done') : t('ob.btn.next');
+    nextBtn.classList.toggle('hidden', isLast);
+    settingsBtn.classList.toggle('hidden', !isLast);
+    skipBtn.classList.toggle('hidden', !isLast);
+    if (!isLast) nextBtn.textContent = t('ob.btn.next');
   }
 
   nextBtn.addEventListener('click', () => {
-    if (current < totalSteps - 1) {
-      goTo(current + 1);
-    } else {
-      chrome.storage.local.set({ onboardingComplete: true }).catch(() => {});
-      overlay.classList.add('hidden');
-    }
+    if (current < totalSteps - 1) goTo(current + 1);
   });
 
   backBtn.addEventListener('click', () => {
@@ -57,7 +62,10 @@ import { sanitizeMarkdownLinks } from './markdown-link.js';
 
   settingsBtn.addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
+    dismissOnboarding();
   });
+
+  skipBtn.addEventListener('click', dismissOnboarding);
 })();
 
 const messagesEl = document.getElementById('messages');
