@@ -1165,14 +1165,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this._cancelClarifications(tabId, 'conversation cleared');
     this.conversations.delete(tabId);
     this.conversationIds.delete(tabId);
-    this._cleanupTab(tabId);
+    this._cleanupTab(tabId, { preserveRunGuard: true });
   }
 
-  _cleanupTab(tabId) {
+  _cleanupTab(tabId, { preserveRunGuard = false } = {}) {
     this._isPdfTabCache.delete(tabId);
     this._doneBlockCount.delete(tabId);
     this._recentSubmitClicks.delete(tabId);
-    this._runningTabs.delete(tabId);
+    if (!preserveRunGuard) {
+      this._runningTabs.delete(tabId);
+    }
     this._clearLoopState(tabId);
   }
 

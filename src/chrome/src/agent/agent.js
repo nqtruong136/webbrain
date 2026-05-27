@@ -1927,7 +1927,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   /**
    * Clear conversation for a tab.
    */
-  _cleanupTab(tabId) {
+  _cleanupTab(tabId, { preserveRunGuard = false } = {}) {
     this._isPdfTabCache.delete(tabId);
     this._lastCdpClickIdent?.delete(tabId);
     this.lastAutoScreenshotTs.delete(tabId);
@@ -1935,8 +1935,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this._lastInteractionRect.delete(tabId);
     this._doneBlockCount.delete(tabId);
     this._recentSubmitClicks.delete(tabId);
-    this._runningTabs.delete(tabId);
-    this.currentRunId.delete(tabId);
+    if (!preserveRunGuard) {
+      this._runningTabs.delete(tabId);
+      this.currentRunId.delete(tabId);
+    }
     this._clearLoopState(tabId);
   }
 
@@ -1948,7 +1950,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this.hydratedTabs.delete(tabId);
     this.apiAllowedTabs.delete(tabId);
     this.apiAllowedInjected.delete(tabId);
-    this._cleanupTab(tabId);
+    this._cleanupTab(tabId, { preserveRunGuard: true });
     const t = this.persistTimers.get(tabId);
     if (t) { clearTimeout(t); this.persistTimers.delete(tabId); }
     try {
