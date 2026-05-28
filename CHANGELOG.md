@@ -4,6 +4,28 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / `manifest.json` version.
 
+## [8.7.0] - 2026-05-28
+
+### Added
+- Settings tab "Display" renamed to "General" across all 14 locales to reflect its broader scope.
+- Settings subtitle no longer says "display preferences" — translated to "preferences" in every locale.
+
+### Documentation
+- README provider table expanded from 4 to 14 entries with default models per provider.
+- README "What's New" section replaced with a one-line pointer to CHANGELOG.md to prevent the drift that left it stuck at 6.1.0.
+- CHANGELOG backfilled with entries for 8.2.1, 8.2.2, 8.3.0, 8.4.0, and 8.5.0.
+
+## [8.6.0] - 2026-05-28
+
+### Added
+- Slash commands beyond `/allow-api`: `/help`, `/compact`, `/reset`, `/screenshot`, `/export`, `/profile`, `/vision` (PR #82). Type `/help` in the side panel to see the list.
+
+### Fixed
+- System messages now bypass `formatMarkdown` so HTML (e.g. the `<img>` from `/screenshot`, the `<strong>` in `/allow-api` confirmations) renders instead of showing as escaped text.
+
+### Changed
+- Ollama default model placeholder is now empty (matching llama.cpp and LM Studio) instead of hardcoding `llama3.1`.
+
 ## [8.5.0] - 2026-05-28
 
 ### Fixed
