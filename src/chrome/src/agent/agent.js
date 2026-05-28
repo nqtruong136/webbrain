@@ -1955,16 +1955,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   /**
-   * Record the user's own (trusted) instruction text for the confirmation
-   * gate, and reset per-turn action approvals. Keeps a small rolling window
-   * of recent turns so multi-turn requests ("delete my old posts" → "yes the
-   * 2024 ones") still count as the user having named the action — bounded so
-   * a long-stale instruction can't keep authorizing actions indefinitely.
+   * Record the user's own (trusted) instruction for the confirmation gate, and
+   * reset per-turn action approvals. Scoped to the CURRENT request only (not
+   * accumulated across turns): otherwise a verb from an earlier unrelated task
+   * ("delete my old posts") would keep authorizing a later injected click in a
+   * "summarize this page" turn. Multi-turn confirmations ("yes, the 2024 ones")
+   * flow through clarify(), which is authoritative on its own.
    */
   _recordTrustedUserText(tabId, userMessage) {
     const incoming = typeof userMessage === 'string' ? userMessage : '';
-    const prev = this._runUserText.get(tabId) || '';
-    this._runUserText.set(tabId, (prev ? prev + '\n' + incoming : incoming).slice(-2000));
+    this._runUserText.set(tabId, incoming.slice(-2000));
     this._approvedActions.delete(tabId);
   }
 

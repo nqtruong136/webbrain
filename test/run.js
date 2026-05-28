@@ -1923,6 +1923,22 @@ test('a destructive click the user never asked for is NOT authorized', () => {
   assert.equal(isUserAuthorized('what does this page say?', send), false);
 });
 
+test('authorization requires intent, not bare keyword presence', () => {
+  const send = classifyConsequentialAction('click', { text: 'Send' });
+  // negated → not authorized
+  assert.equal(isUserAuthorized('do not send it', send), false);
+  assert.equal(isUserAuthorized("don't send anything", send), false);
+  // benign context that merely contains a former synonym → not authorized
+  assert.equal(isUserAuthorized('read this message and summarize', send), false);
+  // a genuine request still authorizes
+  assert.equal(isUserAuthorized('send this email to bob', send), true);
+
+  const buy = classifyConsequentialAction('click', { text: 'Buy now' });
+  // "get info" must NOT authorize a Buy ("get" was removed as a synonym)
+  assert.equal(isUserAuthorized('get info about this product', buy), false);
+  assert.equal(isUserAuthorized('buy this product', buy), true);
+});
+
 test('click_ax by ref_id is gated via resolved accessible name', () => {
   // No text/label on the call — the preferred click_ax path.
   assert.equal(classifyConsequentialAction('click_ax', { ref_id: 'ref_42' }), null);

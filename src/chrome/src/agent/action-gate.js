@@ -34,29 +34,56 @@ const DESTRUCTIVE_LABEL_RE =
 
 // Synonym groups: which words in the user's instruction count as "the user
 // asked for THIS verb". e.g. if the button says "Publish" and the user said
-// "post this", that's authorized.
+// "post this", that's authorized. Kept HIGH-PRECISION on purpose — broad words
+// ("get", "move", "close", "cancel", "give", "clear", "message") were removed
+// because they fire in benign/unrelated contexts and would waive the gate
+// (e.g. "get info" must NOT authorize a Buy click). Matching is word-boundary
+// + negation-aware (see userMentionsVerb), so this is the intent signal, not a
+// bare substring check.
 const VERB_SYNONYMS = {
-  send: ['send', 'email', 'e-mail', 'message', 'dm', 'reply'],
-  post: ['post', 'publish', 'share', 'tweet', 'comment'],
-  publish: ['publish', 'post', 'share', 'release'],
-  tweet: ['tweet', 'post', 'publish', 'share'],
-  retweet: ['retweet', 'repost', 'share'],
-  delete: ['delete', 'remove', 'clear', 'clean', 'wipe', 'trash', 'erase'],
-  remove: ['remove', 'delete', 'clear', 'clean', 'unfollow', 'detach'],
-  discard: ['discard', 'delete', 'cancel'],
-  transfer: ['transfer', 'send', 'move', 'pay', 'wire'],
-  wire: ['wire', 'transfer', 'send', 'pay'],
-  pay: ['pay', 'transfer', 'send money', 'checkout', 'purchase'],
-  buy: ['buy', 'purchase', 'order', 'checkout', 'get'],
+  send: ['send', 'email', 'e-mail', 'dm'],
+  post: ['post', 'publish', 'tweet'],
+  publish: ['publish', 'post', 'release'],
+  tweet: ['tweet', 'post', 'publish'],
+  retweet: ['retweet', 'repost'],
+  delete: ['delete', 'remove', 'trash', 'erase'],
+  remove: ['remove', 'delete', 'unfollow', 'erase'],
+  discard: ['discard', 'delete'],
+  transfer: ['transfer', 'wire'],
+  wire: ['wire', 'transfer'],
+  pay: ['pay', 'checkout', 'send money'],
+  buy: ['buy', 'purchase', 'order', 'checkout'],
   purchase: ['purchase', 'buy', 'order', 'checkout'],
   order: ['order', 'buy', 'purchase', 'checkout'],
   checkout: ['checkout', 'buy', 'purchase', 'pay', 'order'],
   withdraw: ['withdraw', 'cash out'],
-  deactivate: ['deactivate', 'disable', 'close', 'delete'],
-  unsubscribe: ['unsubscribe', 'cancel', 'opt out', 'opt-out'],
-  donate: ['donate', 'give', 'contribute'],
-  bid: ['bid', 'offer'],
+  deactivate: ['deactivate', 'disable'],
+  unsubscribe: ['unsubscribe', 'opt out', 'opt-out'],
+  donate: ['donate', 'contribute'],
+  bid: ['bid'],
 };
+
+const NEGATION_RE = /\b(no|not|never|without|avoid|don'?t|do not|doesn'?t|won'?t|instead of|rather than|skip)\b/i;
+
+/**
+ * Does the user's instruction actually express intent to perform `verb`?
+ * Requires a synonym at a word boundary AND not immediately negated — so
+ * "do not send it" / "read this message" / "get info" do NOT authorize a
+ * Send/Buy click. Biased to fail SAFE: ambiguity → not authorized → confirm.
+ */
+function userMentionsVerb(text, synonyms) {
+  for (const syn of synonyms) {
+    const re = new RegExp(`(^|[^a-z])(${escapeRe(syn)})`, 'ig');
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const start = m.index + m[1].length;
+      const before = text.slice(Math.max(0, start - 28), start);
+      if (NEGATION_RE.test(before)) continue; // negated → doesn't count
+      return true;
+    }
+  }
+  return false;
+}
 
 function hostnameOf(url) {
   if (typeof url !== 'string' || !url) return '';
@@ -160,6 +187,10 @@ export function classifyConsequentialAction(name, args, opts = {}) {
  * action? userText is the concatenation of the user's chat turns for the
  * current run — NEVER page content. Returns true → no confirmation needed.
  *
+ * userText should be the CURRENT request only (the agent scopes it per turn),
+ * not the whole conversation — otherwise a verb from an earlier unrelated task
+ * ("delete my old posts") would keep authorizing later injected clicks.
+ *
  * Note: API mutations are intentionally NOT authorizable by free text here;
  * the agent grants them only via the explicit /allow-api override.
  */
@@ -182,7 +213,7 @@ export function isUserAuthorized(userText, classification) {
     case 'submit': {
       const verb = String(classification.verb || '').toLowerCase();
       const syns = VERB_SYNONYMS[verb] || [verb];
-      return syns.some(s => s && text.includes(s));
+      return userMentionsVerb(text, syns);
     }
     case 'mutation':
       // Free text cannot authorize an API write — only the /allow-api flag,
