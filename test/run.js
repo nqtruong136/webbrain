@@ -49,6 +49,18 @@ const { classifyConsequentialAction, isUserAuthorized, actionKey, shouldConfirmA
 const { isTopSite } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/agent/top-sites.js').replace(/\\/g, '/')
 );
+const {
+  classifyConsequentialAction: classifyConsequentialActionCh,
+  shouldConfirmAction: shouldConfirmActionCh,
+} = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/agent/action-gate.js').replace(/\\/g, '/')
+);
+const { isTopSite: isTopSiteCh, TOP_SITES: TOP_SITES_CH } = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/agent/top-sites.js').replace(/\\/g, '/')
+);
+const { TOP_SITES: TOP_SITES_FX } = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/agent/top-sites.js').replace(/\\/g, '/')
+);
 
 // loop-bucket.js is pure JS — the URL-family loop-detector bucketing logic
 // lives here so both agent.js and the tests can exercise the same code.
@@ -1954,6 +1966,28 @@ test('shouldConfirmAction: benign calls never confirm; user-named actions skip',
   const del = classifyConsequentialAction('click', { text: 'Delete' });
   assert.equal(shouldConfirmAction(del, { userText: 'remove my old posts' }), false);
   assert.equal(shouldConfirmAction(del, { userText: 'what is on this page' }), true);
+});
+
+test('parity: chrome & firefox action-gate decide identically', () => {
+  const cases = [
+    ['read_page', {}, 'summarize'],
+    ['navigate', { url: 'https://www.youtube.com/x' }, 'open this page'],
+    ['navigate', { url: 'https://attacker-exfil.io/?leak=1' }, 'delete my tweets'],
+    ['click', { text: 'Send' }, 'email bob the notes'],
+    ['click', { text: 'Delete' }, 'what does this say'],
+    ['fetch_url', { url: 'https://api.x.com', method: 'POST' }, 'post via api'],
+  ];
+  for (const [name, args, userText] of cases) {
+    const fx = shouldConfirmAction(classifyConsequentialAction(name, args), { userText });
+    const ch = shouldConfirmActionCh(classifyConsequentialActionCh(name, args), { userText });
+    assert.equal(fx, ch, `gate drift for ${name} ${JSON.stringify(args)}`);
+  }
+});
+
+test('parity: chrome & firefox top-sites lists are identical', () => {
+  assert.equal(TOP_SITES_CH.size, TOP_SITES_FX.size);
+  assert.equal(isTopSiteCh('docs.google.com'), isTopSite('docs.google.com'));
+  assert.equal(isTopSiteCh('attacker-exfil.io'), isTopSite('attacker-exfil.io'));
 });
 
 await run();
