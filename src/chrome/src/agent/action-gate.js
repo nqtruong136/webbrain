@@ -110,8 +110,15 @@ export function urlCarriesDataPayload(url) {
  *                     classified, so they never prompt
  *   kind 'mutation' — a write-method network call (POST/PUT/PATCH/DELETE)
  *   kind 'submit'   — clicking a hard-to-reverse action button by visible text
+ *
+ * opts.refName: the resolved accessible name for a ref_id-based click. The
+ * PREFERRED click path is click_ax({ref_id}), which carries no visible text —
+ * so the agent resolves the ref_id to its accessible name (from the last
+ * accessibility-tree read) and passes it here. Without this, a malicious page
+ * could get the model to click a "Send"/"Delete"/"Pay" button by ref_id and
+ * slip past the gate.
  */
-export function classifyConsequentialAction(name, args) {
+export function classifyConsequentialAction(name, args, opts = {}) {
   args = args || {};
   switch (name) {
     case 'navigate':
@@ -137,7 +144,8 @@ export function classifyConsequentialAction(name, args) {
     case 'click':
     case 'click_ax': {
       const label = typeof args.text === 'string' ? args.text
-        : (typeof args.label === 'string' ? args.label : '');
+        : (typeof args.label === 'string' ? args.label
+          : (typeof opts.refName === 'string' ? opts.refName : ''));
       const m = label.match(DESTRUCTIVE_LABEL_RE);
       if (!m) return null;
       return { kind: 'submit', target: label.trim(), detail: label.trim(), verb: m[1].toLowerCase() };

@@ -150,6 +150,10 @@ export class Agent {
     // Set of actionKey()s the user already confirmed this run (don't re-ask).
     this._runUserText = new Map();
     this._approvedActions = new Map();
+    // tabId → Map(ref_id → accessible name), harvested from accessibility-tree
+    // reads so the gate can resolve the label of a click_ax({ref_id}) — the
+    // preferred click path, which carries no visible text.
+    this._refNames = new Map();
     // Cache for `_isPdfTab` — the URL-pattern check is sync and free,
     // but the HEAD fallback for "Content-Type: application/pdf at a
     // URL that doesn't end in .pdf" costs a round-trip. We cache the
@@ -761,7 +765,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // attacker origin — a soft prompt rule can be talked past, an
       // out-of-band user confirmation cannot. Actions the user named pass
       // straight through; API writes are allowed only via /allow-api.
-      const gate = classifyConsequentialAction(fnName, fnArgs);
+      const gate = classifyConsequentialAction(fnName, fnArgs, {
+        refName: this._resolveRefName(tabId, fnArgs?.ref_id),
+      });
       if (gate) {
         const already = this._approvedActions.get(tabId)?.has(actionKey(gate));
         const needConfirm = !already && shouldConfirmAction(gate, {
@@ -801,6 +807,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       onUpdate('tool_call', { name: fnName, args: fnArgs });
       const _toolStart = Date.now();
       const toolResult = await this.executeTool(tabId, fnName, fnArgs, onUpdate);
+      this._indexRefNames(tabId, toolResult);
       const _toolLatency = Date.now() - _toolStart;
       onUpdate('tool_result', { name: fnName, result: toolResult });
       const _runIdForTool = this.currentRunId.get(tabId);
@@ -1962,6 +1969,32 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   /**
+   * Harvest ref_id → accessible-name pairs from a tool result's tree text
+   * (lines look like `button "Sign in" [ref_42]`). Lets the Layer-3 gate
+   * resolve the label for ref_id-based clicks.
+   */
+  _indexRefNames(tabId, result) {
+    if (!result || typeof result !== 'object') return;
+    let text = typeof result.pageContent === 'string' ? result.pageContent
+      : (typeof result.text === 'string' ? result.text : '');
+    if (!text) { try { text = JSON.stringify(result); } catch { return; } }
+    if (!text || text.indexOf('[ref_') === -1) return;
+    let map = this._refNames.get(tabId);
+    if (!map) { map = new Map(); this._refNames.set(tabId, map); }
+    if (map.size > 4000) map.clear(); // bound memory; current page repopulates below
+    const re = /"([^"]*)"\s*\[(ref_\d+)\]/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m[1]) map.set(m[2], m[1]);
+    }
+  }
+
+  _resolveRefName(tabId, refId) {
+    if (!refId) return '';
+    return this._refNames.get(tabId)?.get(refId) || '';
+  }
+
+  /**
    * Check and clear abort flag.
    */
   _checkAbort(tabId) {
@@ -2082,6 +2115,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this._recentSubmitClicks.delete(tabId);
     this._runUserText.delete(tabId);
     this._approvedActions.delete(tabId);
+    this._refNames.delete(tabId);
     if (!preserveRunGuard) {
       this._runningTabs.delete(tabId);
       this.currentRunId.delete(tabId);

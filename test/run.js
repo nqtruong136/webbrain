@@ -1923,6 +1923,20 @@ test('a destructive click the user never asked for is NOT authorized', () => {
   assert.equal(isUserAuthorized('what does this page say?', send), false);
 });
 
+test('click_ax by ref_id is gated via resolved accessible name', () => {
+  // No text/label on the call — the preferred click_ax path.
+  assert.equal(classifyConsequentialAction('click_ax', { ref_id: 'ref_42' }), null);
+  // With the resolved name, a destructive button IS classified.
+  const c = classifyConsequentialAction('click_ax', { ref_id: 'ref_42' }, { refName: 'Send' });
+  assert.equal(c && c.kind, 'submit');
+  assert.equal(c.verb, 'send');
+  // Benign resolved name is not gated.
+  assert.equal(classifyConsequentialAction('click_ax', { ref_id: 'ref_7' }, { refName: 'Read more' }), null);
+  // Parity: chrome behaves identically.
+  const cc = classifyConsequentialActionCh('click_ax', { ref_id: 'ref_42' }, { refName: 'Delete' });
+  assert.equal(cc && cc.kind, 'submit');
+});
+
 test('API mutations are never authorized by free text (only /allow-api)', () => {
   const c = classifyConsequentialAction('fetch_url', { url: 'https://api.x.com', method: 'POST' });
   assert.equal(isUserAuthorized('use the api to post this', c), false);
