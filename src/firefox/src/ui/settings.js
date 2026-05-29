@@ -218,23 +218,24 @@ async function renderPermissions() {
     const verb = CAPABILITY_LABEL[g.capability] || g.capability;
     const denied = g.action === 'deny';
     const desc = denied ? t('st.perms.blocked', { verb }) : t('st.perms.allowed', { verb });
-    // host+capability uniquely identify a grant (record() dedupes per pair).
-    const id = `${g.capability} ${g.host}`;
+    // host + capability uniquely identify a grant (record() dedupes per pair).
+    // Keep them in SEPARATE data attributes — no delimiter to round-trip wrong.
     return `
       <div class="setting-row" style="align-items:center;">
         <div class="setting-info">
           <div class="setting-label">${denied ? '⛔ ' : ''}${escapeHtml(String(g.host || ''))}</div>
           <div class="setting-desc">${escapeHtml(desc)}</div>
         </div>
-        <button class="btn-secondary" data-revoke="${escapeHtml(id)}">${escapeHtml(t('st.perms.revoke'))}</button>
+        <button class="btn-secondary" data-cap="${escapeHtml(String(g.capability || ''))}" data-host="${escapeHtml(String(g.host || ''))}">${escapeHtml(t('st.perms.revoke'))}</button>
       </div>`;
   }).join('');
 
   if (actionsEl) actionsEl.style.display = 'flex';
 
-  listEl.querySelectorAll('[data-revoke]').forEach((btn) => {
+  listEl.querySelectorAll('button[data-cap]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const [capability, host] = String(btn.dataset.revoke).split(' ');
+      const capability = btn.dataset.cap;
+      const host = btn.dataset.host;
       const cur = (await browser.storage.local.get(PERMISSIONS_KEY))[PERMISSIONS_KEY] || [];
       const next = cur.filter((g) => !(g.capability === capability && g.host === host));
       await browser.storage.local.set({ [PERMISSIONS_KEY]: next });
