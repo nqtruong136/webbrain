@@ -35,13 +35,14 @@ const DESTRUCTIVE_LABEL_RE =
 // Synonym groups: which words in the user's instruction count as "the user
 // asked for THIS verb". e.g. if the button says "Publish" and the user said
 // "post this", that's authorized. Kept HIGH-PRECISION on purpose — broad words
-// ("get", "move", "close", "cancel", "give", "clear", "message") were removed
-// because they fire in benign/unrelated contexts and would waive the gate
-// (e.g. "get info" must NOT authorize a Buy click). Matching is word-boundary
-// + negation-aware (see userMentionsVerb), so this is the intent signal, not a
-// bare substring check.
+// ("get", "move", "close", "cancel", "give", "clear", "message") and noun-prone
+// words ("email", "dm") were removed because they fire in benign/unrelated
+// contexts and would waive the gate (e.g. "read my email", "get info" must NOT
+// authorize a Send/Buy click). Matching is word-boundary + negation- and
+// noun-context-aware (see userMentionsVerb), so this is the intent signal, not
+// a bare substring check.
 const VERB_SYNONYMS = {
-  send: ['send', 'email', 'e-mail', 'dm'],
+  send: ['send'],
   post: ['post', 'publish', 'tweet'],
   publish: ['publish', 'post', 'release'],
   tweet: ['tweet', 'post', 'publish'],
@@ -65,10 +66,17 @@ const VERB_SYNONYMS = {
 
 const NEGATION_RE = /\b(no|not|never|without|avoid|don'?t|do not|doesn'?t|won'?t|instead of|rather than|skip)\b/i;
 
+// A determiner/possessive or a read-style verb immediately before a synonym
+// means it's being used as a NOUN, not an action request — "read my email",
+// "summarize the post", "check my orders". These must NOT authorize a Send /
+// Publish / Buy click. (A genuine imperative — "email bob", "post this",
+// "order me a pizza" — has no such word before the verb, so it still counts.)
+const NOUN_CONTEXT_RE = /\b(my|the|this|that|these|those|your|our|their|its|his|her|a|an|any|all|each|some|read|reads|reading|check|checking|view|viewing|open|opening|see|seeing|summari[sz]e|show|showing|find|search|list|fetch|look)\s+$/i;
+
 /**
  * Does the user's instruction actually express intent to perform `verb`?
- * Requires a synonym at a word boundary AND not immediately negated — so
- * "do not send it" / "read this message" / "get info" do NOT authorize a
+ * Requires a synonym at a word boundary that is NOT negated and NOT used as a
+ * noun — so "do not send it", "read my email", "get info" do NOT authorize a
  * Send/Buy click. Biased to fail SAFE: ambiguity → not authorized → confirm.
  */
 function userMentionsVerb(text, synonyms) {
@@ -78,7 +86,8 @@ function userMentionsVerb(text, synonyms) {
     while ((m = re.exec(text)) !== null) {
       const start = m.index + m[1].length;
       const before = text.slice(Math.max(0, start - 28), start);
-      if (NEGATION_RE.test(before)) continue; // negated → doesn't count
+      if (NEGATION_RE.test(before)) continue;     // negated → doesn't count
+      if (NOUN_CONTEXT_RE.test(before)) continue; // used as a noun → doesn't count
       return true;
     }
   }

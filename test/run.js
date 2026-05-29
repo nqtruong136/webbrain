@@ -1915,7 +1915,7 @@ test('verb synonyms authorize the matching destructive click', () => {
   const pub = classifyConsequentialAction('click', { text: 'Publish' });
   assert.equal(isUserAuthorized('post this to my blog', pub), true);
   const send = classifyConsequentialAction('click', { text: 'Send' });
-  assert.equal(isUserAuthorized('email bob the summary', send), true);
+  assert.equal(isUserAuthorized('send bob the summary', send), true);
 });
 
 test('a destructive click the user never asked for is NOT authorized', () => {
@@ -1937,6 +1937,21 @@ test('authorization requires intent, not bare keyword presence', () => {
   // "get info" must NOT authorize a Buy ("get" was removed as a synonym)
   assert.equal(isUserAuthorized('get info about this product', buy), false);
   assert.equal(isUserAuthorized('buy this product', buy), true);
+});
+
+test('noun usage of a synonym does not authorize; verb usage does', () => {
+  // NOUN_CONTEXT guard, demonstrated on the verb/noun-ambiguous "post":
+  const pub = classifyConsequentialAction('click', { text: 'Publish' });
+  assert.equal(isUserAuthorized('read the post and summarize it', pub), false); // noun
+  assert.equal(isUserAuthorized('summarize this post', pub), false);            // noun
+  assert.equal(isUserAuthorized('post this to my blog', pub), true);            // verb
+
+  // "email"/"dm" are dropped from the send waiver entirely — too noun-prone.
+  const send = classifyConsequentialAction('click', { text: 'Send' });
+  assert.equal(isUserAuthorized('read my email and summarize it', send), false);
+  assert.equal(isUserAuthorized('summarize the latest email', send), false);
+  assert.equal(isUserAuthorized('email me the figures', send), false); // now prompts (safe)
+  assert.equal(isUserAuthorized('send this now', send), true);
 });
 
 test('click_ax by ref_id is gated via resolved accessible name', () => {
