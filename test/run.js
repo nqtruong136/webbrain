@@ -2070,7 +2070,12 @@ const KNOWN_SAFE_TOOLS = new Set([
   'hover',                // reveals menus/tooltips; cannot submit/delete/navigate
   'wait_for_stable',      // waits for the page to settle; returns status only
   'stop_recording',       // stops capture (starting it is gated via record_tab)
-  'solve_captcha',        // injects a challenge token; the actual submit stays gated
+  // solve_captcha is not page-content; its side effects (spends CapSolver
+  // quota + injects a token into the page) are minor and bounded, and the only
+  // consequential follow-up — the submit — is separately gated. Left ungated to
+  // avoid friction on a precursor the user wants when blocked by a CAPTCHA;
+  // revisit if quota abuse becomes a real concern.
+  'solve_captcha',
 ]);
 
 test('exhaustiveness: every model-exposed tool is classified', () => {
