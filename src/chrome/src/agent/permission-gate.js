@@ -69,7 +69,13 @@ export const UNTRUSTED_CONTENT_TOOLS = new Set([
   'scroll',
   'wait_for_element',
   'verify_form',
+  // download family: results echo URLs (download_resource_from_page returns the
+  // page-controlled src/href as sourceUrl / in its cross-origin error) and
+  // attacker-settable Content-Disposition filenames.
   'download_social_media',
+  'download_resource_from_page',
+  'download_files',
+  'download_file',
   // hover returns the element's accessible name (aria-label/title/innerText).
   'hover',
   // list_downloads returns each download's url + filename; the filename can
