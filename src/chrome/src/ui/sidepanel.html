@@ -59,7 +59,7 @@
         </ul>
       </div>
 
-      <!-- Step 3: API Tokens -->
+      <!-- Step 3: Model setup -->
       <div class="ob-step" data-step="2">
         <div class="ob-icon ob-icon-key">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -67,8 +67,14 @@
           </svg>
         </div>
         <h2 data-i18n="ob.tokens.title"></h2>
-        <p class="ob-body" data-i18n="ob.tokens.body"></p>
-        <ul class="ob-provider-list">
+        <p class="ob-body" id="ob-provider-body" data-i18n="ob.tokens.body"></p>
+        <div class="ob-provider-status" id="ob-provider-status" data-i18n="ob.tokens.scanning"></div>
+        <div class="ob-local-models hidden" id="ob-local-models">
+          <label class="ob-local-label" for="ob-local-model-select" data-i18n="ob.tokens.local_models_label"></label>
+          <select class="ob-local-select" id="ob-local-model-select"></select>
+          <p class="ob-note" data-i18n="ob.tokens.local_note"></p>
+        </div>
+        <ul class="ob-provider-list" id="ob-provider-list">
           <li data-i18n="ob.tokens.option_lmstudio"></li>
           <li data-i18n="ob.tokens.option_openai"></li>
           <li data-i18n="ob.tokens.option_other"></li>

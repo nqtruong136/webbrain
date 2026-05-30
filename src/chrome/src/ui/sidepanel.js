@@ -43,12 +43,120 @@ if (globalThis.chrome?.storage?.onChanged) {
   const backBtn = document.getElementById('ob-back');
   const settingsBtn = document.getElementById('ob-open-settings');
   const skipBtn = document.getElementById('ob-skip');
+  const providerBody = document.getElementById('ob-provider-body');
+  const providerStatus = document.getElementById('ob-provider-status');
+  const providerList = document.getElementById('ob-provider-list');
+  const localModels = document.getElementById('ob-local-models');
+  const localModelSelect = document.getElementById('ob-local-model-select');
   const totalSteps = steps.length;
+  const LOCAL_PROVIDER_ORDER = ['lmstudio', 'ollama', 'llamacpp'];
   let current = 0;
+  let localScanStarted = false;
+  let localModelChoices = [];
 
   function dismissOnboarding() {
     chrome.storage.local.set({ onboardingComplete: true }).catch(() => {});
     overlay.classList.add('hidden');
+  }
+
+  function setProviderStatus(key, params) {
+    if (providerStatus) providerStatus.textContent = t(key, params);
+  }
+
+  function providerSortIndex(id) {
+    const idx = LOCAL_PROVIDER_ORDER.indexOf(id);
+    return idx === -1 ? LOCAL_PROVIDER_ORDER.length : idx;
+  }
+
+  function withTimeout(promise, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timed out')), timeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        }
+      );
+    });
+  }
+
+  function showProviderFallback(statusKey = 'ob.tokens.none_status') {
+    localModelChoices = [];
+    if (providerBody) providerBody.textContent = t('ob.tokens.body');
+    providerList?.classList.remove('hidden');
+    localModels?.classList.add('hidden');
+    setProviderStatus(statusKey);
+    settingsBtn.textContent = t('ob.btn.settings');
+    settingsBtn.disabled = false;
+  }
+
+  function showLocalChoices(choices) {
+    localModelChoices = choices;
+    if (providerBody) providerBody.textContent = t('ob.tokens.local_body');
+    if (localModelSelect) {
+      localModelSelect.innerHTML = '';
+      choices.forEach((choice, index) => {
+        const opt = document.createElement('option');
+        opt.value = String(index);
+        opt.textContent = `${choice.providerLabel}: ${choice.model}`;
+        localModelSelect.appendChild(opt);
+      });
+    }
+    providerList?.classList.add('hidden');
+    localModels?.classList.remove('hidden');
+    setProviderStatus('ob.tokens.local_status', { count: choices.length });
+    settingsBtn.textContent = t('ob.btn.use_local');
+    settingsBtn.disabled = false;
+  }
+
+  async function scanLocalModels() {
+    localModelChoices = [];
+    settingsBtn.disabled = true;
+    settingsBtn.textContent = t('ob.btn.detecting');
+    providerList?.classList.add('hidden');
+    localModels?.classList.add('hidden');
+    if (providerBody) providerBody.textContent = t('ob.tokens.body');
+    setProviderStatus('ob.tokens.scanning');
+
+    try {
+      const { providers = {} } = await sendToBackground('get_providers');
+      const localProviderIds = Object.keys(providers)
+        .filter((id) => providers[id]?.category === 'local' || LOCAL_PROVIDER_ORDER.includes(id))
+        .sort((a, b) => providerSortIndex(a) - providerSortIndex(b) || a.localeCompare(b));
+
+      const detected = await Promise.all(localProviderIds.map(async (providerId) => {
+        try {
+          const res = await withTimeout(
+            sendToBackground('list_provider_models', { providerId }),
+            2500
+          );
+          if (!res?.ok || !Array.isArray(res.models)) return [];
+          return res.models
+            .map((model) => (typeof model === 'string' ? model.trim() : ''))
+            .filter(Boolean)
+            .map((model) => ({
+              providerId,
+              providerLabel: providers[providerId]?.label || providerId,
+              model,
+            }));
+        } catch {
+          return [];
+        }
+      }));
+
+      const choices = detected.flat();
+      if (choices.length > 0) {
+        showLocalChoices(choices);
+      } else {
+        showProviderFallback();
+      }
+    } catch {
+      showProviderFallback('ob.tokens.detect_failed');
+    }
   }
 
   function goTo(idx) {
@@ -70,6 +178,10 @@ if (globalThis.chrome?.storage?.onChanged) {
     settingsBtn.classList.toggle('hidden', !isLast);
     skipBtn.classList.toggle('hidden', !isLast);
     if (!isLast) nextBtn.textContent = t('ob.btn.next');
+    if (isLast && !localScanStarted) {
+      localScanStarted = true;
+      scanLocalModels();
+    }
   }
 
   nextBtn.addEventListener('click', () => {
@@ -80,7 +192,32 @@ if (globalThis.chrome?.storage?.onChanged) {
     if (current > 0) goTo(current - 1);
   });
 
-  settingsBtn.addEventListener('click', () => {
+  settingsBtn.addEventListener('click', async () => {
+    if (localModelChoices.length > 0) {
+      const selectedIndex = Number(localModelSelect?.value || 0);
+      const choice = localModelChoices[selectedIndex] || localModelChoices[0];
+      settingsBtn.disabled = true;
+      settingsBtn.textContent = t('ob.btn.enabling');
+      setProviderStatus('ob.tokens.enabling');
+      try {
+        await sendToBackground('update_provider', {
+          providerId: choice.providerId,
+          config: { enabled: true, model: choice.model },
+        });
+        await sendToBackground('set_active_provider', { providerId: choice.providerId });
+        await loadProviders();
+        if (providerSelect) providerSelect.value = choice.providerId;
+        await testConnection();
+        dismissOnboarding();
+        inputEl?.focus();
+      } catch (e) {
+        settingsBtn.disabled = false;
+        settingsBtn.textContent = t('ob.btn.use_local');
+        setProviderStatus('ob.tokens.enable_failed', { error: e?.message || String(e || 'unknown error') });
+      }
+      return;
+    }
+
     chrome.runtime.openOptionsPage();
     dismissOnboarding();
   });
