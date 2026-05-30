@@ -692,6 +692,9 @@ const DONE_TOOL_STRICT = {
  * `opts.visionAvailable` (default true): when false — the active model has no
  * vision and no dedicated vision sidecar is configured — the screenshot tools
  * are dropped, so a blind model doesn't burn a step on a dead-end error.
+ * (Unlike Chrome, the Firefox screenshot handler has no save-to-Downloads
+ * path — without vision it can only error — so there's nothing worth keeping
+ * advertised here; dropping it outright is correct.)
  */
 const VISION_ONLY_TOOLS = new Set(['screenshot', 'full_page_screenshot']);
 

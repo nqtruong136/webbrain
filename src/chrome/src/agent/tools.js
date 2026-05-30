@@ -766,10 +766,13 @@ const DONE_TOOL_STRICT = {
  *
  * `opts.visionAvailable` (default true): when false — the active model has no
  * vision and no dedicated vision sidecar is configured — the screenshot tools
- * are dropped from the advertised set. A blind model that calls screenshot
- * just burns a step on a dead-end error, so don't offer it.
+ * keep their `save:true` path (which writes a PNG to Downloads without ever
+ * needing vision) but their description is rewritten to tell the model it will
+ * NOT see the image, so it doesn't burn a step trying to "look" at the page.
  */
-const VISION_ONLY_TOOLS = new Set(['screenshot', 'full_page_screenshot']);
+const SCREENSHOT_TOOLS = new Set(['screenshot', 'full_page_screenshot']);
+
+const NO_VISION_SCREENSHOT_NOTE = 'IMPORTANT — the active model has NO vision and no vision sidecar is configured: you will NOT see the captured image, so do NOT call this to inspect, read, or verify the page (use get_accessibility_tree, get_interactive_elements, or read_page for that — calling this to "look" wastes a step). The ONLY useful purpose in this configuration is saving the image to the user\'s Downloads folder: call with save:true (optionally filename) when the user explicitly asks to download/save/export a screenshot.';
 
 export function getToolsForMode(mode, opts = {}) {
   let base;
@@ -781,7 +784,11 @@ export function getToolsForMode(mode, opts = {}) {
     base = AGENT_TOOLS;
   }
   if (opts.visionAvailable === false) {
-    base = base.filter(t => !VISION_ONLY_TOOLS.has(t.function.name));
+    base = base.map(t => (
+      SCREENSHOT_TOOLS.has(t.function.name)
+        ? { ...t, function: { ...t.function, description: `${NO_VISION_SCREENSHOT_NOTE}\n\n${t.function.description}` } }
+        : t
+    ));
   }
   if (!opts.strictSecretMode) return base;
   return base.map(t => (t.function.name === 'done' ? DONE_TOOL_STRICT : t));
