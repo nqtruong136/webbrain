@@ -1264,7 +1264,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
     if (response && response.cancelled) return null;
     const ans = String(response?.answer || '').trim().toLowerCase();
-    if (ans === ALWAYS.toLowerCase() || /\balways\b/.test(ans)) return 'always';
+    // Fail safe: any negative phrasing → deny, even if it contains "always" /
+    // "allow" (e.g. "not always", "don't allow"). Only the exact option text or
+    // an affirmative-leading phrase grants.
+    if (/\bno\b|\bnot\b|\bnever\b|\bcancel\b|\bdeny\b|\bstop\b|\bskip\b|n'?t\b/.test(ans)) return 'deny';
+    if (ans === ALWAYS.toLowerCase() || /^(always allow|always)\b/.test(ans)) return 'always';
     if (ans === ONCE.toLowerCase() || /^(allow once|once|yes|allow|ok|okay|sure|proceed|go ahead|do it)\b/.test(ans)) return 'once';
     return 'deny';
   }
@@ -2334,7 +2338,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           })()
         `;
         const results = await browser.tabs.executeScript(tabId, { code, allFrames: true });
-        const frames = (results || []).filter(r => r && (!urlFilter || frameHostMatches(r.url, urlFilter)));
+        const frames = (results || []).filter(r => r && (!urlFilter || frameHostMatches(r.url, urlFilter) && r.url.includes(urlFilter)));
         return { success: true, frameCount: frames.length, frames };
       } catch (e) {
         return { success: false, error: `Iframe read failed: ${e.message}` };
@@ -2350,13 +2354,15 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           (() => {
             const filter = ${JSON.stringify(urlFilter)};
             if (filter) {
-              // Match the frame by HOST, not a URL substring, so "stripe.com"
-              // can't match https://evil.example/?x=stripe.com.
+              // Require BOTH host match (anti-substring) AND the original
+              // substring (so a caller-supplied path disambiguates same-host
+              // frames).
               let _w = String(filter).toLowerCase().trim();
               try { _w = new URL(/^[a-z][a-z0-9+.\\-]*:\\/\\//i.test(_w) ? _w : 'https://' + _w).hostname; } catch (e) {}
               _w = _w.replace(/^www\\./, '');
               const _h = location.hostname.toLowerCase().replace(/^www\\./, '');
-              if (_w && _h !== _w && !_h.endsWith('.' + _w)) return { ok: false, skipped: 'url-filter', url: location.href };
+              const _hostOk = !_w || _h === _w || _h.endsWith('.' + _w);
+              if (!_hostOk || !location.href.includes(filter)) return { ok: false, skipped: 'url-filter', url: location.href };
             }
             try {
               const el = document.querySelector(${JSON.stringify(selector)});
@@ -2394,13 +2400,15 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           (() => {
             const filter = ${JSON.stringify(urlFilter)};
             if (filter) {
-              // Match the frame by HOST, not a URL substring, so "stripe.com"
-              // can't match https://evil.example/?x=stripe.com.
+              // Require BOTH host match (anti-substring) AND the original
+              // substring (so a caller-supplied path disambiguates same-host
+              // frames).
               let _w = String(filter).toLowerCase().trim();
               try { _w = new URL(/^[a-z][a-z0-9+.\\-]*:\\/\\//i.test(_w) ? _w : 'https://' + _w).hostname; } catch (e) {}
               _w = _w.replace(/^www\\./, '');
               const _h = location.hostname.toLowerCase().replace(/^www\\./, '');
-              if (_w && _h !== _w && !_h.endsWith('.' + _w)) return { ok: false, skipped: 'url-filter', url: location.href };
+              const _hostOk = !_w || _h === _w || _h.endsWith('.' + _w);
+              if (!_hostOk || !location.href.includes(filter)) return { ok: false, skipped: 'url-filter', url: location.href };
             }
             try {
               const el = document.querySelector(${JSON.stringify(selector)});

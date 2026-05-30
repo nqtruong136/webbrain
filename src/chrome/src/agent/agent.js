@@ -1990,7 +1990,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
     if (response && response.cancelled) return null;
     const ans = String(response?.answer || '').trim().toLowerCase();
-    if (ans === ALWAYS.toLowerCase() || /\balways\b/.test(ans)) return 'always';
+    // Fail safe: any negative phrasing → deny, even if it contains "always" /
+    // "allow" (e.g. "not always", "don't allow"). Only the exact option text or
+    // an affirmative-leading phrase grants.
+    if (/\bno\b|\bnot\b|\bnever\b|\bcancel\b|\bdeny\b|\bstop\b|\bskip\b|n'?t\b/.test(ans)) return 'deny';
+    if (ans === ALWAYS.toLowerCase() || /^(always allow|always)\b/.test(ans)) return 'always';
     if (ans === ONCE.toLowerCase() || /^(allow once|once|yes|allow|ok|okay|sure|proceed|go ahead|do it)\b/.test(ans)) return 'once';
     return 'deny';
   }
@@ -3542,7 +3546,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         // results is an array of {frameId, result} entries — one per frame.
         const frames = results
           .map(r => r.result)
-          .filter(r => r && (!urlFilter || frameHostMatches(r.url, urlFilter)));
+          .filter(r => r && (!urlFilter || frameHostMatches(r.url, urlFilter) && r.url.includes(urlFilter)));
         return { success: true, frameCount: frames.length, frames };
       } catch (e) {
         return { success: false, error: `Iframe read failed: ${e.message}` };
@@ -3561,13 +3565,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           target: { tabId, allFrames: true },
           func: (sel, filter) => {
             if (filter) {
-              // Match the frame by HOST (not a substring of the full URL), so
-              // urlFilter "stripe.com" can't match https://evil.example/?x=stripe.com.
+              // Require BOTH: (1) HOST match — so "stripe.com" can't match
+              // https://evil.example/?x=stripe.com (anti-substring), AND (2) the
+              // original substring — so a caller-supplied path still picks one
+              // of several same-host frames.
               let w = String(filter).toLowerCase().trim();
               try { w = new URL(/^[a-z][a-z0-9+.\-]*:\/\//i.test(w) ? w : 'https://' + w).hostname; } catch (e) {}
               w = w.replace(/^www\./, '');
               const h = location.hostname.toLowerCase().replace(/^www\./, '');
-              if (w && h !== w && !h.endsWith('.' + w)) {
+              const hostOk = !w || h === w || h.endsWith('.' + w);
+              if (!hostOk || !location.href.includes(filter)) {
                 return { ok: false, skipped: 'url-filter', url: location.href };
               }
             }
@@ -3625,13 +3632,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           target: { tabId, allFrames: true },
           func: (sel, txt, clr, filter) => {
             if (filter) {
-              // Match the frame by HOST (not a substring of the full URL), so
-              // urlFilter "stripe.com" can't match https://evil.example/?x=stripe.com.
+              // Require BOTH: (1) HOST match — so "stripe.com" can't match
+              // https://evil.example/?x=stripe.com (anti-substring), AND (2) the
+              // original substring — so a caller-supplied path still picks one
+              // of several same-host frames.
               let w = String(filter).toLowerCase().trim();
               try { w = new URL(/^[a-z][a-z0-9+.\-]*:\/\//i.test(w) ? w : 'https://' + w).hostname; } catch (e) {}
               w = w.replace(/^www\./, '');
               const h = location.hostname.toLowerCase().replace(/^www\./, '');
-              if (w && h !== w && !h.endsWith('.' + w)) {
+              const hostOk = !w || h === w || h.endsWith('.' + w);
+              if (!hostOk || !location.href.includes(filter)) {
                 return { ok: false, skipped: 'url-filter', url: location.href };
               }
             }
