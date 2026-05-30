@@ -70,6 +70,11 @@ export const UNTRUSTED_CONTENT_TOOLS = new Set([
   'wait_for_element',
   'verify_form',
   'download_social_media',
+  // hover returns the element's accessible name (aria-label/title/innerText).
+  'hover',
+  // list_downloads returns each download's url + filename; the filename can
+  // come from an attacker-set Content-Disposition header.
+  'list_downloads',
   // screenshot / full_page_screenshot: when a vision model is configured these
   // return `description` = a transcription of the page (OCR/visual text). The
   // image itself is stripped to _attachImage (and framed there) before this

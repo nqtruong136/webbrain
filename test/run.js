@@ -2106,8 +2106,10 @@ test('parity: chrome & firefox permission-gate behave identically', async () => 
 const KNOWN_SAFE_TOOLS = new Set([
   'clarify',              // relays a question to the user (trusted user input)
   'scratchpad_write',     // writes an internal agent note, not the page
-  'list_downloads',       // lists local downloads (local state, not page content)
-  'hover',                // reveals menus/tooltips; cannot submit/delete/navigate
+  // NOTE: hover and list_downloads were moved to UNTRUSTED_CONTENT_TOOLS — both
+  // return attacker-influenced bytes (hover: the element's accessible name;
+  // list_downloads: url + Content-Disposition filename). "Doesn't act
+  // dangerously" is not the test; "does its RESULT carry page-derived bytes" is.
   'wait_for_stable',      // waits for the page to settle; returns status only
   'stop_recording',       // stops capture (starting it is gated via record_tab)
   // solve_captcha is not page-content; its side effects (spends CapSolver
