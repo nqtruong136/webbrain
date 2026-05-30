@@ -1322,7 +1322,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   _refreshSystemPrompts() {
     for (const [tabId, messages] of this.conversations) {
       if (!messages || messages[0]?.role !== 'system') continue;
-      const mode = this._conversationMode || 'ask';
+      const mode = this.conversationModes.get(tabId) || this._conversationMode || 'ask';
       messages[0].content = this._buildSystemPrompt(mode);
     }
   }
@@ -1332,6 +1332,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       this.conversations.set(tabId, [
         { role: 'system', content: this._buildSystemPrompt(mode) },
       ]);
+      this.conversationModes.set(tabId, mode);
       this._conversationMode = mode;
       // New conversation → mint a new conversationId. Stable for the
       // lifetime of this conversation (until clearConversation), so every
@@ -1342,14 +1343,19 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       }
     }
     // If mode changed, update the system prompt
-    if (this._conversationMode !== mode) {
-      const messages = this.conversations.get(tabId);
-      if (messages[0]?.role === 'system') {
-        messages[0].content = this._buildSystemPrompt(mode);
-      }
+    const messages = this.conversations.get(tabId);
+    const lastMode = this.conversationModes.get(tabId) || this._conversationMode;
+    if (lastMode !== mode) {
+      this.conversationModes.set(tabId, mode);
       this._conversationMode = mode;
     }
-    return this.conversations.get(tabId);
+    if (messages[0]?.role === 'system') {
+      // Provider settings can change while a tab conversation stays alive.
+      // Rebuild on reuse so the prompt matches the current provider's tools.
+      const nextPrompt = this._buildSystemPrompt(mode);
+      if (messages[0].content !== nextPrompt) messages[0].content = nextPrompt;
+    }
+    return messages;
   }
 
   /**
@@ -1358,6 +1364,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   clearConversation(tabId) {
     this._cancelClarifications(tabId, 'conversation cleared');
     this.conversations.delete(tabId);
+    this.conversationModes.delete(tabId);
     this.conversationIds.delete(tabId);
     this._cleanupTab(tabId, { preserveRunGuard: true });
   }
