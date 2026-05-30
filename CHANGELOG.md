@@ -4,6 +4,39 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / `manifest.json` version.
 
+## [10.0.0] - 2026-05-30
+
+### Added
+- Deterministic capability-by-origin permission gate for consequential agent actions, with per-host Allow once / Always / Deny grants.
+- Site Permissions settings tab for reviewing and revoking saved capability grants.
+- Localized structured permission card across Chrome and Firefox, replacing the previous free-text permission parser.
+- Act-mode risk banner that appears when the permission gate is disabled.
+- Localized onboarding safety warnings and local-LLM setup flow, including auto-detection for local providers.
+- Apple Store site adapter.
+- Firefox support for compact Act prompts, including compact tool schema routing and provider opt-in.
+
+### Security
+- Wrapped page-derived tool results and model-visible context as untrusted data across page reads, screenshots/OCR, hover/list-download results, PDF passthrough, download-family results, `done` verification fields, and scratchpad-adjacent context.
+- Added prompt-injection defense documentation and tests covering the permission gate, untrusted-content registry, and capability classification exhaustiveness.
+- Gated outbound GET egress, screenshot-to-disk, `read_pdf({url})`, `record_tab`, resource downloads, iframe actions by frame host, and `set_field({submit})` as both type and click.
+- Scoped one-time permission grants to the tab/run and made `/allow-api` waive only mutation egress, not GET-based exfiltration.
+- Sanitized page title/URL and PDF title metadata before inserting them into trusted context notes.
+- Failed closed when iframe or target hosts cannot be identified for permission checks.
+
+### Changed
+- Improved nested-pane scroll targeting, with pane fallback when window scrolling cannot move and editable fields skipped as scroll containers.
+- Permission card choices now dismiss immediately, and the Settings permissions list live-refreshes after changes.
+- Firefox cached system prompts now refresh on conversation reuse so provider compact/full prompt changes stay aligned with the active tool schema.
+- Compact-mode tool allowlists are enforced for both text-parsed and structured tool calls in Firefox.
+- Documentation now describes Firefox compact-prompt support and current security/privacy behavior accurately.
+
+### Fixed
+- Fixed mobile hero mockup overflow and narrow navbar sizing.
+- Fixed Firefox download-card wrapping.
+- Fixed permission-option click handling so exact options are checked before negation parsing.
+- Fixed legacy scroll fallback guard and stale scroll-origin behavior.
+- Fixed docs accuracy issues and updated the maintainer security contact.
+
 ## [8.8.0] - 2026-05-28
 
 ### Added
