@@ -54,6 +54,13 @@ export class Agent {
     // the token-aware auto-compaction trigger; updated after each LLM response,
     // reset whenever we compact.
     this._lastInputTokens = new Map();
+    // tabId -> our char-estimate of the conversation at the moment _lastInputTokens
+    // was recorded. Lets _manageContext project the NEXT prompt as
+    // (reported tokens + estimated growth since) instead of just the reported
+    // count — so a big tool result appended after the last usage reading still
+    // trips the budget. The fixed system+tool-schema overhead rides along in the
+    // reported number; the delta captures the new messages.
+    this._lastEstCharsAtReport = new Map();
     // Auto-screenshot mode. 'off' | 'navigation' | 'state_change' | 'every_step'.
     // Loaded from chrome.storage.local in background.js.
     this.autoScreenshot = 'state_change';
@@ -2153,6 +2160,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this.conversationModes.delete(tabId);
     this.conversationIds.delete(tabId);
     this._lastInputTokens.delete(tabId);
+    this._lastEstCharsAtReport.delete(tabId);
     this.hydratedTabs.delete(tabId);
     this.apiAllowedTabs.delete(tabId);
     this.apiAllowedInjected.delete(tabId);
@@ -2280,6 +2288,22 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   /**
+   * Rough char count of a conversation, used as a cheap token proxy (≈ chars/4).
+   * Counts string content verbatim and JSON-stringifies structured content /
+   * tool_calls. Shared by _manageContext (current size) and the LLM call site
+   * (size at the moment usage was reported) so their delta is consistent.
+   */
+  _estimateContextChars(messages) {
+    let totalChars = 0;
+    for (const msg of messages) {
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '');
+      totalChars += content.length;
+      if (msg.tool_calls) totalChars += JSON.stringify(msg.tool_calls).length;
+    }
+    return totalChars;
+  }
+
+  /**
    * Index of the first real user turn — the task statement — skipping any
    * seeded site-guidance / site-context-changed / trim-notice / scratchpad
    * user messages. Shared by _manageContext (which pins it) and
@@ -2343,19 +2367,28 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    * so the side panel can show the user that context was auto-compacted.
    */
   async _manageContext(tabId, messages, onUpdate = null) {
-    // Calculate total char length
-    let totalChars = 0;
-    for (const msg of messages) {
-      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '');
-      totalChars += content.length;
-      if (msg.tool_calls) totalChars += JSON.stringify(msg.tool_calls).length;
-    }
+    const totalChars = this._estimateContextChars(messages);
 
     const tokenBudget = this._contextTokenBudget();
-    // Prefer the provider's reported input-token count; fall back to a rough
-    // chars/4 estimate when usage isn't available (e.g. mid-stream).
+    // Estimate the size of the NEXT request. A raw chars/4 estimate omits the
+    // fixed system-prompt + tool-schema overhead that the provider's reported
+    // `prompt_tokens` includes; the reported count, conversely, predates any
+    // messages appended since (e.g. a large tool result on this turn). So when
+    // we have a real prior reading, project from it: reported tokens + the
+    // estimated GROWTH in conversation bytes since that reading. The fixed
+    // overhead rides along in `lastReported`, the delta captures the new
+    // messages, and base64/image bytes cancel out of the delta. Fall back to
+    // the raw estimate (streaming path / first turn) when there's no reading.
     const estTokens = Math.ceil(totalChars / 4);
-    const usedTokens = Math.max(this._lastInputTokens.get(tabId) || 0, estTokens);
+    const lastReported = this._lastInputTokens.get(tabId) || 0;
+    const lastEstChars = this._lastEstCharsAtReport.get(tabId);
+    let usedTokens;
+    if (lastReported > 0 && lastEstChars != null) {
+      const deltaTokens = Math.max(0, Math.ceil((totalChars - lastEstChars) / 4));
+      usedTokens = Math.max(lastReported + deltaTokens, estTokens);
+    } else {
+      usedTokens = Math.max(lastReported, estTokens);
+    }
 
     const tooManyMessages = messages.length > this.maxContextMessages;
     const tooManyChars = totalChars > this.maxContextChars;
@@ -5878,7 +5911,12 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         if (runId) trace.recordLLMRequest(runId, steps, { providerClass: provider.constructor.name, model: provider.model, messageCount: prunedMessages.length, toolsCount: (chatOpts.tools || []).length });
         const _llmStart = Date.now();
         result = await provider.chat(prunedMessages, chatOpts);
-        if (result?.usage?.prompt_tokens) this._lastInputTokens.set(tabId, result.usage.prompt_tokens);
+        if (result?.usage?.prompt_tokens) {
+          this._lastInputTokens.set(tabId, result.usage.prompt_tokens);
+          // Snapshot the conversation size at this reading so the next
+          // _manageContext can add only the growth since (see its delta logic).
+          this._lastEstCharsAtReport.set(tabId, this._estimateContextChars(messages));
+        }
         const _llmLatency = Date.now() - _llmStart;
         this._logDebug({ type: 'llm_response', step: steps, content: result.content, toolCalls: result.toolCalls });
         if (runId) trace.recordLLMResponse(runId, steps, { content: result.content, toolCalls: result.toolCalls, usage: result.usage, latencyMs: _llmLatency, model: provider.model });
