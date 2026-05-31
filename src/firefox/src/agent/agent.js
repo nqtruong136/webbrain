@@ -2324,7 +2324,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
     return {
       success: true,
-      tab: tab ? { id: tab.id, windowId: tab.windowId, active: tab.active, title: tab.title || '', url: tab.url || '' } : null,
+      // Keep this safe to expose as trusted metadata: title and URL can
+      // contain page-controlled text and should stay out of this tool result.
+      tab: tab ? { id: tab.id, windowId: tab.windowId, active: tab.active } : null,
       window: win ? {
         id: win.id,
         left: win.left,
