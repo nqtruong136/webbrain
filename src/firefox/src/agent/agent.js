@@ -52,6 +52,7 @@ export class Agent {
     this.costAllowanceSessionUsd = DEFAULT_CLOUD_COST_ALLOWANCE_USD;
     this.costAllowanceTotalUsd = DEFAULT_CLOUD_COST_ALLOWANCE_USD;
     this.cloudCostSpentUsd = 0;
+    this._costUpdateQueue = Promise.resolve();
     // Profile auto-fill (plaintext bio + throwaway password used on
     // signup forms). Loaded in background.js and refreshed live on change.
     this.profileEnabled = false;
@@ -263,12 +264,20 @@ export class Agent {
     if (!this._isCostMeteredProvider(provider)) return null;
     const costUsd = this._extractUsageCostUsd(provider, usage);
     if (!costUsd) return null;
-    const state = await this._getCostAllowanceState();
-    const nextTotal = state.totalSpentUsd + costUsd;
-    if (costState) costState.spentUsd = this._normalizeCostSpent(costState.spentUsd) + costUsd;
-    this.cloudCostSpentUsd = nextTotal;
-    try { await browser.storage.local.set({ [CLOUD_COST_SPENT_KEY]: nextTotal }); } catch {}
-    return this._checkCostAllowanceState({ ...state, totalSpentUsd: nextTotal }, costState);
+    return this._enqueueCostUpdate(async () => {
+      const state = await this._getCostAllowanceState();
+      const nextTotal = state.totalSpentUsd + costUsd;
+      if (costState) costState.spentUsd = this._normalizeCostSpent(costState.spentUsd) + costUsd;
+      this.cloudCostSpentUsd = nextTotal;
+      try { await browser.storage.local.set({ [CLOUD_COST_SPENT_KEY]: nextTotal }); } catch {}
+      return this._checkCostAllowanceState({ ...state, totalSpentUsd: nextTotal }, costState);
+    });
+  }
+
+  _enqueueCostUpdate(fn) {
+    const run = this._costUpdateQueue.then(fn, fn);
+    this._costUpdateQueue = run.catch(() => {});
+    return run;
   }
 
   _costAllowanceError(message) {
