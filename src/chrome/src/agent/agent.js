@@ -5974,13 +5974,25 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             .join('|');
           const controls = Array.from(document.querySelectorAll('button,[role="button"],a[href],input,textarea,select'))
             .filter(visible)
-            .map(el => [
-              el.tagName,
-              el.getAttribute('role') || '',
-              el.getAttribute('aria-label') || el.title || el.value || el.innerText || '',
-              Math.round(el.getBoundingClientRect().x),
-              Math.round(el.getBoundingClientRect().y)
-            ].join(':'))
+            .map(el => {
+              const state = [
+                (el.type === 'checkbox' || el.type === 'radio') ? (el.checked ? 'checked' : 'unchecked') : '',
+                el.tagName === 'SELECT' ? ('selectedIndex=' + el.selectedIndex) : '',
+                el.disabled ? 'disabled' : '',
+                el.getAttribute('aria-checked') || '',
+                el.getAttribute('aria-pressed') || '',
+                el.getAttribute('aria-expanded') || '',
+                el.getAttribute('aria-selected') || ''
+              ].filter(Boolean).join(',');
+              return [
+                el.tagName,
+                el.getAttribute('role') || '',
+                el.getAttribute('aria-label') || el.title || el.value || el.innerText || '',
+                state,
+                Math.round(el.getBoundingClientRect().x),
+                Math.round(el.getBoundingClientRect().y)
+              ].join(':');
+            })
             .slice(0, 60)
             .join('|');
           return { url: location.href, text, media, controls };
