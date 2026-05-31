@@ -78,6 +78,12 @@ const { ProviderManager: ProviderManagerCh } = await import(
 const { ProviderManager: ProviderManagerFx } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/providers/manager.js').replace(/\\/g, '/')
 );
+const { OpenAICompatibleProvider: OpenAIProviderCh } = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/providers/openai.js').replace(/\\/g, '/')
+);
+const { OpenAICompatibleProvider: OpenAIProviderFx } = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/providers/openai.js').replace(/\\/g, '/')
+);
 
 // tools.js — pure ESM. We import both browser builds so prompt/tool routing
 // stays in parity.
@@ -1585,6 +1591,37 @@ test('_defaultConfigs: chrome and firefox share the same provider set', () => {
       chDefaults[id].category, fxDefaults[id].category,
       `provider ${id}: category differs (chrome=${chDefaults[id].category}, firefox=${fxDefaults[id].category})`
     );
+  }
+});
+
+test('OpenAI-compatible cloud/router streams request usage metadata', () => {
+  for (const Provider of [OpenAIProviderCh, OpenAIProviderFx]) {
+    for (const config of [
+      { category: 'cloud', providerName: 'deepseek' },
+      { category: 'cloud', providerName: 'mistral' },
+      { category: 'router', providerName: 'openrouter' },
+      { providerName: 'openai' },
+    ]) {
+      const provider = new Provider(config);
+      const body = { stream: true, stream_options: { custom: 'keep' } };
+      provider._addStreamUsageOptions(body);
+      assert.deepEqual(body.stream_options, { custom: 'keep', include_usage: true });
+    }
+  }
+});
+
+test('OpenAI-compatible local streams do not request usage metadata', () => {
+  for (const Provider of [OpenAIProviderCh, OpenAIProviderFx]) {
+    for (const config of [
+      { category: 'local', providerName: 'ollama' },
+      { category: 'local', providerName: 'lmstudio' },
+      { category: 'local', providerName: 'openai' },
+    ]) {
+      const provider = new Provider(config);
+      const body = { stream: true };
+      provider._addStreamUsageOptions(body);
+      assert.equal(body.stream_options, undefined);
+    }
   }
 });
 
