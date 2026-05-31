@@ -26,7 +26,8 @@ const scenariosPath = path.join(__dirname, 'scenarios.json');
 const args = process.argv.slice(2);
 const only = args.find(a => a.startsWith('--scenario='))?.split('=')[1];
 const setupOnly = args.includes('--setup');
-const interactiveSetup = setupOnly || (process.stdin.isTTY && process.stdout.isTTY && !process.env.CI);
+const hasInteractiveTerminal = process.stdin.isTTY && process.stdout.isTTY && !process.env.CI;
+const interactiveSetup = setupOnly && hasInteractiveTerminal;
 
 async function main() {
   const scenarios = JSON.parse(await readFile(scenariosPath, 'utf-8'));
