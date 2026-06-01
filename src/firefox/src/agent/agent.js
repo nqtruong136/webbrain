@@ -2855,12 +2855,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         await browser.tabs.executeScript(tabId, {
           file: 'src/agent/social-media-downloader.js',
         });
+        const bulkSocialDownload = !!args.scroll || args.mode === 'all';
         const opts = {
           mode: args.mode || 'auto',
           all: !!args.scroll,
           limit: typeof args.limit === 'number' && args.limit > 0
             ? args.limit
-            : Number.MAX_SAFE_INTEGER,
+            : (bulkSocialDownload ? Number.MAX_SAFE_INTEGER : 1),
         };
         const code = `
           (async () => {

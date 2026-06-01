@@ -619,7 +619,7 @@ export const AGENT_TOOLS = [
           mode: {
             type: 'string',
             enum: ['auto', 'main', 'all'],
-            description: '"auto" (default): main media on single-content pages, everything on feeds. "main": force just the primary photo/video on the page. "all": every media item currently in the DOM.',
+            description: '"auto" (default): focused/open media only. "main": primary post media on single-content pages. "all": every media item currently in the DOM; use only for explicit bulk requests.',
           },
           scroll: {
             type: 'boolean',
@@ -627,7 +627,7 @@ export const AGENT_TOOLS = [
           },
           limit: {
             type: 'number',
-            description: 'Max number of files to download. Default unlimited.',
+            description: 'Max number of files to download. Default 1 for focused/main requests; unlimited only when mode:"all" or scroll:true is explicit.',
           },
         },
         required: [],
