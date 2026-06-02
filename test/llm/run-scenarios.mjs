@@ -77,6 +77,9 @@ if (args.freeze && args.freeze !== true) {
   loadFrozenBaseline(args.freeze);
 }
 const TIER = normalizeTier(args.tier);
+// --unprotected: ABLATION. Strip BOTH the untrusted-content wrapper from the
+// seed AND the untrusted-content instructions from the system prompt.
+const UNPROTECTED = !!args.unprotected;
 
 const onlySet = args.only && args.only !== true
   ? new Set(String(args.only).split(',').map(s => String(parseInt(s, 10)).padStart(3, '0')))
@@ -84,9 +87,9 @@ const onlySet = args.only && args.only !== true
 const categoryFilter = args.category && args.category !== true ? String(args.category) : null;
 
 const runTag = args.tag || new Date().toISOString().replace(/[:.]/g, '-');
-const tagSuffix = isFrozen()
+const tagSuffix = (isFrozen()
   ? '_frozen'
-  : (TIER === 'full' ? '' : `_${TIER}`);
+  : (TIER === 'full' ? '' : `_${TIER}`)) + (UNPROTECTED ? '_unprotected' : '');
 const runDir = join(RESULTS_DIR, `${runTag}_${BROWSER}_${MODEL.replace(/[^\w.-]+/g, '_')}${tagSuffix}`);
 mkdirSync(runDir, { recursive: true });
 
@@ -132,7 +135,7 @@ const promptMode = isFrozen()
 console.error(`▸ ${scenarios.length} scenario(s), base=${BASE}, model=${MODEL}, browser=${BROWSER}, concurrency=${CONCURRENCY}`);
 if (categoryFilter) console.error(`▸ category=${categoryFilter}`);
 console.error(`▸ endpoint=${CHAT_URL}`);
-console.error(`▸ prompt: ${promptMode}`);
+console.error(`▸ prompt: ${promptMode}${UNPROTECTED ? ' — ⚠ UNPROTECTED (wrapper + untrusted-content instructions stripped)' : ''}`);
 console.error(`▸ writing to ${runDir}`);
 
 // Render a tool call as a stable signature string for antiPattern matching.
@@ -212,7 +215,7 @@ function safeParse(s) { try { return JSON.parse(s); } catch { return {}; } }
 const TERMINAL_TOOLS = new Set(['done', 'clarify']);
 
 async function runOne(scenario) {
-  const payload = buildScenarioPayload({ ...scenario, browser: scenario.browser || BROWSER }, { tier: TIER });
+  const payload = buildScenarioPayload({ ...scenario, browser: scenario.browser || BROWSER }, { tier: TIER, unprotected: UNPROTECTED });
   const body = {
     model: MODEL,
     temperature: scenario.mode === 'act' ? 0.15 : 0.3,
@@ -352,6 +355,7 @@ for (const r of results) {
 const summary = {
   runTag, model: MODEL, base: BASE, browser: BROWSER,
   tier: isFrozen() ? null : TIER,
+  unprotected: UNPROTECTED,
   freeze: isFrozen() ? {
     path: args.freeze && args.freeze !== true ? args.freeze : (process.env.WB_FREEZE_BASELINE || null),
     sourceRun: getFrozenMeta()?.sourceRun || null,

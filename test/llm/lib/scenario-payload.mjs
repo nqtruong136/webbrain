@@ -68,10 +68,33 @@ function pick(browser) {
   return b;
 }
 
+// ── Ablation helpers (for opts.unprotected) ─────────────────────────────────
+// Strip the <untrusted_page_content id="…">…</…> wrapper from a seed message,
+// leaving the raw page bytes the model would see with NO quarantine.
+function unwrapUntrusted(content) {
+  if (typeof content !== 'string') return content;
+  return content.replace(
+    /<untrusted_page_content\b[^>]*>\n?([\s\S]*?)\n?<\/untrusted_page_content\b[^>]*>/g,
+    '$1',
+  );
+}
+
+// Remove the prompt-level defense: the dedicated "UNTRUSTED PAGE CONTENT" block
+// (ACT/ASK/MID — a blank-line-delimited paragraph) and the inline COMPACT
+// security bullet. With this AND the wrapper removed, the only thing that could
+// protect the model is its own training — so the run isolates the defense.
+function stripUntrustedInstructions(prompt) {
+  const kept = prompt.split('\n\n').filter((block) => !/^\s*UNTRUSTED PAGE CONTENT/i.test(block));
+  return kept.join('\n\n')
+    .split('\n').filter((line) => !/^\s*\d+\.\s*SECURITY:.*untrusted/i.test(line)).join('\n');
+}
+
 /**
  * @param {object} scenario - { id, mode, browser, tab, seed, expected }
  * @param {object} opts     - { useSiteAdapters?: boolean, strictSecretMode?: boolean,
- *                              tier?: 'full'|'mid'|'compact' }
+ *                              tier?: 'full'|'mid'|'compact', unprotected?: boolean }
+ *   unprotected: ABLATION — strip BOTH the untrusted-content wrapper from the
+ *   seed AND the untrusted-content instructions from the system prompt.
  * @returns {{ messages: Array, tools: Array }}
  */
 export function buildScenarioPayload(scenario, opts = {}) {
@@ -80,6 +103,7 @@ export function buildScenarioPayload(scenario, opts = {}) {
   const tier = normalizeTier(opts.tier);
   const useSiteAdapters = opts.useSiteAdapters !== false;
   const strictSecretMode = !!opts.strictSecretMode;
+  const unprotected = !!opts.unprotected;
 
   // FREEZE MODE: snapshot wins. Site adapters / tier are ignored — whatever
   // was active at capture time is what we replay. Multi-turn seeds still
@@ -99,10 +123,21 @@ export function buildScenarioPayload(scenario, opts = {}) {
     ? FROZEN.tools
     : browser.getToolsForMode(mode, { strictSecretMode, tier });
 
+  // ABLATION: remove both layers of injection defense.
+  let seed = scenario.seed;
+  if (unprotected) {
+    systemContent = stripUntrustedInstructions(systemContent);
+    seed = scenario.seed.map((m) =>
+      m.role === 'tool' && typeof m.content === 'string'
+        ? { ...m, content: unwrapUntrusted(m.content) }
+        : m,
+    );
+  }
+
   return {
     messages: [
       { role: 'system', content: systemContent },
-      ...scenario.seed,
+      ...seed,
     ],
     tools,
   };
