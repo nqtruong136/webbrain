@@ -1,6 +1,6 @@
 # WebBrain Chrome Extension — Architecture
 
-> Version 12.0.3 · Manifest V3 · Service Worker background
+> Version 12.0.4 · Manifest V3 · Service Worker background
 
 ## High-Level Overview
 
