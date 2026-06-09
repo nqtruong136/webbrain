@@ -714,6 +714,7 @@ async function resolveDownloadInfo(downloadId, timeoutMs = 15000) {
       last = {
         filename: it.filename || null,
         state: it.state,
+        error: it.error || null,
         bytesReceived: it.bytesReceived ?? null,
         totalBytes: it.totalBytes ?? null,
       };
@@ -763,19 +764,23 @@ export async function downloadFiles(args = {}) {
     Array.from({ length: Math.min(DOWNLOAD_BATCH_CONCURRENCY, urls.length) }, () => worker())
   );
 
-  // Resolve the on-disk path for each successful download. We do this AFTER the
-  // download workers return so waiting on completion doesn't hold a concurrency
-  // slot. Surfacing the path in download_files' OWN result (not just
-  // list_downloads) lets the caller pin it immediately — see the auto-scratchpad
-  // note in agent.js — and pass the downloadId straight to upload_file.
+  // Resolve browser-reported completion details AFTER the download workers
+  // return so waiting on completion doesn't hold a concurrency slot. The
+  // filename is for immediate verification/reporting only; durable context uses
+  // the downloadId, not a page-influenced basename/path.
   await Promise.all(results.map(async (r) => {
     if (r && r.success && r.downloadId != null) {
       const info = await resolveDownloadInfo(r.downloadId);
       if (info) {
         if (info.filename) r.filename = info.filename;
         if (info.state) r.state = info.state;
+        if (info.error) r.error = info.error;
         if (info.bytesReceived != null) r.bytesReceived = info.bytesReceived;
         if (info.totalBytes != null) r.totalBytes = info.totalBytes;
+        if (info.state === 'interrupted') {
+          r.success = false;
+          r.error = info.error ? `Download interrupted: ${info.error}` : 'Download interrupted before completion.';
+        }
       }
     }
   }));

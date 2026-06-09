@@ -605,7 +605,7 @@ export const AGENT_TOOLS = [
     type: 'function',
     function: {
       name: 'download_files',
-      description: 'Download one or more files. Pass a single url string or an array of urls (max 3 concurrent, max 50 total). Returns per-URL results with the downloadId AND the resolved local filename (the path on disk), plus completion state. The downloadId (not the path) is also auto-recorded to your scratchpad. To attach a downloaded file to a form later, pass its downloadId to upload_file — you do NOT need to remember the path. Use list_downloads to re-check completion.',
+      description: 'Download one or more files. Pass a single url string or an array of urls (max 3 concurrent, max 50 total). Returns per-URL results with the downloadId, completion state, and a browser-reported filename for immediate verification. The downloadId (not the path/filename) is auto-recorded to your scratchpad. To attach a downloaded file to a form later, pass its downloadId to upload_file — you do NOT need to remember the path. Do not copy downloaded filenames or paths into scratchpad; use list_downloads only when you need to verify details.',
       parameters: {
         type: 'object',
         properties: {
@@ -1023,7 +1023,7 @@ SCRATCHPAD — use this for long tasks:
   (a) Right after a bulk operation completes — "Downloaded pages 1-69 as page{N}.html, IDs 700-768."
   (b) Whenever you finalize a plan — "Plan: (1) download all pages (DONE), (2) read each, (3) regex <tr> rows, (4) emit CSV."
   (c) When you finish a chunk of iterative work — "Processed pages 1-10. Next: 11."
-  (d) When you discover a non-obvious fact you'll need later — "API endpoint /api/investors 404s, use HTML scrape." "Download path: /Users/me/Downloads/page{N}.html."
+  (d) When you discover a non-obvious fact you'll need later — "API endpoint /api/investors 404s, use HTML scrape."
   (e) Downloads are pinned for you AUTOMATICALLY: every \`download_files\`, \`download_resource_from_page\`, \`stop_recording\`, and \`download_social_media\` success appends a \`[auto] Downloaded … (downloadId N)\` line to this pad. You do NOT pin them by hand. The note carries the downloadId, not the full path — that's deliberate: to attach a file to a form pass \`upload_file({downloadId: N, selector})\`, and to re-read it pass \`read_downloaded_file({downloadId: N})\`. Never re-type a path from memory, and never re-download to "get the path back" — scan the \`[auto]\` lines for the id.
 - Keep entries SHORT and FACTUAL. One line per fact. The pad is visible on every future turn — scan it before picking your next action, especially if you're about to restart something.
 - Don't use the scratchpad for short tasks (< 5 tool calls) or for prose reasoning. It's working memory, not a journal.
@@ -1293,7 +1293,7 @@ IFRAMES & UI-vs-API:
 
 SCRATCHPAD & DON'T REDO WORK:
 - On long tasks, scratchpad_write({text}) pins facts (progress, IDs) that survive context summarization; downloads are auto-pinned for you (scan the \`[auto]\` lines for downloadIds). Keep entries short and factual.
-- If a tool already returned success this conversation, the work is done — don't re-navigate and redo it. Reuse download paths, fetched content, and stable ref_ids instead of fetching again.
+- If a tool already returned success this conversation, the work is done — don't re-navigate and redo it. Reuse download IDs, fetched content, and stable ref_ids instead of fetching again.
 
 LISTINGS:
 - On listing/search-result pages, EXTRACT first, paginate second: list each visible item to the user (title + price/date + link), then move to the next page. For "give me the links/items" tasks, call done with what you have as soon as it's useful — partial-but-delivered beats complete-but-never-delivered.`;

@@ -2058,7 +2058,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    */
   _pinDownloadId(tabId, downloadId) {
     if (downloadId == null) return;
-    this._autoScratchpadNote(tabId, `[auto] Downloaded file (downloadId ${downloadId}) — its name/path is in list_downloads. Re-read with read_downloaded_file({downloadId: ${downloadId}}).`);
+    this._autoScratchpadNote(tabId, `[auto] Downloaded file (downloadId ${downloadId}) — details are in list_downloads. Re-read with read_downloaded_file({downloadId: ${downloadId}}).`);
   }
 
   /**
