@@ -589,6 +589,37 @@ export async function downloadResourceFromPage(tabId, args = {}) {
 const DOWNLOAD_BATCH_CONCURRENCY = 3;
 const DOWNLOAD_BATCH_MAX = 50;
 
+// browser.downloads.download() resolves to an id immediately, before the local
+// path is decided — so the freshly-returned result can't carry the filename.
+// Poll for it. Returns the resolved on-disk path + state once the download
+// reaches a terminal state, or the best-known info if it's still in progress
+// when we time out. Best-effort: never throws.
+async function resolveDownloadInfo(downloadId, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    let items;
+    try {
+      items = await browser.downloads.search({ id: downloadId });
+    } catch {
+      return last;
+    }
+    const it = items && items[0];
+    if (it) {
+      last = {
+        filename: it.filename || null,
+        state: it.state,
+        error: it.error || null,
+        bytesReceived: it.bytesReceived ?? null,
+        totalBytes: it.totalBytes ?? null,
+      };
+      if (it.state === 'complete' || it.state === 'interrupted') return last;
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  return last; // timed out — return best-known (may still be in_progress)
+}
+
 export async function downloadFiles(args = {}) {
   const urls = args.urls;
   if (!Array.isArray(urls) || urls.length === 0) {
@@ -620,6 +651,27 @@ export async function downloadFiles(args = {}) {
   await Promise.all(
     Array.from({ length: Math.min(DOWNLOAD_BATCH_CONCURRENCY, urls.length) }, () => worker())
   );
+
+  // Resolve browser-reported completion details AFTER the download workers
+  // return so waiting on completion doesn't hold a concurrency slot. The
+  // filename is for immediate verification/reporting only; durable context uses
+  // the downloadId, not a page-influenced basename/path.
+  await Promise.all(results.map(async (r) => {
+    if (r && r.success && r.downloadId != null) {
+      const info = await resolveDownloadInfo(r.downloadId);
+      if (info) {
+        if (info.filename) r.filename = info.filename;
+        if (info.state) r.state = info.state;
+        if (info.error) r.error = info.error;
+        if (info.bytesReceived != null) r.bytesReceived = info.bytesReceived;
+        if (info.totalBytes != null) r.totalBytes = info.totalBytes;
+        if (info.state === 'interrupted') {
+          r.success = false;
+          r.error = info.error ? `Download interrupted: ${info.error}` : 'Download interrupted before completion.';
+        }
+      }
+    }
+  }));
 
   return {
     success: true,

@@ -605,7 +605,7 @@ export const AGENT_TOOLS = [
     type: 'function',
     function: {
       name: 'download_files',
-      description: 'Download one or more files. Pass a single url string or an array of urls (max 3 concurrent, max 50 total). Returns per-URL results with downloadIds. Use list_downloads after to verify completion.',
+      description: 'Download one or more files. Pass a single url string or an array of urls (max 3 concurrent, max 50 total). Returns per-URL results with the downloadId, completion state, and a browser-reported filename for immediate verification. The downloadId (not the path/filename) is auto-recorded to your scratchpad. To attach a downloaded file to a form later, pass its downloadId to upload_file — you do NOT need to remember the path. Do not copy downloaded filenames or paths into scratchpad; use list_downloads only when you need to verify details.',
       parameters: {
         type: 'object',
         properties: {
@@ -620,14 +620,15 @@ export const AGENT_TOOLS = [
     type: 'function',
     function: {
       name: 'upload_file',
-      description: 'Upload a file to a file input element. The file must exist on the local filesystem.',
+      description: 'Upload a file to a file input element. Provide EITHER downloadId (preferred — the id from download_files/list_downloads; you do not need to recall the path) OR filePath (absolute local path). The file must exist on the local filesystem.',
       parameters: {
         type: 'object',
         properties: {
           selector: { type: 'string', description: 'CSS selector for the file input element' },
-          filePath: { type: 'string', description: 'Full path to the local file to upload' },
+          downloadId: { type: 'number', description: 'Id of a previously downloaded file (from download_files or list_downloads). Preferred over filePath: it resolves to the real saved path automatically, so you never have to remember it. Survives context compaction via the scratchpad.' },
+          filePath: { type: 'string', description: 'Absolute path to the local file. Optional if downloadId is given.' },
         },
-        required: ['selector', 'filePath'],
+        required: ['selector'],
       },
     },
   },
@@ -1022,15 +1023,15 @@ SCRATCHPAD — use this for long tasks:
   (a) Right after a bulk operation completes — "Downloaded pages 1-69 as page{N}.html, IDs 700-768."
   (b) Whenever you finalize a plan — "Plan: (1) download all pages (DONE), (2) read each, (3) regex <tr> rows, (4) emit CSV."
   (c) When you finish a chunk of iterative work — "Processed pages 1-10. Next: 11."
-  (d) When you discover a non-obvious fact you'll need later — "API endpoint /api/investors 404s, use HTML scrape." "Download path: /Users/me/Downloads/page{N}.html."
-  (e) IMMEDIATELY after \`download_files\` returns success: pin the local path(s) and downloadId(s). The next tool that needs them (\`upload_file\`, \`read_downloaded_file\`) needs exact paths, and after a few screenshots the original tool result will not be reliably attended to. Format: \`Downloaded: chrome.zip → /Users/.../Downloads/webbrain-chrome-5.1.0.zip (id 800), firefox.zip → /Users/.../Downloads/webbrain-firefox-5.1.0.zip (id 801).\`
+  (d) When you discover a non-obvious fact you'll need later — "API endpoint /api/investors 404s, use HTML scrape."
+  (e) Downloads are pinned for you AUTOMATICALLY: every \`download_files\`, \`download_resource_from_page\`, \`stop_recording\`, and \`download_social_media\` success appends a \`[auto] Downloaded … (downloadId N)\` line to this pad. You do NOT pin them by hand. The note carries the downloadId, not the full path — that's deliberate: to attach a file to a form pass \`upload_file({downloadId: N, selector})\`, and to re-read it pass \`read_downloaded_file({downloadId: N})\`. Never re-type a path from memory, and never re-download to "get the path back" — scan the \`[auto]\` lines for the id.
 - Keep entries SHORT and FACTUAL. One line per fact. The pad is visible on every future turn — scan it before picking your next action, especially if you're about to restart something.
 - Don't use the scratchpad for short tasks (< 5 tool calls) or for prose reasoning. It's working memory, not a journal.
 
 DON'T REDO WORK YOU'VE ALREADY DONE — read this:
 - If a tool returned \`success: true\` earlier this conversation, the work is done. Don't navigate back to the source and re-do it "to be safe". Re-doing wastes tens of seconds, doubles disk/server cost, and tells the user you don't trust your own state.
 - Before navigating back to a previously-used file source (a downloads-list page, a search results page, a repo's /tree/.../dist folder), check: (a) does the scratchpad already record the resource I need? (b) is the resource still on disk from an earlier \`download_files\`? (c) is this URL one I've already \`fetch_url\`-ed this turn? If yes to any, skip the navigate and use the existing handle.
-- DOWNLOADS specifically: if \`download_files\` succeeded for a file this conversation, the file is at the path that tool returned. Use that path directly in \`upload_file({filePath: "...", selector: "..."})\`. Do NOT navigate back to the source folder and re-download. The most common failure mode that produces this loop: an auto-screenshot replaces the recent text context, you can no longer "see" the download paths, you decide to fetch them again — instead, scan your scratchpad and tool-call history before navigating.
+- DOWNLOADS specifically: if \`download_files\` succeeded for a file this conversation, attach it with \`upload_file({downloadId: N, selector})\` using the id from the \`[auto] Downloaded …\` scratchpad line — it resolves the saved path for you, so you NEVER have to remember or retype the path. Do NOT navigate back to the source folder and re-download. The classic failure this prevents: an auto-screenshot pushes the path out of recent context, you can no longer "see" it, so you invent a wrong path (e.g. \`/Users/Shared/…\`) or re-fetch — instead, read the \`[auto]\` line's downloadId and pass it to \`upload_file\`.
 - FETCHES specifically: if \`fetch_url\` / \`research_url\` already returned content for a URL this conversation, don't re-fetch — the content is in your context. If the result was truncated, scroll/extract within the existing result rather than hitting the URL again.
 - VISITS specifically: if you already read \`/foo/bar\`'s accessibility tree and got ref_ids, ref_ids are stable across calls. To re-read a subtree, call \`get_accessibility_tree({ref_id: "ref_N"})\` instead of re-navigating.
 - "Verification" of a previous step is a screenshot of the destination, not a redo of the origin step. If a click_ax navigated you somewhere and you're not sure it landed, take a screenshot of the current page; do not navigate back and click again.
@@ -1257,7 +1258,7 @@ TOOLS — use only these:
 - extract_data: tables/headings/images/links. get_selection: highlighted text. read_pdf: read a PDF.
 - wait_for_element({selector}) / wait_for_stable({quietMs}): wait for an element / for the page to go quiet after an action.
 - iframe_read / iframe_click / iframe_type ({urlFilter, selector, text}): interact inside cross-origin iframes (Stripe, payment widgets, embeds).
-- fetch_url({url}) / research_url({url}): read OTHER URLs (not the active tab). list_downloads, download_files, read_downloaded_file, upload_file({filePath, selector}): file workflows.
+- fetch_url({url}) / research_url({url}): read OTHER URLs (not the active tab). list_downloads, download_files, read_downloaded_file, upload_file({selector, downloadId}): file workflows. download_files auto-pins each file's downloadId to the scratchpad as an \`[auto]\` line — attach with upload_file({downloadId, selector}) and re-read with read_downloaded_file({downloadId}); no need to recall the path.
 - download_social_media: one-shot image/video download from supported social sites; strategy:"auto" uses DOM first, then vision crop only when needed and available.
 - verify_form: check a form's field values before submitting. scratchpad_write({text}): pin facts that survive context summarization.
 - clarify({question}): ask the user only when materially blocked/ambiguous (budget 1-2 per run). solve_captcha: once, only when CapSolver is configured.
@@ -1291,8 +1292,8 @@ IFRAMES & UI-vs-API:
 - For anything that creates, modifies, deletes, sends, submits, buys, transfers, or posts: go through the visible UI. Do NOT call REST/GraphQL endpoints via fetch_url with POST/PUT/PATCH/DELETE. Reading data (fetch_url / research_url GET) is fine.
 
 SCRATCHPAD & DON'T REDO WORK:
-- On long tasks, scratchpad_write({text}) pins facts (download IDs, file paths, progress) that survive context summarization. Keep entries short and factual.
-- If a tool already returned success this conversation, the work is done — don't re-navigate and redo it. Reuse download paths, fetched content, and stable ref_ids instead of fetching again.
+- On long tasks, scratchpad_write({text}) pins facts (progress, IDs) that survive context summarization; downloads are auto-pinned for you (scan the \`[auto]\` lines for downloadIds). Keep entries short and factual.
+- If a tool already returned success this conversation, the work is done — don't re-navigate and redo it. Reuse download IDs, fetched content, and stable ref_ids instead of fetching again.
 
 LISTINGS:
 - On listing/search-result pages, EXTRACT first, paginate second: list each visible item to the user (title + price/date + link), then move to the next page. For "give me the links/items" tasks, call done with what you have as soon as it's useful — partial-but-delivered beats complete-but-never-delivered.`;
