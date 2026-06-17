@@ -6,6 +6,17 @@ This changelog was generated from the repository Git history and release tags. V
 
 ## [Unreleased]
 
+## [13.1.0] - 2026-06-17
+
+### Changed
+- Updated release metadata, Settings subtitle versions, architecture docs, and Chrome / Firefox submission archives for 13.1.0.
+- Added maintenance tooling for cost/context translation coverage.
+- Screenshot probes now include image counts and `blankFrameRetry` metadata when a blank-frame retry path runs.
+
+### Fixed
+- Screenshot capture now detects near-blank frames and retries after 500ms, 1000ms, and 1500ms before handing the image to a vision model (Chrome + Firefox). This helps recover from compositor / lazy-load races on media-heavy pages where the DOM already contains content but the first viewport capture can be all white or all black.
+- Isolated the upload path probe used by local release tooling.
+
 ## [12.0.0] - 2026-06-01
 
 ### Added
