@@ -94,6 +94,7 @@ export class ProviderManager {
         outputCostPerMillionUsd: 1.15,
         supportsStreamUsageOptions: true,
         supportsVision: true,
+        omitToolsWhenImagesPresent: true,
         apiKey: '',
         enabled: true,
       },

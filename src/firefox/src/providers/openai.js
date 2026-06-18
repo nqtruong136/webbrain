@@ -122,6 +122,17 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     body.stream_options = { ...streamOptions, include_usage: true };
   }
 
+  _messagesContainImage(messages) {
+    return messages.some((msg) => Array.isArray(msg?.content) && msg.content.some((block) => {
+      return block && (block.type === 'image_url' || block.type === 'image');
+    }));
+  }
+
+  _shouldSendTools(messages, options) {
+    if (!options.tools || options.tools.length === 0) return false;
+    return !(this.config.omitToolsWhenImagesPresent && this._messagesContainImage(messages));
+  }
+
   async chat(messages, options = {}) {
     const body = {
       model: this.model,
@@ -131,7 +142,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     this._addTemperature(body, options);
     this._addMaxTokens(body, options);
 
-    if (options.tools && options.tools.length > 0) {
+    if (this._shouldSendTools(messages, options)) {
       body.tools = options.tools;
       body.tool_choice = options.toolChoice || 'auto';
     }
@@ -182,7 +193,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     this._addTemperature(body, options);
     this._addMaxTokens(body, options);
 
-    if (options.tools && options.tools.length > 0) {
+    if (this._shouldSendTools(messages, options)) {
       body.tools = options.tools;
       body.tool_choice = options.toolChoice || 'auto';
     }
