@@ -286,4 +286,42 @@ For context, here is the same strict first-tool comparison across the saved runs
 | Qwen 3.5 2B | 89/100 | 4% | 7% | 0.78s |
 | VibeThinker 3B BF16 | 84/100 | 2% | 19% | 5.0s |
 
+The more useful comparison is by class.
+
+### Mid dense: Gemma 4 12B Coder vs Qwen 3.5 9B
+
+Gemma 4 12B Coder is closest to Qwen 3.5 9B in spirit: mid-sized dense-ish local planners that should fit comfortably below the huge-model tier.
+
+| Model | Parsed calls | Exact | Name | Median latency |
+| --- | ---: | ---: | ---: | ---: |
+| Qwen 3.5 9B | 90/100 | 15% | 35% | 0.91s |
+| Gemma 4 12B Coder Q4 | 94/100 | 9% | 26% | 1.9s |
+
+Gemma wins on parseability, but Qwen 3.5 9B is still the better first-action router in this saved strict replay. Gemma's weakness is not format. It is action choice: too many safe-but-generic `get_accessibility_tree` calls where Qwen more often picks the expected tool directly.
+
+### Mini class: VibeThinker 3B vs Gemma 4 E4B vs Qwen 3.5 4B
+
+The small-model comparison is where VibeThinker has to prove it can transfer reasoning into browser-agent tool use. Against the earlier mini-class runs, it does not.
+
+| Model | Parsed calls | Exact | Name | Median latency |
+| --- | ---: | ---: | ---: | ---: |
+| Gemma 4 E4B | 87/100 | 14% | 35% | 4.5s |
+| Qwen 3.5 4B | 82/100 | 12% | 33% | 5.4s |
+| VibeThinker 3B BF16 | 84/100 | 2% | 19% | 5.0s |
+
+This makes the VibeThinker conclusion clearer. Even with BF16/vLLM instead of the bad Q4 GGUF run, it trails both Gemma 4 E4B and Qwen 3.5 4B by a wide margin on exact and name-only matching. That lines up with the model-card warning: VibeThinker may be a competitive-programming/reasoning model, but it is not a browser-agent planner model.
+
+### Large MoE class: North vs Qwen 3.6 35B-A3B vs Gemma 4 26B
+
+North belongs in the large local tier, where the question is whether a heavier model gives better routing than the older large MoE candidates.
+
+| Model | Parsed calls | Exact | Name | Median latency |
+| --- | ---: | ---: | ---: | ---: |
+| Qwen 3.6 35B-A3B | 90/100 | 18% | 38% | 10.3s |
+| Gemma 4 26B-A4B | 87/100 | 13% | 30% | 1.4s |
+| North Mini Code Q4 | 93/100 | 9% | 24% | 3.2s |
+| DiffusionGemma 26B-A4B | pending | pending | pending | pending |
+
+North is operationally promising because it loaded, fit, and produced parseable actions after the `--skip-chat-parsing` workaround. But it does not beat the older large local models on first-action quality. Qwen 3.6 35B-A3B remains the large-tier action-selection reference, while Gemma 4 26B-A4B remains much faster in this saved run. DiffusionGemma should land in this same class once we have the vLLM result.
+
 The new models did not beat the earlier leaders on strict first-action accuracy. Their stronger signal is operational: Gemma 4 12B Coder is light and parseable, while North Mini Code is heavy but also parseable once its native action format is allowed through. Both need prompt work before they can challenge the older Qwen, MiniMax, Sonnet, or Nemotron runs on action selection.
