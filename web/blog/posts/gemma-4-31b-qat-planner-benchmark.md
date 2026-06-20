@@ -4,7 +4,7 @@ title: >
 slug: gemma-4-31b-qat-planner-benchmark
 sortOrder: 0
 date: 2026-06-20
-readTime: 5 min read
+readTime: 7 min read
 description: >
   We tested google/gemma-4-31B-it-qat-w4a16-ct through vLLM against WebBrain's frozen first-tool-call browser-agent harness. It improves over the older Gemma 4 31B int4 run and narrowly edges Qwen 3.6 27B on strict first-action quality while running much faster.
 excerpt: >
@@ -107,6 +107,40 @@ That gives it a very different profile from the usual "larger local model is sma
 The naming is also refreshingly literal. This feels like the kind of improvement people might have called "Gemma 4.1 31B" if it had shipped as a conventional checkpoint refresh. Google named the mechanism instead: QAT. That is probably more honest. The model is not claiming to be a new generation; it is a quantization-aware serving-oriented variant that behaves like a real planner upgrade.
 
 The analogy to the Qwen 3.5 to Qwen 3.6 jump is useful, but with one caveat: we do not have a saved Qwen 3.5 27B run in this WebBrain result set. So this is not a measured Qwen-style before/after. It is a behavioral analogy: the same base family suddenly feels more useful for agent routing because the deployed variant changed the practical quality-speed frontier.
+
+## Sonnet 4.6 as the reference
+
+The strict ideal-first-call replay is useful, but the older WebBrain benchmark used a different reference: treat Claude Sonnet 4.6 as the truth and ask how often each model picked the same first tool.
+
+Here is that view updated with the newer runs. The original May rows come from the published Sonnet export. The newer rows were scored against the same 100 Sonnet tool-name picks from that export, so this table is about first-tool alignment, not argument equality.
+
+| # | Model | Match all | Match when Sonnet tooled | Tool-call rate | Valid-name rate | Median |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| ref | Claude Sonnet 4.6 | 100% | 100% | 92% | 92% | 2.8s |
+| 1 | Gemma 4 31B QAT w4a16 | 77.0% | 78.3% | 95% | 95% | 0.55s |
+| 2 | Qwen 3.6 27B | 77.0% | 77.2% | 92% | 92% | 10.2s |
+| 3 | MiniMax M2.7 | 77.0% | 76.1% | 88% | 88% | 3.1s |
+| 4 | Intel Gemma 4 31B int4 AutoRound | 74.0% | 72.8% | 88% | 87% | 0.63s |
+| 5 | Qwen 3.5 4B | 73.0% | 71.7% | 82% | 82% | 5.5s |
+| 6 | Gemma 4 26B-A4B | 71.0% | 70.7% | 87% | 87% | 1.4s |
+| 7 | Qwen 3.6 35B-A3B | 70.0% | 70.7% | 90% | 90% | 10.3s |
+| 8 | Qwen 3.5 9B | 70.0% | 69.6% | 90% | 89% | 0.91s |
+| 9 | Gemma 4 E4B | 68.0% | 68.5% | 87% | 87% | 4.5s |
+| 10 | Nemotron Omni 30B | 67.0% | 68.5% | 93% | 93% | 2.6s |
+| 11 | DiffusionGemma 26B-A4B | 67.0% | 64.1% | 79% | 79% | 0.35s |
+| 12 | Gemma 4 E2B | 63.0% | 60.9% | 76% | 75% | 4.0s |
+| 13 | Gemma 4 12B Coder Fable5 Composer 2.5 | 61.0% | 62.0% | 94% | 94% | 1.9s |
+| 14 | Cohere North-Mini-Code 1.0 | 59.0% | 58.7% | 93% | 93% | 3.2s |
+| 15 | Browser-Use Qwen 30B-A3B Q4 | 43.0% | 45.7% | 93% | 93% | 0.48s |
+| 16 | LFM 2.5 | 40.0% | 38.0% | 83% | 83% | 5.9s |
+| 17 | Qwen 3.5 0.8B | 37.0% | 34.8% | 90% | 90% | 0.45s |
+| 18 | Qwen 3.5 2B | 36.0% | 34.8% | 89% | 89% | 0.78s |
+| 19 | VibeThinker 3B BF16 | 33.0% | 32.6% | 84% | 81% | 5.0s |
+| 20 | Molmo2 8B | 8.0% | 0.0% | 2% | 1% | 1.7s |
+
+This is the strongest version of the QAT result. In the Sonnet-reference table, Gemma 4 31B QAT ties the best all-case score from the earlier benchmark and takes the tiebreaker on the 92 prompts where Sonnet actually called a tool. It is only a small quality lead, but it comes with a huge latency gap: 0.55s median for QAT versus 10.2s for Qwen 3.6 27B.
+
+The newer small and specialty runs also make more sense in this lens. DiffusionGemma remains a speed story, not a top Sonnet-alignment story. Gemma 4 12B Coder and North are highly parseable but less Sonnet-like in first-tool choice. VibeThinker stays near the bottom, which matches its own model-card warning about tool-calling and autonomous-agent use. Molmo2 8B is effectively not a text tool-calling planner in this harness.
 
 ## Vision probe
 
