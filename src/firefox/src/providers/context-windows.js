@@ -28,7 +28,7 @@ export function inferContextWindow(config = {}) {
   if (/^gpt-5(?:[.\-]|$)/.test(model) || model.includes('/gpt-5')) return 400000;
 
   // Anthropic Claude
-  if (/claude-(?:fable-5|mythos-5|mythos|opus-4-[678]|sonnet-4-6)/.test(model)) return M1;
+  if (/claude-(?:fable-5|mythos-5|mythos|opus-4-[6-8]|sonnet-4-6)/.test(model)) return M1;
   if (model.includes('claude-')) return 200000;
 
   // Google Gemini

@@ -718,6 +718,27 @@ const COST_ESTIMATE_FIELDS = [
   { key: 'outputCostPerMillionUsd', labelKey: 'st.provider.field.output_cost_per_million', type: 'number', placeholder: '15.00' },
 ];
 
+const ZERO_ALLOWED_NUMBER_FIELDS = new Set([
+  'inputCostPerMillionUsd',
+  'outputCostPerMillionUsd',
+]);
+
+function providerInputValue(input) {
+  if (input.dataset.type === 'checkbox' || input.type === 'checkbox') {
+    return input.checked;
+  }
+  if (input.dataset.type === 'number' || input.type === 'number') {
+    const raw = input.value.trim();
+    if (raw === '') return '';
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return '';
+    return ZERO_ALLOWED_NUMBER_FIELDS.has(input.dataset.key)
+      ? (n >= 0 ? n : '')
+      : (n > 0 ? n : '');
+  }
+  return input.value;
+}
+
 // Effective tier for the dropdown's initial value — same precedence as the
 // provider getter: cloud is forced full; an explicit promptTier wins; the
 // legacy useCompactPrompt boolean maps to compact; otherwise local → mid.
@@ -788,8 +809,8 @@ function renderProviders() {
     anthropic: {
       fields: [
         { key: 'apiKey', labelKey: 'st.provider.field.api_key', type: 'password', placeholder: 'sk-ant-...' },
-        { key: 'model', labelKey: 'st.provider.field.model', type: 'text', placeholder: 'claude-opus-4-7',
-          suggestions: ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'] },
+        { key: 'model', labelKey: 'st.provider.field.model', type: 'text', placeholder: 'claude-opus-4-8',
+          suggestions: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'] },
         { key: 'baseUrl', labelKey: 'st.provider.field.api_base_url', type: 'text', placeholder: 'https://api.anthropic.com' },
         ...COST_ESTIMATE_FIELDS,
       ],
@@ -1288,14 +1309,7 @@ async function saveProvider(id, { showFlash = true } = {}) {
   const inputs = document.querySelectorAll(`input[data-provider="${id}"], select[data-provider="${id}"]`);
   const config = {};
   inputs.forEach(input => {
-    if (input.dataset.type === 'checkbox' || input.type === 'checkbox') {
-      config[input.dataset.key] = input.checked;
-    } else if (input.dataset.type === 'number' || input.type === 'number') {
-      const n = Number(input.value);
-      config[input.dataset.key] = Number.isFinite(n) && n > 0 ? n : '';
-    } else {
-      config[input.dataset.key] = input.value;
-    }
+    config[input.dataset.key] = providerInputValue(input);
   });
 
   await sendToBackground('update_provider', { providerId: id, config });
@@ -1339,14 +1353,7 @@ function syncInputsIntoProvidersData() {
     const id = input.dataset.provider;
     const key = input.dataset.key;
     if (!id || !key || !providersData[id]) return;
-    if (input.dataset.type === 'checkbox' || input.type === 'checkbox') {
-      providersData[id][key] = input.checked;
-    } else if (input.dataset.type === 'number' || input.type === 'number') {
-      const n = Number(input.value);
-      providersData[id][key] = Number.isFinite(n) && n > 0 ? n : '';
-    } else {
-      providersData[id][key] = input.value;
-    }
+    providersData[id][key] = providerInputValue(input);
   });
 }
 
