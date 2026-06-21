@@ -9,6 +9,7 @@ export const QUEUE_RETRY_MS = 30 * 1000;
 export const MAX_QUEUE_DEFERRALS = 120;
 export const MIN_INTERVAL_MINUTES = 1;
 export const MAX_INTERVAL_MINUTES = 525600; // one year
+const ALARM_KEEPALIVE_INTERVAL_MS = 20 * 1000;
 
 function asObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -73,6 +74,20 @@ function normalizePendingClarify(data, now = Date.now()) {
 
 function isActiveRunError(error) {
   return /agent run is already in progress|active WebBrain run/i.test(String(error?.message || error || ''));
+}
+
+function startChromeAlarmKeepAlive(api) {
+  const runtime = api?.runtime;
+  if (typeof runtime?.getPlatformInfo !== 'function') return () => {};
+  const ping = () => {
+    try {
+      const maybePromise = runtime.getPlatformInfo(() => { void runtime.lastError; });
+      if (maybePromise?.catch) maybePromise.catch(() => {});
+    } catch { /* keepalive is best-effort */ }
+  };
+  const timer = setInterval(ping, ALARM_KEEPALIVE_INTERVAL_MS);
+  timer?.unref?.();
+  return () => clearInterval(timer);
 }
 
 export function makeScheduledJobId(kind = 'job', now = Date.now()) {
@@ -221,6 +236,7 @@ export class ScheduledJobManager {
     showIndicator = () => {},
     hideIndicator = () => {},
     now = () => Date.now(),
+    startAlarmKeepAlive = null,
   }) {
     this.api = api;
     this.agent = agent;
@@ -233,15 +249,18 @@ export class ScheduledJobManager {
     this._waitingForInput = new Set();
     this._runningTabs = new Set();
     this._jobMutation = Promise.resolve();
+    this._startAlarmKeepAlive = startAlarmKeepAlive || (() => startChromeAlarmKeepAlive(this.api));
   }
 
   start() {
     if (this._started) return;
     this._started = true;
     this.api?.alarms?.onAlarm?.addListener?.((alarm) => {
-      this.handleAlarm(alarm?.name).catch((e) => {
+      const run = this.handleAlarm(alarm?.name);
+      run.catch((e) => {
         console.warn('[WebBrain] scheduled job alarm failed:', e);
       });
+      return run;
     });
     this.restoreAlarms().catch((e) => console.warn('[WebBrain] restore scheduled alarms failed:', e));
   }
@@ -606,7 +625,12 @@ export class ScheduledJobManager {
   async handleAlarm(alarmName) {
     if (!alarmName || !alarmName.startsWith(SCHEDULED_ALARM_PREFIX)) return;
     const jobId = alarmName.slice(SCHEDULED_ALARM_PREFIX.length);
-    await this._runJob(jobId);
+    const stopKeepAlive = this._startAlarmKeepAlive();
+    try {
+      await this._runJob(jobId);
+    } finally {
+      stopKeepAlive?.();
+    }
   }
 
   async _markFailed(job, error) {

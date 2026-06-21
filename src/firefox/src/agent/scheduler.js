@@ -653,15 +653,16 @@ export class ScheduledJobManager {
         try {
           const tab = await this.api.tabs.get(job.target.tabId);
           if (sameTargetUrl(job.target.url, tab?.url || '')) {
+            await this.api.tabs.update(job.target.tabId, { active: true });
             return job.target.tabId;
           }
           try {
-            await this.api.tabs.update(job.target.tabId, { url: job.target.url });
+            await this.api.tabs.update(job.target.tabId, { url: job.target.url, active: true });
             return job.target.tabId;
           } catch { /* create a fresh tab below */ }
         } catch { /* create a fresh tab below */ }
       }
-      const tab = await this.api.tabs.create({ url: job.target.url, active: false });
+      const tab = await this.api.tabs.create({ url: job.target.url, active: true });
       await this._updateJob(job.id, () => ({
         tabId: tab.id,
         target: { ...job.target, tabId: tab.id },

@@ -1799,6 +1799,9 @@ test('sidepanel exposes schedule slash commands in both builds', () => {
     assert.match(panel, /crossPanelScheduledJobIds/, `${label}: cross-panel scheduled jobs should stay tracked until terminal events`);
     assert.match(panel, /terminalScheduledEvent/, `${label}: cross-panel scheduled terminal events should settle the panel`);
     assert.match(panel, /isScheduledClarify/, `${label}: scheduled clarify answers should resume the active run`);
+    assert.match(panel, /findScheduledAssistantMessageForJob/, `${label}: scheduled terminal events should target their own assistant message`);
+    assert.match(panel, /let assistantEl = currentAssistantEl/, `${label}: forced scheduled clarify cards should not overwrite the active assistant bubble`);
+    assert.match(panel, /currentAssistantEl\.dataset\?\.scheduledJobId === scheduledJobId/, `${label}: scheduled clarify submission should not steal an unrelated active reply`);
     assert.match(panel, /res\?\.success === false \|\| res\?\.ok === false \|\| !res\?\.scheduledAt/, `${label}: schedule form should reject failed create responses before showing success`);
     assert.match(locale, /\/schedule/, `${label}: help should mention /schedule`);
     assert.match(locale, /\/list-schedules/, `${label}: help should mention /list-schedules`);
@@ -1914,6 +1917,7 @@ function makeSchedulerHarness(SchedulerMod, opts = {}) {
     showIndicator() {},
     hideIndicator() {},
     now: () => currentNow,
+    ...(opts.startAlarmKeepAlive ? { startAlarmKeepAlive: opts.startAlarmKeepAlive } : {}),
   });
 
   return {
@@ -1994,6 +1998,69 @@ test('ScheduledJobManager requeues when the target tab is already running', asyn
     assert.match(job.lastError, /active WebBrain run/, `${label}: queue reason should be recorded`);
     assert.equal(h.alarms.get(h.alarmName(created.jobId)).when, now + SchedulerMod.QUEUE_RETRY_MS);
   }
+});
+
+test('Chrome ScheduledJobManager keeps alarm-triggered runs alive until completion', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  let finishRun;
+  let keepAliveStarts = 0;
+  let keepAliveStops = 0;
+  const h = makeSchedulerHarness(SchedulerCh, {
+    now,
+    startAlarmKeepAlive: () => {
+      keepAliveStarts += 1;
+      return () => { keepAliveStops += 1; };
+    },
+    processMessage: async () => {
+      await new Promise((resolve) => { finishRun = resolve; });
+      return 'done';
+    },
+  });
+  const created = await h.manager.createResumeJob({
+    tabId: 77,
+    conversationId: 'conv-1',
+    args: { after_seconds: 60, reason: 'later', resume_instruction: 'finish it' },
+  });
+
+  const runPromise = h.manager.handleAlarm(h.alarmName(created.jobId));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(keepAliveStarts, 1, 'Chrome alarm runs should start a keepalive');
+  assert.equal(keepAliveStops, 0, 'keepalive should stay active while the run is pending');
+
+  finishRun();
+  await runPromise;
+
+  assert.equal(keepAliveStops, 1, 'keepalive should stop after the run settles');
+});
+
+test('Firefox ScheduledJobManager activates URL-target tabs before running', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  let h;
+  h = makeSchedulerHarness(SchedulerFx, {
+    now,
+    processMessage: async (tabId) => {
+      assert.equal(h.tabs.get(tabId)?.active, true, 'Firefox URL-target scheduled runs need an active tab for screenshots');
+      return 'done';
+    },
+  });
+  const created = await h.manager.createTaskJob({
+    tabId: 77,
+    conversationId: 'conv-1',
+    currentUrl: 'https://example.com/',
+    currentTitle: 'Example',
+    args: {
+      title: 'Check visual page',
+      prompt: 'Look at the page.',
+      schedule: { type: 'once', after_seconds: 60 },
+      target: { type: 'url', url: 'https://example.org/app' },
+      mode: 'act',
+    },
+  });
+
+  await h.manager.handleAlarm(h.alarmName(created.jobId));
+  const helperTab = [...h.tabs.values()].find((tab) => tab.url === 'https://example.org/app');
+  assert.equal(helperTab?.active, true, 'new Firefox URL helper tabs should be active');
 });
 
 test('ScheduledJobManager restoreAlarms requeues stranded transient jobs', async () => {

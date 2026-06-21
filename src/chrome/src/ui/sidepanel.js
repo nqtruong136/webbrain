@@ -537,6 +537,16 @@ function findScheduledClarifyCardForJob(jobId) {
   return null;
 }
 
+function findScheduledAssistantMessageForJob(jobId) {
+  const id = String(jobId || '');
+  if (!id) return null;
+  const card = findScheduledClarifyCardForJob(id);
+  const msgEl = card?.closest?.('.message.assistant');
+  if (msgEl) return msgEl;
+  if (currentAssistantEl?.dataset?.scheduledJobId === id) return currentAssistantEl;
+  return null;
+}
+
 function ensureScheduledClarifyCards(jobs = []) {
   if (!messagesEl) return;
   for (const job of jobs) {
@@ -629,18 +639,19 @@ async function scheduledJobAction(action, jobId) {
 
 function settleScheduledRun(event, job) {
   if (job?.id) crossPanelScheduledJobIds.delete(String(job.id));
-  if (currentAssistantEl) {
-    finalizeSteps();
-    const textEl = currentAssistantEl.querySelector('.message-text');
+  const assistantEl = job?.id ? findScheduledAssistantMessageForJob(job.id) : currentAssistantEl;
+  if (assistantEl) {
+    finalizeSteps(assistantEl);
+    const textEl = assistantEl.querySelector('.message-text');
     if (textEl && !textEl.textContent.trim() && event === 'completed' && job?.lastResult) {
       textEl.innerHTML = formatMarkdown(job.lastResult);
-      addMessageCopyButton(currentAssistantEl);
+      addMessageCopyButton(assistantEl);
     }
   }
   isProcessing = false;
   sendBtn.disabled = false;
   hideActivity();
-  currentAssistantEl = null;
+  if (!job?.id || currentAssistantEl === assistantEl) currentAssistantEl = null;
   abortRequested = false;
   if (event === 'completed') playCompletionSound();
 }
@@ -669,6 +680,7 @@ function handleScheduledJobEvent(data, tabId) {
     abortRequested = false;
     sendBtn.disabled = true;
     currentAssistantEl = addMessage('assistant', '');
+    if (jobId) currentAssistantEl.dataset.scheduledJobId = jobId;
     showActivity(t('sp.scheduled.running', { title }));
   } else if (event === 'completed') {
     settleScheduledRun(event, job);
@@ -1783,18 +1795,22 @@ function renderClarifyCard(data) {
   const tabId = data?.scheduledTabId ?? data?.tabId ?? currentTabId;
   if (tabId == null) return;
   const scheduledJobId = data?.scheduledJobId ? String(data.scheduledJobId) : '';
-  if (scheduledJobId && (!currentAssistantEl || data.forceNewScheduledCard)) {
-    currentAssistantEl = addMessage('assistant', '');
-  } else if (!currentAssistantEl) {
+  let assistantEl = currentAssistantEl;
+  if (scheduledJobId && data.forceNewScheduledCard) {
+    assistantEl = addMessage('assistant', '');
+  } else if (scheduledJobId && !assistantEl) {
+    assistantEl = addMessage('assistant', '');
+    currentAssistantEl = assistantEl;
+  } else if (!assistantEl) {
     return;
   }
   if (scheduledJobId) {
-    currentAssistantEl.dataset.scheduledJobId = scheduledJobId;
+    assistantEl.dataset.scheduledJobId = scheduledJobId;
   }
   const clarifyId = String(data.clarifyId || '');
   if (!clarifyId) return;
 
-  const content = currentAssistantEl.querySelector('.message-content');
+  const content = assistantEl.querySelector('.message-content');
   if (!content) return;
 
   const card = document.createElement('div');
@@ -1936,7 +1952,10 @@ function submitClarify(card, tabId, clarifyId, answer, source) {
   const isScheduledClarify = !!card.dataset.scheduledJobId;
   if (isScheduledClarify) {
     const msgEl = card.closest('.message.assistant');
-    if (msgEl) currentAssistantEl = msgEl;
+    const scheduledJobId = card.dataset.scheduledJobId;
+    if (msgEl && (!currentAssistantEl || currentAssistantEl.dataset?.scheduledJobId === scheduledJobId)) {
+      currentAssistantEl = msgEl;
+    }
     isProcessing = true;
     sendBtn.disabled = true;
     showActivity(t('sp.activity.thinking'));
@@ -2058,9 +2077,9 @@ function markLastStepFailed() {
   }
 }
 
-function finalizeSteps() {
-  if (!currentAssistantEl) return;
-  const actives = currentAssistantEl.querySelectorAll('.step-item.active');
+function finalizeSteps(assistantEl = currentAssistantEl) {
+  if (!assistantEl) return;
+  const actives = assistantEl.querySelectorAll('.step-item.active');
   actives.forEach(step => {
     step.classList.remove('active');
     step.classList.add('done');
