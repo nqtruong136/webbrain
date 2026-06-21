@@ -3231,6 +3231,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         return `scratchpad ${parsed.mode || 'write'} (${parsed.bytes ?? '?'} chars)`;
       }
       case 'progress_update': {
+        if (UNTRUSTED_CONTENT_TOOLS.has(name)) return `${name} ok (untrusted page content)`;
         const c = parsed.counts || {};
         return `progress ledger updated (${c.total ?? '?'} rows, ${c.unresolved ?? 0} unresolved)`;
       }
