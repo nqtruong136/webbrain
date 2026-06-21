@@ -2939,6 +2939,33 @@ test('agent does not seed GitHub stargazer follow rows for read-only page reads'
   }
 });
 
+test('agent does not seed GitHub follow rows for non-follow stargazer list work', async () => {
+  const page = `
+    button "Follow ChJus" [ref_13]
+    button "Follow rafi" [ref_31]
+  `;
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = 778;
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Collect email addresses for every stargazer on this page.' },
+    ]);
+    agent._currentUrl = async () => 'https://github.com/foo/bar/stargazers';
+    agent._progressUpdate(tabId, {
+      items: [{ id: 'ChJus', label: 'ChJus', action: 'collect_email', status: 'pending' }],
+    });
+
+    const result = { success: true, pageContent: page };
+    const note = await agent._recordProgressObservation(tabId, 'get_accessibility_tree', result);
+    assert.equal(note, null, `${AgentClass.name}: non-follow stargazer task seeded follow rows`);
+    const rows = agent.progressLedgers.get(tabId);
+    assert.deepEqual(rows.map(row => [row.id, row.action, row.status]), [
+      ['ChJus', 'collect_email', 'pending'],
+    ]);
+  }
+});
+
 test('progress ledger pins app-owned rows and survives compaction (chrome & firefox)', async () => {
   for (const AgentClass of [AgentCh, AgentFx]) {
     const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });

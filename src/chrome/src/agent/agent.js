@@ -3277,6 +3277,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return itemAction && repeatedTarget;
   }
 
+  _hasGithubStargazerFollowContext(tabId) {
+    const rows = this.progressLedgers.get(tabId) || [];
+    if (rows.some(row => String(row?.action || '').toLowerCase() === 'follow')) return true;
+    const text = this._originalTaskText(tabId).toLowerCase();
+    return /\bfollow\b/.test(text) && this._hasProgressLedgerContext(tabId);
+  }
+
   _excludedGithubUsernames(tabId) {
     const text = this._originalTaskText(tabId);
     const match = text.match(/\bexcept\b([\s\S]*?)(?:\band\s+while\b|\bwhile\b|[.;\n]|$)/i);
@@ -3314,7 +3321,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   async _recordProgressObservation(tabId, name, result) {
     if (name !== 'get_accessibility_tree') return null;
     if (!result || result.error || result.success === false) return null;
-    if (!this._hasProgressLedgerContext(tabId)) return null;
+    if (!this._hasGithubStargazerFollowContext(tabId)) return null;
     const pageContent = result.pageContent || result.text || '';
     if (!pageContent || (!pageContent.includes('button "Follow ') && !pageContent.includes('button "Unfollow '))) return null;
     const url = result.url || result.pageUrl || await this._currentUrl(tabId);
