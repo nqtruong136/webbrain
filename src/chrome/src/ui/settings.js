@@ -165,8 +165,13 @@ async function init() {
   }
   verboseToggle.checked = stored.verboseMode || false;
   screenshotToggle.checked = stored.screenshotFallback ?? true; // on by default
-  maxStepsRange.value = stored.maxAgentSteps || 130;
-  stepsValueLabel.textContent = maxStepsRange.value;
+  if (stored.maxAgentSteps === 0) {
+    maxStepsRange.value = 200;
+    stepsValueLabel.textContent = '∞';
+  } else {
+    maxStepsRange.value = stored.maxAgentSteps || 130;
+    stepsValueLabel.textContent = maxStepsRange.value;
+  }
   // requestTimeoutMs is stored in milliseconds, displayed as seconds.
   // Default 60s when unset. Floor 10s / ceiling 600s matches the slider.
   if (requestTimeoutRange && requestTimeoutValueLabel) {
@@ -402,11 +407,11 @@ screenshotToggle.addEventListener('change', () => {
 });
 
 maxStepsRange.addEventListener('input', () => {
-  stepsValueLabel.textContent = maxStepsRange.value;
+  stepsValueLabel.textContent = maxStepsRange.value == 200 ? '∞' : maxStepsRange.value;
 });
 
 maxStepsRange.addEventListener('change', () => {
-  chrome.storage.local.set({ maxAgentSteps: parseInt(maxStepsRange.value) });
+  chrome.storage.local.set({ maxAgentSteps: maxStepsRange.value == 200 ? 0 : parseInt(maxStepsRange.value) });
 });
 
 if (requestTimeoutRange) {
