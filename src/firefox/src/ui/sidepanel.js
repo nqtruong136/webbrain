@@ -391,6 +391,9 @@ function scheduledJobMeta(job) {
   if (job.schedule?.type === 'recurring' && job.schedule?.interval_minutes) {
     parts.push(t('sp.scheduled.recurring', { minutes: job.schedule.interval_minutes }));
   }
+  if (job.status === 'needs_user_input' && job.pendingClarify?.question) {
+    parts.push(truncate(String(job.pendingClarify.question), 80));
+  }
   if (job.lastError) {
     parts.push(truncate(String(job.lastError), 80));
   }
@@ -415,6 +418,34 @@ const SCHEDULED_VISIBLE_STATUSES = new Set(['pending', 'queued', 'paused', 'runn
 
 function visibleScheduledJobs(jobs = []) {
   return jobs.filter((job) => SCHEDULED_VISIBLE_STATUSES.has(job.status));
+}
+
+function scheduledJobTabId(job) {
+  const tabId = job?.tabId ?? job?.target?.tabId ?? null;
+  if (tabId == null) return null;
+  const numeric = Number(tabId);
+  return Number.isFinite(numeric) ? numeric : tabId;
+}
+
+function findScheduledClarifyCard(jobId, clarifyId) {
+  for (const card of messagesEl?.querySelectorAll?.('.clarify-card[data-scheduled-job-id]') || []) {
+    if (card.dataset.scheduledJobId === String(jobId) && card.dataset.clarifyId === String(clarifyId)) {
+      return card;
+    }
+  }
+  return null;
+}
+
+function ensureScheduledClarifyCards(jobs = []) {
+  if (!messagesEl) return;
+  for (const job of jobs) {
+    const pending = job?.pendingClarify;
+    if (job?.status !== 'needs_user_input' || !pending?.clarifyId) continue;
+    const jobTabId = scheduledJobTabId(job);
+    if (jobTabId != null && currentTabId != null && String(jobTabId) !== String(currentTabId)) continue;
+    if (findScheduledClarifyCard(job.id, pending.clarifyId)) continue;
+    renderClarifyCard({ ...pending, scheduledJobId: job.id });
+  }
 }
 
 function renderScheduledJobs(jobs = []) {
@@ -451,6 +482,7 @@ function renderScheduledJobs(jobs = []) {
 
     scheduledJobsEl.appendChild(card);
   }
+  ensureScheduledClarifyCards(visible);
 }
 
 async function refreshScheduledJobs() {
@@ -528,6 +560,7 @@ function handleScheduledJobEvent(data, tabId) {
     settleScheduledRun(event, job);
     addMessage('error', t('sp.scheduled.failed', { title, msg: job.lastError || t('sp.scheduled.unknown_error') }));
   } else if (event === 'needs_user_input') {
+    ensureScheduledClarifyCards([job]);
     hideActivity();
     abortRequested = false;
     if (currentAssistantEl) {
@@ -1347,9 +1380,15 @@ browser.runtime.onMessage.addListener((msg) => {
  */
 function renderClarifyCard(data) {
   hideActivity();
-  if (!currentAssistantEl) return;
   const tabId = currentTabId;
   if (!tabId) return;
+  if (!currentAssistantEl) {
+    if (data?.scheduledJobId) {
+      currentAssistantEl = addMessage('assistant', '');
+    } else {
+      return;
+    }
+  }
   const clarifyId = String(data.clarifyId || '');
   if (!clarifyId) return;
 
@@ -1488,6 +1527,8 @@ function submitClarify(card, tabId, clarifyId, answer, source) {
   // injected.
   const isScheduledClarify = !!card.dataset.scheduledJobId;
   if (isScheduledClarify) {
+    const msgEl = card.closest('.message.assistant');
+    if (msgEl) currentAssistantEl = msgEl;
     isProcessing = true;
     sendBtn.disabled = true;
     showActivity(t('sp.activity.thinking'));

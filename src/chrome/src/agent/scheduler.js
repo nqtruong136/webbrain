@@ -39,6 +39,37 @@ function sameDocumentUrl(a, b) {
   }
 }
 
+function sameTargetUrl(a, b) {
+  try {
+    return new URL(String(a || '')).href === new URL(String(b || '')).href;
+  } catch {
+    return String(a || '') === String(b || '');
+  }
+}
+
+function normalizePendingClarify(data, now = Date.now()) {
+  const obj = asObject(data);
+  const clarifyId = String(obj.clarifyId || '').trim();
+  if (!clarifyId) return null;
+  const pending = {
+    clarifyId: clarifyId.slice(0, 120),
+    question: String(obj.question || '').slice(0, 1000),
+    options: Array.isArray(obj.options)
+      ? obj.options.map((option) => String(option).slice(0, 200)).filter(Boolean).slice(0, 4)
+      : [],
+    reason: obj.reason ? String(obj.reason).slice(0, 400) : null,
+    createdAt: iso(now),
+  };
+  const permission = asObject(obj.permission);
+  if (permission.capability || permission.host) {
+    pending.permission = {
+      capability: String(permission.capability || '').slice(0, 80),
+      host: String(permission.host || '').slice(0, 300),
+    };
+  }
+  return pending;
+}
+
 export function makeScheduledJobId(kind = 'job', now = Date.now()) {
   return `${kind}_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -170,6 +201,7 @@ export function summarizeScheduledJob(job) {
     lastResult: job.lastResult || null,
     lastError: job.lastError || null,
     needsUserInput: job.status === 'needs_user_input',
+    pendingClarify: job.pendingClarify || null,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };
@@ -264,14 +296,19 @@ export class ScheduledJobManager {
     return job;
   }
 
-  async _updateJob(jobId, updater) {
+  async _updateJobIf(jobId, predicate, updater) {
     const jobs = await this._getJobs();
     const idx = jobs.findIndex((it) => it.id === jobId);
     if (idx < 0) return null;
+    if (typeof predicate === 'function' && !predicate(jobs[idx])) return null;
     const updated = { ...jobs[idx], ...updater(jobs[idx]), updatedAt: iso(this.now()) };
     jobs[idx] = updated;
     await this._setJobs(jobs);
     return updated;
+  }
+
+  async _updateJob(jobId, updater) {
+    return this._updateJobIf(jobId, () => true, updater);
   }
 
   _emit(job, event = 'updated') {
@@ -370,7 +407,7 @@ export class ScheduledJobManager {
         try { this.agent.abort(tabId); } catch {}
       }
     }
-    const job = await this._updateJob(jobId, () => ({ status: 'cancelled', lastError: reason }));
+    const job = await this._updateJob(jobId, () => ({ status: 'cancelled', lastError: reason, pendingClarify: null }));
     if (job) this._emit(job, 'cancelled');
     return { ok: !!job, job: summarizeScheduledJob(job) };
   }
@@ -434,7 +471,8 @@ export class ScheduledJobManager {
       const matches = job.tabId === tabId || job.target?.tabId === tabId;
       if (matches && ['pending', 'queued', 'paused', 'needs_user_input'].includes(job.status)) {
         await this._clearAlarm(job.id);
-        next.push({ ...job, status: 'cancelled', lastError: reason, updatedAt: iso(this.now()) });
+        this._waitingForInput.delete(job.id);
+        next.push({ ...job, status: 'cancelled', lastError: reason, pendingClarify: null, updatedAt: iso(this.now()) });
       } else {
         next.push(job);
       }
@@ -450,7 +488,8 @@ export class ScheduledJobManager {
         (!conversationId || job.conversationId === conversationId || job.target?.conversationId === conversationId);
       if (matches && ['pending', 'queued', 'paused', 'needs_user_input'].includes(job.status)) {
         await this._clearAlarm(job.id);
-        next.push({ ...job, status: 'cancelled', lastError: reason, updatedAt: iso(this.now()) });
+        this._waitingForInput.delete(job.id);
+        next.push({ ...job, status: 'cancelled', lastError: reason, pendingClarify: null, updatedAt: iso(this.now()) });
       } else {
         next.push(job);
       }
@@ -465,9 +504,12 @@ export class ScheduledJobManager {
   }
 
   async _markFailed(job, error) {
-    const failed = await this._updateJob(job.id, () => ({
+    const failed = await this._updateJobIf(job.id, (prev) => (
+      ['pending', 'queued', 'running', 'needs_user_input'].includes(prev.status)
+    ), () => ({
       status: 'failed',
       lastError: String(error || 'Scheduled job failed.'),
+      pendingClarify: null,
     }));
     if (failed) this._emit(failed, 'failed');
   }
@@ -478,7 +520,9 @@ export class ScheduledJobManager {
       await this._markFailed(job, `Timed out waiting to run: ${reason}`);
       return;
     }
-    const queued = await this._updateJob(job.id, () => ({
+    const queued = await this._updateJobIf(job.id, (prev) => (
+      ['pending', 'queued'].includes(prev.status)
+    ), () => ({
       status: 'queued',
       nextRunAt: iso(this.now() + QUEUE_RETRY_MS),
       queueDeferrals: deferrals,
@@ -500,8 +544,14 @@ export class ScheduledJobManager {
     if (job.target?.type === 'url') {
       if (job.target.tabId != null) {
         try {
-          await this.api.tabs.get(job.target.tabId);
-          return job.target.tabId;
+          const tab = await this.api.tabs.get(job.target.tabId);
+          if (sameTargetUrl(job.target.url, tab?.url || '')) {
+            return job.target.tabId;
+          }
+          try {
+            await this.api.tabs.update(job.target.tabId, { url: job.target.url });
+            return job.target.tabId;
+          } catch { /* create a fresh tab below */ }
         } catch { /* create a fresh tab below */ }
       }
       const tab = await this.api.tabs.create({ url: job.target.url, active: false });
@@ -543,30 +593,38 @@ export class ScheduledJobManager {
 
   async _complete(job, result) {
     if (job.kind === 'task' && job.schedule?.type === 'recurring') {
-      const nextRunAt = computeNextRunAt(job, this.now());
-      const updated = await this._updateJob(job.id, () => ({
-        status: 'pending',
-        nextRunAt,
-        scheduledAt: nextRunAt,
-        queueDeferrals: 0,
-        runCount: Number(job.runCount || 0) + 1,
-        lastRunAt: iso(this.now()),
-        lastResult: String(result || '').slice(0, 2000),
-        lastError: null,
-      }));
+      const updated = await this._updateJobIf(job.id, (prev) => (
+        ['running', 'needs_user_input'].includes(prev.status)
+      ), (prev) => {
+        const nextRunAt = computeNextRunAt(prev, this.now());
+        return {
+          status: 'pending',
+          nextRunAt,
+          scheduledAt: nextRunAt,
+          queueDeferrals: 0,
+          runCount: Number(prev.runCount || 0) + 1,
+          lastRunAt: iso(this.now()),
+          lastResult: String(result || '').slice(0, 2000),
+          lastError: null,
+          pendingClarify: null,
+        };
+      });
       if (updated) {
         await this._setAlarm(updated);
         this._emit(updated, 'completed');
       }
       return;
     }
-    const completed = await this._updateJob(job.id, () => ({
+    const completed = await this._updateJobIf(job.id, (prev) => (
+      ['running', 'needs_user_input'].includes(prev.status)
+    ), (prev) => ({
       status: 'completed',
       completedAt: iso(this.now()),
-      runCount: Number(job.runCount || 0) + 1,
+      runCount: Number(prev.runCount || 0) + 1,
       lastRunAt: iso(this.now()),
       lastResult: String(result || '').slice(0, 2000),
       lastError: null,
+      pendingClarify: null,
     }));
     if (completed) this._emit(completed, 'completed');
   }
@@ -597,24 +655,27 @@ export class ScheduledJobManager {
       return;
     }
 
-    const running = await this._updateJob(job.id, () => ({
+    const running = await this._updateJobIf(job.id, (prev) => (
+      ['pending', 'queued'].includes(prev.status)
+    ), () => ({
       status: 'running',
       tabId,
       queueDeferrals: 0,
       startedAt: iso(this.now()),
       lastError: null,
+      pendingClarify: null,
     }));
     if (!running) return;
     this._emit(running, 'running');
 
     const onUpdate = (type, data) => {
       if (type === 'clarify') {
+        const pendingClarify = normalizePendingClarify(data, this.now());
         this._waitingForInput.add(job.id);
-        this._updateJob(job.id, (prev) => (prev.status === 'running' ? {
+        this._updateJobIf(job.id, (prev) => prev.status === 'running', () => ({
           status: 'needs_user_input',
           lastError: 'Scheduled run needs user input.',
-        } : {
-          lastError: prev.lastError,
+          ...(pendingClarify ? { pendingClarify } : {}),
         })).then((waiting) => {
           if (waiting?.status === 'needs_user_input') this._emit(waiting, 'needs_user_input');
         }).catch((e) => {

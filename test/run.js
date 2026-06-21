@@ -1873,6 +1873,12 @@ function makeSchedulerHarness(SchedulerMod, opts = {}) {
         if (!tabs.has(tabId)) throw new Error(`No tab ${tabId}`);
         return tabs.get(tabId);
       },
+      async update(tabId, changes) {
+        if (!tabs.has(tabId)) throw new Error(`No tab ${tabId}`);
+        const tab = { ...tabs.get(tabId), ...changes };
+        tabs.set(tabId, tab);
+        return tab;
+      },
       async create({ url, active }) {
         const tab = { id: nextTabId++, url, active: !!active };
         tabs.set(tab.id, tab);
@@ -1885,7 +1891,7 @@ function makeSchedulerHarness(SchedulerMod, opts = {}) {
     isRunning: opts.isRunning || (() => false),
     getConversationId: opts.getConversationId || (async () => 'conv-1'),
     processMessage: opts.processMessage || (async () => 'scheduled result'),
-    abort() {},
+    abort: opts.abort || (() => {}),
     setScheduledRunPolicy() {},
     clearScheduledRunPolicy() {},
   };
@@ -2004,6 +2010,11 @@ test('ScheduledJobManager keeps live scheduled clarifications resumable', async 
     let job = h.jobs()[0];
     assert.equal(job.status, 'needs_user_input', `${label}: clarify should mark job as waiting for input`);
     assert.equal(job.lastError, 'Scheduled run needs user input.');
+    assert.equal(job.pendingClarify?.clarifyId, 'clr-1', `${label}: clarify id should be persisted`);
+    assert.equal(job.pendingClarify?.question, 'Which account should I use?', `${label}: clarify question should be persisted`);
+    const listed = await h.manager.listJobs({ tabId: 77 });
+    assert.equal(listed[0]?.pendingClarify?.clarifyId, 'clr-1', `${label}: job list should expose pending clarify id`);
+    assert.equal(listed[0]?.pendingClarify?.question, 'Which account should I use?', `${label}: job list should expose pending clarify question`);
     assert.ok(h.updates.some((u) => u.type === 'clarify' && u.data?.scheduledJobId === created.jobId), `${label}: clarify update should carry scheduled job id`);
     assert.ok(h.updates.some((u) => u.type === 'scheduled_job' && u.data?.event === 'needs_user_input'), `${label}: waiting status should be emitted`);
 
@@ -2018,6 +2029,42 @@ test('ScheduledJobManager keeps live scheduled clarifications resumable', async 
     assert.equal(job.status, 'completed', `${label}: original run should complete after answer`);
     assert.equal(job.lastResult, 'continued after answer');
     assert.equal(job.runCount, 1);
+  }
+});
+
+test('ScheduledJobManager preserves user cancellation of in-flight scheduled runs', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    let finishRun;
+    let abortCalled = false;
+    const h = makeSchedulerHarness(SchedulerMod, {
+      now,
+      abort: () => { abortCalled = true; },
+      processMessage: async () => {
+        await new Promise((resolve) => { finishRun = resolve; });
+        return '[Stopped by user]';
+      },
+    });
+    const created = await h.manager.createResumeJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: { after_seconds: 60, reason: 'wait', resume_instruction: 'retry' },
+    });
+
+    const runPromise = h.manager.handleAlarm(h.alarmName(created.jobId));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(h.jobs()[0].status, 'running', `${label}: job should be running before cancellation`);
+
+    const cancelled = await h.manager.cancelJob(created.jobId, 'cancelled by user');
+    assert.equal(cancelled.ok, true, `${label}: cancel should succeed`);
+    assert.equal(abortCalled, true, `${label}: cancel should abort the live agent run`);
+    finishRun();
+    await runPromise;
+
+    const job = h.jobs()[0];
+    assert.equal(job.status, 'cancelled', `${label}: late process result must not overwrite cancellation`);
+    assert.equal(job.lastError, 'cancelled by user');
+    assert.equal(job.runCount, 0, `${label}: cancelled job should not count as completed`);
   }
 });
 
@@ -2104,6 +2151,45 @@ test('ScheduledJobManager fails current-tab tasks after the tab navigates away',
     assert.equal(processCalled, false, `${label}: navigated-away task must not call agent`);
     assert.equal(job.status, 'failed', `${label}: navigated-away task should fail`);
     assert.match(job.lastError, /Target tab changed/, `${label}: failure should explain target staleness`);
+  }
+});
+
+test('ScheduledJobManager revalidates URL-target tabs before recurring reuse', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    const targetUrl = 'https://example.com/inbox';
+    const runUrls = [];
+    let h;
+    h = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async (tabId) => {
+        runUrls.push(h.tabs.get(tabId)?.url);
+        return 'checked';
+      },
+    });
+    const created = await h.manager.createTaskJob({
+      args: {
+        title: 'Check inbox',
+        prompt: 'Look for new priority mail.',
+        schedule: { type: 'recurring', after_seconds: 60, interval_minutes: 5 },
+        target: { type: 'url', url: targetUrl },
+      },
+      source: 'user',
+    });
+    assert.equal(created.success, true, `${label}: create URL task should succeed`);
+
+    await h.manager.handleAlarm(h.alarmName(created.jobId));
+    let job = h.jobs()[0];
+    const tabId = job.target.tabId;
+    assert.equal(runUrls[0], targetUrl, `${label}: first URL-target run should use scheduled URL`);
+
+    h.tabs.set(tabId, { id: tabId, url: 'https://elsewhere.example/other', title: 'Elsewhere' });
+    await h.manager.handleAlarm(h.alarmName(created.jobId));
+
+    job = h.jobs()[0];
+    assert.equal(runUrls[1], targetUrl, `${label}: stale URL-target tab should be navigated back before reuse`);
+    assert.equal(h.tabs.get(tabId).url, targetUrl, `${label}: stored tab should point at the scheduled URL again`);
+    assert.equal(job.target.tabId, tabId, `${label}: tab id should be preserved when navigation succeeds`);
   }
 });
 
