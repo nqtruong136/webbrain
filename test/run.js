@@ -3916,6 +3916,35 @@ test('agent does not seed GitHub stargazer follow rows for read-only page reads'
   }
 });
 
+test('agent does not treat follow-status questions as stargazer follow work', async () => {
+  const page = `
+    button "Follow ChJus" [ref_13]
+    button "Follow rafi" [ref_31]
+  `;
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = 801;
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Which stargazers do I not follow?' },
+    ]);
+    agent._currentUrl = async () => 'https://github.com/foo/bar/stargazers';
+
+    assert.equal(agent._currentTaskHasProgressIntent(tabId), false, `${AgentClass.name}: follow-status question looked like progress intent`);
+    assert.equal(agent._hasGithubStargazerFollowContext(tabId), false, `${AgentClass.name}: follow-status question enabled follow observation`);
+    const result = { success: true, pageContent: page };
+    const note = await agent._recordProgressObservation(tabId, 'get_accessibility_tree', result);
+    assert.equal(note, null, `${AgentClass.name}: follow-status question seeded follow rows`);
+    assert.equal(agent.progressLedgers.get(tabId), undefined);
+
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Can you follow every stargazer on this page?' },
+    ]);
+    assert.equal(agent._currentTaskHasProgressIntent(tabId), true, `${AgentClass.name}: direct action question lost progress intent`);
+  }
+});
+
 test('agent strips injected page context before inferring stargazer follow intent', async () => {
   const page = `
     button "Follow ChJus" [ref_13]

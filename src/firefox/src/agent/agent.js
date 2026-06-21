@@ -2673,6 +2673,15 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       return true;
     }
 
+    const actionVerb = '(?:follow|unfollow|star|unstar|watch|unwatch|connect|subscribe|unsubscribe|save|unsave|like|unlike|block|unblock|report|send|submit|add|remove|process|collect|scrape|visit|open)';
+    const readOnlyQuestion = /^(?:which|who|what|where|when|why|how|list|show|tell\s+me|summarize|identify)\b/.test(text) || /\?\s*$/.test(text);
+    const directActionRequest = new RegExp(`(?:^|\\b)(?:please\\s+|can\\s+you\\s+|could\\s+you\\s+|would\\s+you\\s+)?${actionVerb}\\b`).test(text)
+      && (
+        new RegExp(`${actionVerb}\\s+(?:all|every|each|remaining|the\\s+rest|not-followed)\\b`).test(text)
+        || /\b(?:all|every|each|remaining|the\s+rest|not-followed)\b[\s\S]{0,80}\b(?:rows|items|profiles|users|people|members|followers|following|stargazers|results|links|pages|contacts|accounts|repos|repositories|entries|records|comments|messages|emails|names|handles)\b/.test(text)
+      );
+    if (readOnlyQuestion && !directActionRequest) return false;
+
     const itemAction = /\b(follow|unfollow|star|unstar|watch|unwatch|connect|subscribe|unsubscribe|save|unsave|like|unlike|block|unblock|report|send|submit|add|remove|process|collect|scrape|visit|open)\b/.test(text);
     const repeatedAction = /\b(follow|unfollow|star|unstar|watch|unwatch|connect|subscribe|unsubscribe|process|collect|scrape|visit|open)\b/.test(text);
     const repeatedTarget = /\b(rows|items|profiles|users|people|members|followers|following|stargazers|results|links|pages|contacts|accounts|repos|repositories|entries|records|comments|messages|emails|names|handles)\b/.test(text)
