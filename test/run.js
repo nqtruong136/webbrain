@@ -1796,6 +1796,8 @@ test('sidepanel exposes schedule slash commands in both builds', () => {
     assert.match(panel, /scheduledJobId/, `${label}: scheduled clarify prompts should retain their job id`);
     assert.match(panel, /scheduledTabId/, `${label}: scheduled clarify answers should route to the run tab`);
     assert.match(panel, /isUrlTargetScheduledJob/, `${label}: URL-target scheduled prompts should be visible across panels`);
+    assert.match(panel, /'completed'\]\)/, `${label}: completed one-shot jobs should stay visible until deleted`);
+    assert.match(panel, /job\.status === 'completed' && job\.lastResult/, `${label}: completed job cards should expose saved results after refresh`);
     assert.match(panel, /crossPanelScheduledJobIds/, `${label}: cross-panel scheduled jobs should stay tracked until terminal events`);
     assert.match(panel, /terminalScheduledEvent/, `${label}: cross-panel scheduled terminal events should settle the panel`);
     assert.match(panel, /event === 'needs_user_input' \|\|\s*terminalScheduledEvent/, `${label}: URL-target terminal events should return to the scheduling panel without a prior clarify card`);
@@ -2337,6 +2339,50 @@ test('ScheduledJobManager preserves user cancellation of in-flight scheduled run
     assert.equal(job.status, 'cancelled', `${label}: late process result must not overwrite cancellation`);
     assert.equal(job.lastError, 'cancelled by user');
     assert.equal(job.runCount, 0, `${label}: cancelled job should not count as completed`);
+  }
+});
+
+test('ScheduledJobManager cancels running jobs when their tab closes', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    let finishRun;
+    let abortedTabId = null;
+    const h = makeSchedulerHarness(SchedulerMod, {
+      now,
+      abort: (tabId) => { abortedTabId = tabId; },
+      processMessage: async () => {
+        await new Promise((resolve) => { finishRun = resolve; });
+        return 'late result';
+      },
+    });
+    const created = await h.manager.createTaskJob({
+      args: {
+        title: 'Check inbox',
+        prompt: 'Look for new priority mail.',
+        schedule: { type: 'once', after_seconds: 60 },
+        target: { type: 'url', url: 'https://example.com/inbox' },
+      },
+      source: 'user',
+    });
+
+    const runPromise = h.manager.handleAlarm(h.alarmName(created.jobId));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    let job = h.jobs()[0];
+    const helperTabId = job.target.tabId;
+    assert.equal(job.status, 'running', `${label}: URL-target job should be running before helper tab close`);
+
+    h.tabs.delete(helperTabId);
+    await h.manager.cancelForTab(helperTabId, 'tab closed');
+    job = h.jobs()[0];
+    assert.equal(job.status, 'cancelled', `${label}: helper tab close should cancel a running URL-target job`);
+    assert.equal(job.lastError, 'tab closed', `${label}: cancellation reason should be preserved`);
+    assert.equal(abortedTabId, helperTabId, `${label}: helper tab close should abort the live agent run`);
+
+    finishRun();
+    await runPromise;
+    job = h.jobs()[0];
+    assert.equal(job.status, 'cancelled', `${label}: late run result must not overwrite tab-close cancellation`);
+    assert.equal(job.runCount, 0, `${label}: tab-close cancellation should not count as completed`);
   }
 });
 

@@ -552,11 +552,12 @@ export class ScheduledJobManager {
   }
 
   async cancelForTab(tabId, reason = 'tab closed') {
-    const { alarmsToSet, alarmsToClear } = await this._withJobMutation(async () => {
+    const { alarmsToSet, alarmsToClear, tabIdsToAbort } = await this._withJobMutation(async () => {
       const jobs = await this._getJobs();
       const next = [];
       const alarmsToSet = [];
       const alarmsToClear = [];
+      const tabIdsToAbort = [];
       for (const job of jobs) {
         const matches = job.tabId === tabId || job.target?.tabId === tabId;
         const isUrlTarget = job.kind === 'task' && job.target?.type === 'url';
@@ -571,6 +572,8 @@ export class ScheduledJobManager {
         }
         if (matches && isUrlTarget && job.status === 'needs_user_input') {
           this._waitingForInput.delete(job.id);
+          const liveTabId = job.tabId || job.target?.tabId;
+          if (liveTabId != null) tabIdsToAbort.push(liveTabId);
           const queued = {
             ...job,
             status: 'queued',
@@ -585,19 +588,24 @@ export class ScheduledJobManager {
           alarmsToSet.push(queued);
           continue;
         }
-        if (matches && ['pending', 'queued', 'paused', 'needs_user_input'].includes(job.status)) {
+        if (matches && ['pending', 'queued', 'paused', 'running', 'needs_user_input'].includes(job.status)) {
           alarmsToClear.push(job.id);
           this._waitingForInput.delete(job.id);
+          const liveTabId = job.tabId || job.target?.tabId;
+          if (['running', 'needs_user_input'].includes(job.status) && liveTabId != null) tabIdsToAbort.push(liveTabId);
           next.push({ ...job, status: 'cancelled', lastError: reason, pendingClarify: null, updatedAt: iso(this.now()) });
         } else {
           next.push(job);
         }
       }
       await this._setJobs(next);
-      return { alarmsToSet, alarmsToClear };
+      return { alarmsToSet, alarmsToClear, tabIdsToAbort };
     });
     await Promise.all(alarmsToClear.map((id) => this._clearAlarm(id)));
     await Promise.all(alarmsToSet.map((job) => this._setAlarm(job)));
+    for (const liveTabId of tabIdsToAbort) {
+      try { this.agent.abort(liveTabId); } catch {}
+    }
   }
 
   async cancelForConversation(tabId, conversationId, reason = 'conversation cleared') {

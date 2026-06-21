@@ -483,6 +483,9 @@ function scheduledJobMeta(job) {
   if (job.status === 'needs_user_input' && job.pendingClarify?.question) {
     parts.push(truncate(String(job.pendingClarify.question), 80));
   }
+  if (job.status === 'completed' && job.lastResult) {
+    parts.push(truncate(String(job.lastResult), 80));
+  }
   if (job.lastError) {
     parts.push(truncate(String(job.lastError), 80));
   }
@@ -503,7 +506,7 @@ function scheduledJobActions(job) {
   return actions;
 }
 
-const SCHEDULED_VISIBLE_STATUSES = new Set(['pending', 'queued', 'paused', 'running', 'needs_user_input', 'failed']);
+const SCHEDULED_VISIBLE_STATUSES = new Set(['pending', 'queued', 'paused', 'running', 'needs_user_input', 'failed', 'completed']);
 const crossPanelScheduledJobIds = new Set();
 
 function visibleScheduledJobs(jobs = []) {
