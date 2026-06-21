@@ -2705,7 +2705,6 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       this.currentCostState.get(tabId) || null,
       { force: true }
     );
-    if (result?.compacted) this._persist(tabId);
     return result || { compacted: false, reason: 'not_needed', remaining: messages.length };
   }
 
