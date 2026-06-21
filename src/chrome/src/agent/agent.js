@@ -3340,6 +3340,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       .filter(Boolean)));
   }
 
+  _canonicalizeProgressItems(items = []) {
+    return (Array.isArray(items) ? items : []).map(item => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+      const action = normalizeProgressAction(item.action);
+      return action ? { ...item, action } : item;
+    });
+  }
+
   _sessionForProgressUpdate(tabId, items = [], opts = {}) {
     if (opts.sessionId) {
       const existing = this.progressSessions.get(tabId);
@@ -3444,15 +3452,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         error: `progress_update: invalid status value(s): ${invalid.slice(0, 6).join(', ')}. Use exactly one of pending, acted, processed, skipped, or failed.`,
       };
     }
+    const canonicalItems = this._canonicalizeProgressItems(items);
     const sessionOpts = { ...opts, sessionId: opts.sessionId || args.sessionId || args.session_id, source: opts.source || args.source || 'model' };
-    const session = this._sessionForProgressUpdate(tabId, items, sessionOpts);
+    const session = this._sessionForProgressUpdate(tabId, canonicalItems, sessionOpts);
     const sessionId = sessionOpts.sessionId || session?.sessionId || '';
     const pageScope = opts.pageScope || session?.pageScope || '';
     const scopedItems = sessionId
-      ? items.map(item => (item && typeof item === 'object' && !Array.isArray(item)
+      ? canonicalItems.map(item => (item && typeof item === 'object' && !Array.isArray(item)
         ? { ...item, sessionId, ...(pageScope ? { pageScope } : {}) }
         : item))
-      : items;
+      : canonicalItems;
     const current = this.progressLedgers.get(tabId) || [];
     const result = upsertLedgerItems(current, scopedItems, { source: opts.source || args.source || 'model', sessionId, pageScope });
     if (!result.changed) {

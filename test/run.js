@@ -1794,6 +1794,17 @@ test('getToolsForMode: strictSecretMode works in ask mode too', () => {
   }
 });
 
+test('getToolsForMode: progress_update advertises canonical progress actions', () => {
+  for (const getTools of [getToolsForModeCh, getToolsForModeFx]) {
+    const tools = getTools('act');
+    const progressUpdate = tools.find(t => t.function.name === 'progress_update');
+    assert.ok(progressUpdate, '`progress_update` tool must be present in act mode');
+    const action = progressUpdate.function.parameters.properties.items.items.properties.action;
+    assert.match(action.description, /process_item/);
+    assert.doesNotMatch(action.description, /\bscrape\b/);
+  }
+});
+
 test('getToolsForMode: compact mode restricts act tools in both browsers', () => {
   for (const [label, getTools, compactNames] of [
     ['chrome', getToolsForModeCh, COMPACT_TOOL_NAMES_CH],
@@ -3921,6 +3932,36 @@ test('progress ledger rejects malformed statuses and normalizes null-like fields
     assert.match(missing.error, /missing status/i);
     assert.equal(agent.progressLedgers.get(tabId)[0].status, 'processed');
     assert.equal(agent.progressLedgers.get(tabId)[0].fields.email, null);
+  }
+});
+
+test('progress_update aliases legacy scrape actions to process_item', () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = 778;
+    agent.conversationModes.set(tabId, 'act');
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Scrape every search result on this page.' },
+    ]);
+
+    const created = agent._progressUpdate(tabId, {
+      items: [{ id: 'result-1', label: 'Result 1', action: 'scrape', status: 'pending' }],
+    });
+    assert.equal(created.success, true, `${AgentClass.name}: scrape action update was rejected`);
+    assert.equal(agent.progressSessions.get(tabId)?.allowedActions[0], 'process_item', `${AgentClass.name}: scrape did not activate process_item session`);
+    assert.equal(agent.progressLedgers.get(tabId)[0].action, 'process_item', `${AgentClass.name}: scrape row was not stored canonically`);
+    assert.deepEqual(agent._progressRead(tabId).rows.map(row => [row.id, row.action, row.status]), [
+      ['result-1', 'process_item', 'pending'],
+    ]);
+    assert.equal(agent._shouldBlockDoneForProgress(tabId), true, `${AgentClass.name}: aliased scrape row did not block unfinished done`);
+
+    const closed = agent._progressUpdate(tabId, {
+      items: [{ id: 'result-1', label: 'Result 1', action: 'scrape', status: 'processed' }],
+    });
+    assert.equal(closed.success, true, `${AgentClass.name}: aliased scrape close was rejected`);
+    assert.equal(agent.progressLedgers.get(tabId)[0].action, 'process_item', `${AgentClass.name}: closed scrape row lost canonical action`);
+    assert.equal(agent._shouldBlockDoneForProgress(tabId), false, `${AgentClass.name}: closed aliased scrape row still blocked done`);
   }
 });
 

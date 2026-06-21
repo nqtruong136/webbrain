@@ -753,7 +753,7 @@ export const AGENT_TOOLS = [
                 id: { type: 'string', description: 'Stable item id: username, URL, SKU, row key, or other unique handle.' },
                 label: { type: 'string', description: 'Human-readable item label.' },
                 url: { type: 'string', description: 'Canonical URL for the item, if available.' },
-                action: { type: 'string', description: 'Action taken or planned, e.g. follow, star, collect_email, scrape.' },
+                action: { type: 'string', description: 'Canonical action taken or planned, e.g. follow, star, collect_email, process_item.' },
                 status: { type: 'string', enum: ['pending', 'acted', 'processed', 'skipped', 'failed'], description: 'Current row status.' },
                 fields: { type: 'object', description: 'Collected facts for this item, e.g. {email:"a@b.com"} or {email:null}.' },
                 reason: { type: 'string', description: 'Short reason for skipped/failed, or a useful note.' },
