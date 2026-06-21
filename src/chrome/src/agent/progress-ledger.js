@@ -258,9 +258,14 @@ export function detectProgressAction(toolName, args = {}, result = {}) {
   if (!result || result.success === false || result.error || result.noProgress) return null;
 
   const labels = [
+    args.text,
+    args.name,
+    args.label,
+    result.requestedText,
+    result.beforeText,
+    result.beforeName,
     result.name,
     result.text,
-    args.text,
   ].map(v => sanitizeText(v, 220)).filter(Boolean);
   const href = sanitizeText(result.href || result.url || '', 500);
 

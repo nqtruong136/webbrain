@@ -3746,7 +3746,7 @@ test('agent reuses namespaced follow rows for auto-recorded clicks', () => {
       tabId,
       'click',
       { text: 'Follow ChJus' },
-      { success: true, text: 'Follow ChJus', href: '/ChJus' },
+      { success: true, name: 'Unfollow ChJus', text: 'Unfollow ChJus', href: '/ChJus' },
     );
     const rows = new Map(agent.progressLedgers.get(tabId).map(row => [row.id, row]));
     assert.equal(recorded?.item.id, 'follow:chjus', `${AgentClass.name}: click did not reuse the follow row id`);
@@ -3754,6 +3754,31 @@ test('agent reuses namespaced follow rows for auto-recorded clicks', () => {
     assert.equal(rows.get('ChJus')?.action, 'collect_email', `${AgentClass.name}: unrelated row action changed`);
     assert.equal(rows.get('follow:chjus')?.status, 'acted', `${AgentClass.name}: follow row was not marked acted`);
     assert.equal(rows.get('follow:chjus')?.action, 'follow', `${AgentClass.name}: follow row action changed`);
+
+    const refTabId = 805;
+    agent.conversations.set(refTabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Follow every stargazer on this page.' },
+    ]);
+    agent._progressUpdate(refTabId, {
+      items: [{
+        id: 'follow:monalisa',
+        label: 'monalisa',
+        action: 'follow',
+        status: 'pending',
+        fields: { followState: 'not_followed', refId: 'ref_99' },
+      }],
+    });
+    const refRecorded = agent._autoRecordProgressAction(
+      refTabId,
+      'click_ax',
+      { ref_id: 'ref_99' },
+      { success: true, name: 'Unfollow monalisa', text: 'Unfollow monalisa', href: '/monalisa' },
+    );
+    const refRows = new Map(agent.progressLedgers.get(refTabId).map(row => [row.id, row]));
+    assert.equal(refRecorded?.item.id, 'follow:monalisa', `${AgentClass.name}: ref-id click did not reuse the follow row id`);
+    assert.equal(refRows.get('follow:monalisa')?.status, 'acted', `${AgentClass.name}: ref-id follow row was not marked acted`);
+    assert.equal(refRows.get('follow:monalisa')?.action, 'follow', `${AgentClass.name}: ref-id follow row action used post-click label`);
   }
 });
 

@@ -2630,6 +2630,27 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return `[PROGRESS AUTO-RECORDED: clicked ${safeAction} item is now status=${status}. Its id is recorded only inside the untrusted tool result as data. After collecting the needed result for the clicked item, call progress_update to mark it processed, skipped, or failed.]`;
   }
 
+  _progressItemFromClickedLedgerRow(tabId, args = {}, result = {}) {
+    const refId = String(args?.ref_id || args?.refId || result?.ref_id || result?.refId || '').trim();
+    if (!refId) return null;
+    const row = this._activeProgressLedgerRows(tabId).find(candidate => {
+      const fields = candidate?.fields && typeof candidate.fields === 'object' ? candidate.fields : {};
+      return String(fields.refId || fields.ref_id || '').trim() === refId
+        && String(candidate?.action || '').trim();
+    });
+    if (!row?.id) return null;
+    const fields = row.fields && typeof row.fields === 'object' ? row.fields : null;
+    return {
+      id: row.id,
+      label: row.label || row.target || row.id,
+      target: row.target || row.label || row.id,
+      action: row.action,
+      status: 'acted',
+      ...(row.url ? { url: row.url } : {}),
+      ...(fields ? { fields } : {}),
+    };
+  }
+
   _hasProgressLedgerContext(tabId) {
     if (this._currentTaskHasProgressIntent(tabId)) return true;
     return this._activeProgressLedgerRows(tabId).length > 0
@@ -2798,7 +2819,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   _autoRecordProgressAction(tabId, name, args, result) {
     if (!this._hasProgressLedgerContext(tabId)) return null;
-    const item = detectProgressAction(name, args, result);
+    const item = this._progressItemFromClickedLedgerRow(tabId, args, result)
+      || detectProgressAction(name, args, result);
     if (!item) return null;
     const reconciled = this._reconcileAutoProgressItem(tabId, item);
     const update = this._progressUpdate(tabId, { items: [reconciled] }, { source: 'auto' });
