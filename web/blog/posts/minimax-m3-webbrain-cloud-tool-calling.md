@@ -142,13 +142,15 @@ This table uses the saved Claude Sonnet 4.6 run as the first-tool reference. "Ma
 | 22 | VibeThinker 3B BF16 | 33.0% | 32.6% | 84% | 83% | 2% | 19% | 5s |
 | 23 | Molmo2 8B | 8.0% | 0.0% | 2% | 1% | 0% | 0% | 1.7s |
 
-The top of the table is getting crowded, but the conclusion did not change. The best saved Sonnet-alignment result is still the Gemma 4 31B QAT / Qwen 3.6 27B / MiniMax M2.7 cluster. MiniMax M3 joins just below that cluster. WebBrain Cloud 1.0 sits one row lower: not a leader, but a credible hosted default path, especially when cost matters.
+The top of the table is getting crowded, but the conclusion did not change. The best saved Sonnet-alignment result is still the Gemma 4 31B QAT / Qwen 3.6 27B / MiniMax M2.7 cluster. MiniMax M3 joins just below that cluster. Because M3 is roughly double the size of M2.7, that result is hard to justify for this job: larger, more expensive, and weaker on the frozen planner run is not a worthwhile trade.
+
+WebBrain Cloud 1.0 sits one row lower, but it is the more useful product story here. It is a good entrant with a free tier, and it gives people a working WebBrain path when they do not have a local LLM ready. It should also keep improving as we tune the browser-side optimizations around the hosted route.
 
 ## What changes
 
-For hosted planner routing, I would keep MiniMax M2.7 in the table ahead of MiniMax M3 until M3 wins a rerun with a newer prompt or a different tool format. M3 is good, but the frozen WebBrain result does not justify a default-model change.
+For hosted planner routing, I would keep MiniMax M2.7 in the table ahead of MiniMax M3 until M3 wins a rerun with a newer prompt or a different tool format. M3 is good, but the frozen WebBrain result does not justify a default-model change, especially when the newer model is about twice the size.
 
-For WebBrain Cloud, the result is more product-facing than leaderboard-facing. It passed the old structured tool interface cleanly, completed all 100 cases without transport errors in the final run, and stayed close to the hosted MiniMax tier on Sonnet alignment. The latency needs endpoint work, but the quality/cost shape is usable.
+For WebBrain Cloud, the result is more product-facing than leaderboard-facing. It passed the old structured tool interface cleanly, completed all 100 cases without transport errors in the final run, and stayed close to the hosted MiniMax tier on Sonnet alignment. The latency needs endpoint work, but the quality/cost shape is usable, and the free tier makes it a practical default for anyone who wants to try WebBrain before setting up a local model.
 
 The next fair test is the current production prompt and tool schema, not the May 23 frozen one. The frozen run answers "how does it compare with our historical rows?" The live-schema run answers "what should WebBrain route to today?"
 
