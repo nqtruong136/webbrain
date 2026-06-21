@@ -115,6 +115,7 @@ const {
   COMPACT_TOOL_NAMES: COMPACT_TOOL_NAMES_CH,
   SYSTEM_PROMPT_ACT: SYSTEM_PROMPT_ACT_CH,
   SYSTEM_PROMPT_ACT_COMPACT: SYSTEM_PROMPT_ACT_COMPACT_CH,
+  SYSTEM_PROMPT_ACT_MID: SYSTEM_PROMPT_ACT_MID_CH,
   getToolsForMode: getToolsForModeCh,
 } = await import(
   'file://' + path.join(ROOT, 'src/chrome/src/agent/tools.js').replace(/\\/g, '/')
@@ -123,9 +124,17 @@ const {
   COMPACT_TOOL_NAMES: COMPACT_TOOL_NAMES_FX,
   SYSTEM_PROMPT_ACT: SYSTEM_PROMPT_ACT_FX,
   SYSTEM_PROMPT_ACT_COMPACT: SYSTEM_PROMPT_ACT_COMPACT_FX,
+  SYSTEM_PROMPT_ACT_MID: SYSTEM_PROMPT_ACT_MID_FX,
   getToolsForMode: getToolsForModeFx,
 } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/agent/tools.js').replace(/\\/g, '/')
+);
+
+const SchedulerCh = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/agent/scheduler.js').replace(/\\/g, '/')
+);
+const SchedulerFx = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/agent/scheduler.js').replace(/\\/g, '/')
 );
 
 // credential-fields.js — pure ESM detector, no DOM. Both chrome and
@@ -1747,6 +1756,63 @@ test('getToolsForMode: compact flag does not shrink ask mode', () => {
   }
 });
 
+test('scheduled tools are exposed only in full and mid act tiers', () => {
+  for (const [label, getTools, fullPrompt, midPrompt, compactPrompt] of [
+    ['chrome', getToolsForModeCh, SYSTEM_PROMPT_ACT_CH, SYSTEM_PROMPT_ACT_MID_CH, SYSTEM_PROMPT_ACT_COMPACT_CH],
+    ['firefox', getToolsForModeFx, SYSTEM_PROMPT_ACT_FX, SYSTEM_PROMPT_ACT_MID_FX, SYSTEM_PROMPT_ACT_COMPACT_FX],
+  ]) {
+    const full = getTools('act').map(t => t.function.name);
+    const mid = getTools('act', { tier: 'mid' }).map(t => t.function.name);
+    const compact = getTools('act', { tier: 'compact' }).map(t => t.function.name);
+    const ask = getTools('ask').map(t => t.function.name);
+
+    for (const tool of ['schedule_resume', 'schedule_task']) {
+      assert.equal(full.includes(tool), true, `[${label}] full act should expose ${tool}`);
+      assert.equal(mid.includes(tool), true, `[${label}] mid act should expose ${tool}`);
+      assert.equal(compact.includes(tool), false, `[${label}] compact act must not expose ${tool}`);
+      assert.equal(ask.includes(tool), false, `[${label}] ask mode must not expose ${tool}`);
+    }
+
+    assert.match(fullPrompt, /schedule_resume/i, `[${label}] full prompt should document schedule_resume`);
+    assert.match(fullPrompt, /schedule_task/i, `[${label}] full prompt should document schedule_task`);
+    assert.match(midPrompt, /schedule_resume/i, `[${label}] mid prompt should document schedule_resume`);
+    assert.match(midPrompt, /schedule_task/i, `[${label}] mid prompt should document schedule_task`);
+    assert.match(compactPrompt, /cannot schedule|do not schedule/i, `[${label}] compact prompt should forbid scheduling`);
+  }
+});
+
+test('sidepanel exposes schedule slash commands in both builds', () => {
+  for (const [label, panelRel, localeRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js', 'src/chrome/src/ui/locales/en.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js', 'src/firefox/src/ui/locales/en.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const locale = fs.readFileSync(path.join(ROOT, localeRel), 'utf8');
+    assert.match(panel, /\/schedule\b/, `${label}: /schedule parser missing`);
+    assert.match(panel, /\/list-schedules\b/, `${label}: /list-schedules parser missing`);
+    assert.match(panel, /create_scheduled_job/, `${label}: composer should create scheduled jobs through background`);
+    assert.match(panel, /scheduledJobId/, `${label}: scheduled clarify prompts should retain their job id`);
+    assert.match(panel, /isScheduledClarify/, `${label}: scheduled clarify answers should resume the active run`);
+    assert.match(locale, /\/schedule/, `${label}: help should mention /schedule`);
+    assert.match(locale, /\/list-schedules/, `${label}: help should mention /list-schedules`);
+  }
+});
+
+test('sidepanel exposes show-scratchpad slash command in both builds', () => {
+  for (const [label, panelRel, bgRel, localeRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js', 'src/chrome/src/background.js', 'src/chrome/src/ui/locales/en.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js', 'src/firefox/src/background.js', 'src/firefox/src/ui/locales/en.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const bg = fs.readFileSync(path.join(ROOT, bgRel), 'utf8');
+    const locale = fs.readFileSync(path.join(ROOT, localeRel), 'utf8');
+    assert.match(panel, /\/show-scratchpad\b/, `${label}: /show-scratchpad parser missing`);
+    assert.match(panel, /get_scratchpad/, `${label}: sidepanel should call background scratchpad reader`);
+    assert.match(bg, /get_scratchpad/, `${label}: background scratchpad action missing`);
+    assert.match(locale, /\/show-scratchpad/, `${label}: help should mention /show-scratchpad`);
+  }
+});
+
 test('download_social_media exposes merged DOM/vision strategy in act tiers only', () => {
   for (const [label, getTools] of [
     ['chrome', getToolsForModeCh],
@@ -1761,6 +1827,317 @@ test('download_social_media exposes merged DOM/vision strategy in act tiers only
       assert.deepEqual(props.target.enum, ['image', 'video', 'media']);
       assert.match(props.strategy.description, /falls back to DOM/i);
     }
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// Scheduled resume / tasks
+// ────────────────────────────────────────────────────────────────────────
+
+console.log('\nscheduler');
+
+function makeSchedulerHarness(SchedulerMod, opts = {}) {
+  const store = {
+    [SchedulerMod.SCHEDULED_JOBS_KEY]: [],
+    [SchedulerMod.SCHEDULED_TASKS_ENABLED_KEY]: opts.enabled ?? true,
+    [SchedulerMod.SCHEDULED_REQUIRE_CONFIRMATION_KEY]: opts.requireConfirmation ?? true,
+  };
+  const alarms = new Map();
+  const updates = [];
+  let currentNow = opts.now ?? Date.UTC(2026, 0, 1, 12, 0, 0);
+  const tabs = new Map([[77, { id: 77, url: 'https://example.com/', title: 'Example' }]]);
+  let nextTabId = 100;
+
+  const api = {
+    storage: {
+      local: {
+        async get(keys) {
+          if (Array.isArray(keys)) {
+            return Object.fromEntries(keys.map((key) => [key, store[key]]));
+          }
+          if (typeof keys === 'string') return { [keys]: store[keys] };
+          return { ...store };
+        },
+        async set(values) {
+          Object.assign(store, values);
+        },
+      },
+    },
+    alarms: {
+      async create(name, spec) { alarms.set(name, spec); },
+      async clear(name) { return alarms.delete(name); },
+      onAlarm: { addListener() {} },
+    },
+    tabs: {
+      async get(tabId) {
+        if (!tabs.has(tabId)) throw new Error(`No tab ${tabId}`);
+        return tabs.get(tabId);
+      },
+      async create({ url, active }) {
+        const tab = { id: nextTabId++, url, active: !!active };
+        tabs.set(tab.id, tab);
+        return tab;
+      },
+    },
+  };
+
+  const agent = {
+    isRunning: opts.isRunning || (() => false),
+    getConversationId: opts.getConversationId || (async () => 'conv-1'),
+    processMessage: opts.processMessage || (async () => 'scheduled result'),
+    abort() {},
+    setScheduledRunPolicy() {},
+    clearScheduledRunPolicy() {},
+  };
+
+  const manager = new SchedulerMod.ScheduledJobManager({
+    api,
+    agent,
+    loadProviders: async () => {},
+    sendUpdate(tabId, type, data) { updates.push({ tabId, type, data }); },
+    showIndicator() {},
+    hideIndicator() {},
+    now: () => currentNow,
+  });
+
+  return {
+    manager,
+    alarms,
+    tabs,
+    updates,
+    jobs: () => store[SchedulerMod.SCHEDULED_JOBS_KEY],
+    setNow: (value) => { currentNow = value; },
+    alarmName: (jobId) => `${SchedulerMod.SCHEDULED_ALARM_PREFIX}${jobId}`,
+  };
+}
+
+test('scheduler validation rejects ambiguous, too-soon, and malformed schedules', () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    assert.equal(SchedulerMod.validateResumeArgs({
+      after_seconds: 60,
+      reason: 'wait for it',
+      resume_instruction: 'try again',
+    }, now).ok, true, `${label}: valid resume should pass`);
+
+    assert.match(SchedulerMod.validateResumeArgs({
+      after_seconds: 60,
+      run_at: new Date(now + 60000).toISOString(),
+      reason: 'both',
+      resume_instruction: 'bad',
+    }, now).error, /exactly one/, `${label}: ambiguous time should fail`);
+
+    assert.match(SchedulerMod.validateResumeArgs({
+      after_seconds: 30,
+      reason: 'too soon',
+      resume_instruction: 'bad',
+    }, now).error, /at least 60 seconds/, `${label}: too-soon time should fail`);
+
+    assert.match(SchedulerMod.validateTaskArgs({
+      title: 'Bad',
+      prompt: 'check',
+      schedule: { type: 'recurring', after_seconds: 60 },
+      target: { type: 'current_tab' },
+    }, now).error, /interval_minutes/, `${label}: recurring interval is required`);
+
+    assert.match(SchedulerMod.validateTaskArgs({
+      title: 'Bad target',
+      prompt: 'check',
+      schedule: { type: 'once', after_seconds: 60 },
+      target: { type: 'url', url: 'file:///tmp/nope' },
+    }, now).error, /http\(s\) URL/, `${label}: URL targets must be http(s)`);
+  }
+});
+
+test('scheduler computes recurring next run times', () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    assert.equal(
+      SchedulerMod.computeNextRunAt({ schedule: { interval_minutes: 5 } }, now),
+      new Date(now + 5 * 60 * 1000).toISOString(),
+      `${label}: interval should advance from current time`
+    );
+    assert.equal(SchedulerMod.computeNextRunAt({ schedule: { interval_minutes: 0 } }, now), null);
+  }
+});
+
+test('ScheduledJobManager requeues when the target tab is already running', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    const h = makeSchedulerHarness(SchedulerMod, { now, isRunning: () => true });
+    const created = await h.manager.createResumeJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: { after_seconds: 60, reason: 'wait', resume_instruction: 'retry' },
+    });
+    assert.equal(created.success, true, `${label}: create resume should succeed`);
+
+    await h.manager.handleAlarm(h.alarmName(created.jobId));
+    const job = h.jobs()[0];
+    assert.equal(job.status, 'queued', `${label}: busy tab should queue`);
+    assert.match(job.lastError, /active WebBrain run/, `${label}: queue reason should be recorded`);
+    assert.equal(h.alarms.get(h.alarmName(created.jobId)).when, now + SchedulerMod.QUEUE_RETRY_MS);
+  }
+});
+
+test('ScheduledJobManager keeps live scheduled clarifications resumable', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    let continueRun;
+    const h = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async (_tabId, _message, onUpdate) => {
+        onUpdate('clarify', { clarifyId: 'clr-1', question: 'Which account should I use?' });
+        await new Promise((resolve) => { continueRun = resolve; });
+        return 'continued after answer';
+      },
+    });
+    const created = await h.manager.createResumeJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: { after_seconds: 60, reason: 'wait', resume_instruction: 'retry' },
+    });
+
+    const runPromise = h.manager.handleAlarm(h.alarmName(created.jobId));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    let job = h.jobs()[0];
+    assert.equal(job.status, 'needs_user_input', `${label}: clarify should mark job as waiting for input`);
+    assert.equal(job.lastError, 'Scheduled run needs user input.');
+    assert.ok(h.updates.some((u) => u.type === 'clarify' && u.data?.scheduledJobId === created.jobId), `${label}: clarify update should carry scheduled job id`);
+    assert.ok(h.updates.some((u) => u.type === 'scheduled_job' && u.data?.event === 'needs_user_input'), `${label}: waiting status should be emitted`);
+
+    const runNow = await h.manager.runNow(created.jobId);
+    assert.equal(runNow.ok, false, `${label}: live waiting run should not be restarted`);
+    assert.match(runNow.error, /waiting for your answer/i);
+
+    continueRun();
+    await runPromise;
+
+    job = h.jobs()[0];
+    assert.equal(job.status, 'completed', `${label}: original run should complete after answer`);
+    assert.equal(job.lastResult, 'continued after answer');
+    assert.equal(job.runCount, 1);
+  }
+});
+
+test('ScheduledJobManager fails stale conversation resumes before running', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    let processCalled = false;
+    const h = makeSchedulerHarness(SchedulerMod, {
+      now,
+      getConversationId: async () => 'conv-2',
+      processMessage: async () => { processCalled = true; return 'should not run'; },
+    });
+    const created = await h.manager.createResumeJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: { after_seconds: 60, reason: 'wait', resume_instruction: 'retry' },
+    });
+
+    await h.manager.handleAlarm(h.alarmName(created.jobId));
+    const job = h.jobs()[0];
+    assert.equal(processCalled, false, `${label}: stale job must not call agent`);
+    assert.equal(job.status, 'failed', `${label}: stale conversation should fail`);
+    assert.match(job.lastError, /Conversation changed/, `${label}: failure should explain staleness`);
+    assert.equal(h.updates.at(-1)?.data?.event, 'failed', `${label}: failure should be emitted`);
+  }
+});
+
+test('ScheduledJobManager lets scheduled tasks survive conversation changes on the same page', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    let processCalled = false;
+    const h = makeSchedulerHarness(SchedulerMod, {
+      now,
+      getConversationId: async () => 'conv-2',
+      processMessage: async () => { processCalled = true; return 'clicked references'; },
+    });
+    const created = await h.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        title: 'Click References',
+        prompt: 'Click References on the current page.',
+        schedule: { type: 'once', after_seconds: 60 },
+        target: { type: 'current_tab' },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/',
+      currentTitle: 'Example',
+    });
+
+    await h.manager.handleAlarm(h.alarmName(created.jobId));
+    const job = h.jobs()[0];
+    assert.equal(processCalled, true, `${label}: task should run despite conversation-id change`);
+    assert.equal(job.status, 'completed', `${label}: scheduled task should complete`);
+    assert.equal(job.lastResult, 'clicked references');
+  }
+});
+
+test('ScheduledJobManager fails current-tab tasks after the tab navigates away', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    let processCalled = false;
+    const h = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async () => { processCalled = true; return 'should not run'; },
+    });
+    const created = await h.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        title: 'Click References',
+        prompt: 'Click References on the current page.',
+        schedule: { type: 'once', after_seconds: 60 },
+        target: { type: 'current_tab' },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/article',
+      currentTitle: 'Example',
+    });
+    h.tabs.set(77, { id: 77, url: 'https://example.com/other', title: 'Other' });
+
+    await h.manager.handleAlarm(h.alarmName(created.jobId));
+    const job = h.jobs()[0];
+    assert.equal(processCalled, false, `${label}: navigated-away task must not call agent`);
+    assert.equal(job.status, 'failed', `${label}: navigated-away task should fail`);
+    assert.match(job.lastError, /Target tab changed/, `${label}: failure should explain target staleness`);
+  }
+});
+
+test('ScheduledJobManager completes recurring tasks and schedules the next run', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    const h = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async (_tabId, message) => {
+        assert.match(message, /Scheduled task/, `${label}: synthetic task message should be trusted scheduler text`);
+        return 'checked';
+      },
+    });
+    const created = await h.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        title: 'Check inbox',
+        prompt: 'Look for new priority mail.',
+        schedule: { type: 'recurring', after_seconds: 60, interval_minutes: 5 },
+        target: { type: 'current_tab' },
+      },
+      source: 'user',
+    });
+    assert.equal(created.success, true, `${label}: create recurring task should succeed`);
+
+    await h.manager.handleAlarm(h.alarmName(created.jobId));
+    const job = h.jobs()[0];
+    const expectedNext = new Date(now + 5 * 60 * 1000).toISOString();
+    assert.equal(job.status, 'pending', `${label}: recurring job should stay pending`);
+    assert.equal(job.runCount, 1, `${label}: run count should increment`);
+    assert.equal(job.lastResult, 'checked', `${label}: result should be saved`);
+    assert.equal(job.nextRunAt, expectedNext, `${label}: next run should be computed`);
+    assert.equal(h.alarms.get(h.alarmName(created.jobId)).when, Date.parse(expectedNext));
   }
 });
 
@@ -2618,6 +2995,10 @@ test('capabilityFor: state-changing tools map to capabilities', () => {
   assert.equal(capabilityFor('set_field', {}), Capability.TYPE);
   assert.equal(capabilityFor('execute_js', { code: 'x' }), Capability.EXECUTE_JS);
   assert.equal(capabilityFor('download_files', {}), Capability.DOWNLOAD);
+  assert.equal(capabilityFor('schedule_resume', {}), Capability.SCHEDULE);
+  assert.equal(capabilityFor('schedule_task', {}), Capability.SCHEDULE);
+  assert.equal(capabilityForCh('schedule_resume', {}), CapabilityCh.SCHEDULE);
+  assert.equal(capabilityForCh('schedule_task', {}), CapabilityCh.SCHEDULE);
 });
 
 test('capabilityFor: no side-effecting tool slips through ungated', () => {
@@ -2961,6 +3342,24 @@ test('_pinDownloadHandles ignores failed / empty results (chrome & firefox)', ()
     agent._pinDownloadHandles(tabId, 'download_resource_from_page', { error: 'nope' });
     agent._pinDownloadHandles(tabId, 'download_social_media', { success: true, completedCount: 0 });
     assert.equal(agent._findScratchpadIndex(agent.conversations.get(tabId)), -1, `${AgentClass.name}: pinned a non-download`);
+  }
+});
+
+test('getScratchpad returns the current pinned scratchpad body (chrome & firefox)', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({});
+    const tabId = 91;
+    agent.conversations.set(tabId, [{ role: 'system', content: 's' }, { role: 'user', content: 'task' }]);
+
+    assert.deepEqual(await agent.getScratchpad(tabId), { exists: false, body: '' });
+    agent._scratchpadWrite(tabId, { text: 'downloadId 42' });
+    const pad = await agent.getScratchpad(tabId);
+    assert.equal(pad.exists, true, `${AgentClass.name}: scratchpad should exist`);
+    assert.equal(pad.body, 'downloadId 42', `${AgentClass.name}: scratchpad body mismatch`);
+
+    const t = agent.persistTimers?.get?.(tabId);
+    if (t) clearTimeout(t);
+    agent.persistTimers?.delete?.(tabId);
   }
 });
 

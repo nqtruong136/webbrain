@@ -1,0 +1,644 @@
+export const SCHEDULED_JOBS_KEY = 'wb_scheduled_jobs';
+export const SCHEDULED_TASKS_ENABLED_KEY = 'scheduledTasksEnabled';
+export const SCHEDULED_REQUIRE_CONFIRMATION_KEY = 'scheduledRequireConsequentialConfirmation';
+export const SCHEDULED_ALARM_PREFIX = 'wb_scheduled_job:';
+
+export const MIN_DELAY_MS = 60 * 1000;
+export const MAX_DELAY_MS = 24 * 60 * 60 * 1000;
+export const QUEUE_RETRY_MS = 30 * 1000;
+export const MAX_QUEUE_DEFERRALS = 120;
+export const MIN_INTERVAL_MINUTES = 1;
+export const MAX_INTERVAL_MINUTES = 525600; // one year
+
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function iso(ms) {
+  return new Date(ms).toISOString();
+}
+
+function isValidUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function sameDocumentUrl(a, b) {
+  try {
+    const left = new URL(String(a || ''));
+    const right = new URL(String(b || ''));
+    return left.origin === right.origin &&
+      left.pathname === right.pathname &&
+      left.search === right.search;
+  } catch {
+    return String(a || '') === String(b || '');
+  }
+}
+
+export function makeScheduledJobId(kind = 'job', now = Date.now()) {
+  return `${kind}_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function normalizeScheduledTime(input, {
+  now = Date.now(),
+  minDelayMs = MIN_DELAY_MS,
+  maxDelayMs = MAX_DELAY_MS,
+} = {}) {
+  const obj = asObject(input);
+  const hasAfter = obj.after_seconds != null;
+  const hasRunAt = obj.run_at != null && String(obj.run_at).trim() !== '';
+  if (hasAfter === hasRunAt) {
+    return { ok: false, error: 'Provide exactly one of `after_seconds` or `run_at`.' };
+  }
+
+  let scheduledAtMs;
+  if (hasAfter) {
+    const seconds = Number(obj.after_seconds);
+    if (!Number.isFinite(seconds)) {
+      return { ok: false, error: '`after_seconds` must be a number.' };
+    }
+    scheduledAtMs = now + Math.round(seconds * 1000);
+  } else {
+    scheduledAtMs = Date.parse(String(obj.run_at).trim());
+    if (!Number.isFinite(scheduledAtMs)) {
+      return { ok: false, error: '`run_at` must be an ISO timestamp or browser-parseable date/time.' };
+    }
+  }
+
+  const delay = scheduledAtMs - now;
+  if (delay < minDelayMs) {
+    return { ok: false, error: `Scheduled time must be at least ${Math.ceil(minDelayMs / 1000)} seconds in the future.` };
+  }
+  if (delay > maxDelayMs) {
+    return { ok: false, error: `Scheduled time must be no more than ${Math.floor(maxDelayMs / 3600000)} hours in the future.` };
+  }
+  return { ok: true, scheduledAtMs, scheduledAt: iso(scheduledAtMs) };
+}
+
+export function validateResumeArgs(args, now = Date.now()) {
+  const obj = asObject(args);
+  const time = normalizeScheduledTime(obj, { now });
+  if (!time.ok) return time;
+  const reason = String(obj.reason || '').trim();
+  const resumeInstruction = String(obj.resume_instruction || '').trim();
+  if (!reason) return { ok: false, error: '`reason` is required.' };
+  if (!resumeInstruction) return { ok: false, error: '`resume_instruction` is required.' };
+  return {
+    ok: true,
+    scheduledAtMs: time.scheduledAtMs,
+    scheduledAt: time.scheduledAt,
+    reason: reason.slice(0, 1000),
+    resumeInstruction: resumeInstruction.slice(0, 4000),
+  };
+}
+
+export function validateTaskArgs(args, now = Date.now()) {
+  const obj = asObject(args);
+  const title = String(obj.title || '').trim();
+  const prompt = String(obj.prompt || '').trim();
+  const schedule = asObject(obj.schedule);
+  const target = asObject(obj.target);
+  const type = schedule.type || 'once';
+  const mode = obj.mode === 'ask' ? 'ask' : 'act';
+
+  if (!title) return { ok: false, error: '`title` is required.' };
+  if (!prompt) return { ok: false, error: '`prompt` is required.' };
+  if (type !== 'once' && type !== 'recurring') {
+    return { ok: false, error: '`schedule.type` must be "once" or "recurring".' };
+  }
+
+  const time = normalizeScheduledTime(schedule, { now });
+  if (!time.ok) return time;
+
+  let intervalMinutes = null;
+  if (type === 'recurring') {
+    intervalMinutes = Number(schedule.interval_minutes);
+    if (!Number.isFinite(intervalMinutes)) {
+      return { ok: false, error: '`schedule.interval_minutes` is required for recurring tasks.' };
+    }
+    intervalMinutes = Math.floor(intervalMinutes);
+    if (intervalMinutes < MIN_INTERVAL_MINUTES || intervalMinutes > MAX_INTERVAL_MINUTES) {
+      return { ok: false, error: `Recurring interval must be between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES} minutes.` };
+    }
+  }
+
+  const targetType = target.type || 'current_tab';
+  if (targetType !== 'current_tab' && targetType !== 'url') {
+    return { ok: false, error: '`target.type` must be "current_tab" or "url".' };
+  }
+  if (targetType === 'url' && !isValidUrl(target.url)) {
+    return { ok: false, error: '`target.url` must be an http(s) URL when target.type is "url".' };
+  }
+
+  return {
+    ok: true,
+    title: title.slice(0, 200),
+    prompt: prompt.slice(0, 8000),
+    scheduleType: type,
+    scheduledAtMs: time.scheduledAtMs,
+    scheduledAt: time.scheduledAt,
+    intervalMinutes,
+    target: {
+      type: targetType,
+      ...(targetType === 'url' ? { url: String(target.url).trim() } : {}),
+    },
+    mode,
+  };
+}
+
+export function computeNextRunAt(job, now = Date.now()) {
+  const interval = Number(job?.schedule?.interval_minutes || job?.intervalMinutes);
+  if (!Number.isFinite(interval) || interval < MIN_INTERVAL_MINUTES) return null;
+  return iso(now + Math.floor(interval) * 60 * 1000);
+}
+
+export function summarizeScheduledJob(job) {
+  if (!job) return null;
+  return {
+    id: job.id,
+    kind: job.kind,
+    title: job.title || job.reason || 'Scheduled job',
+    status: job.status,
+    scheduledAt: job.scheduledAt,
+    nextRunAt: job.nextRunAt || job.scheduledAt,
+    schedule: job.schedule || null,
+    target: job.target || null,
+    lastResult: job.lastResult || null,
+    lastError: job.lastError || null,
+    needsUserInput: job.status === 'needs_user_input',
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
+}
+
+export class ScheduledJobManager {
+  constructor({
+    api,
+    agent,
+    loadProviders = async () => {},
+    sendUpdate = () => {},
+    showIndicator = () => {},
+    hideIndicator = () => {},
+    now = () => Date.now(),
+  }) {
+    this.api = api;
+    this.agent = agent;
+    this.loadProviders = loadProviders;
+    this.sendUpdate = sendUpdate;
+    this.showIndicator = showIndicator;
+    this.hideIndicator = hideIndicator;
+    this.now = now;
+    this._started = false;
+    this._waitingForInput = new Set();
+  }
+
+  start() {
+    if (this._started) return;
+    this._started = true;
+    this.api?.alarms?.onAlarm?.addListener?.((alarm) => {
+      this.handleAlarm(alarm?.name).catch((e) => {
+        console.warn('[WebBrain] scheduled job alarm failed:', e);
+      });
+    });
+    this.restoreAlarms().catch((e) => console.warn('[WebBrain] restore scheduled alarms failed:', e));
+  }
+
+  async _getJobs() {
+    const stored = await this.api.storage.local.get(SCHEDULED_JOBS_KEY);
+    const jobs = stored?.[SCHEDULED_JOBS_KEY];
+    return Array.isArray(jobs) ? jobs : [];
+  }
+
+  async _setJobs(jobs) {
+    await this.api.storage.local.set({ [SCHEDULED_JOBS_KEY]: jobs });
+  }
+
+  async _getSettings() {
+    const stored = await this.api.storage.local.get([
+      SCHEDULED_TASKS_ENABLED_KEY,
+      SCHEDULED_REQUIRE_CONFIRMATION_KEY,
+    ]);
+    return {
+      enabled: stored[SCHEDULED_TASKS_ENABLED_KEY] !== false,
+      requireConsequentialConfirmation: stored[SCHEDULED_REQUIRE_CONFIRMATION_KEY] !== false,
+    };
+  }
+
+  _alarmName(jobId) {
+    return `${SCHEDULED_ALARM_PREFIX}${jobId}`;
+  }
+
+  async _setAlarm(job) {
+    const when = Date.parse(job.nextRunAt || job.scheduledAt);
+    if (!Number.isFinite(when)) return;
+    await this.api.alarms.create(this._alarmName(job.id), { when });
+  }
+
+  async _clearAlarm(jobId) {
+    try { await this.api.alarms.clear(this._alarmName(jobId)); } catch {}
+  }
+
+  async restoreAlarms() {
+    const jobs = await this._getJobs();
+    const live = new Set(['pending', 'queued']);
+    await Promise.all(jobs.filter((job) => live.has(job.status)).map((job) => this._setAlarm(job)));
+  }
+
+  async listJobs({ tabId = null } = {}) {
+    const jobs = await this._getJobs();
+    return jobs
+      .filter((job) => tabId == null || job.tabId === tabId || job.target?.tabId === tabId)
+      .map(summarizeScheduledJob)
+      .sort((a, b) => String(a.nextRunAt || '').localeCompare(String(b.nextRunAt || '')));
+  }
+
+  async _saveJob(job) {
+    const jobs = await this._getJobs();
+    const idx = jobs.findIndex((it) => it.id === job.id);
+    if (idx >= 0) jobs[idx] = job; else jobs.push(job);
+    await this._setJobs(jobs);
+    return job;
+  }
+
+  async _updateJob(jobId, updater) {
+    const jobs = await this._getJobs();
+    const idx = jobs.findIndex((it) => it.id === jobId);
+    if (idx < 0) return null;
+    const updated = { ...jobs[idx], ...updater(jobs[idx]), updatedAt: iso(this.now()) };
+    jobs[idx] = updated;
+    await this._setJobs(jobs);
+    return updated;
+  }
+
+  _emit(job, event = 'updated') {
+    this.sendUpdate(job.tabId || job.target?.tabId || null, 'scheduled_job', {
+      event,
+      job: summarizeScheduledJob(job),
+    });
+  }
+
+  async createResumeJob({ tabId, conversationId, mode = 'act', args, currentUrl = '', currentTitle = '' }) {
+    const parsed = validateResumeArgs(args, this.now());
+    if (!parsed.ok) return { success: false, error: parsed.error };
+    const createdAt = iso(this.now());
+    const job = {
+      id: makeScheduledJobId('resume', this.now()),
+      kind: 'resume',
+      status: 'pending',
+      tabId,
+      conversationId,
+      mode,
+      reason: parsed.reason,
+      resumeInstruction: parsed.resumeInstruction,
+      scheduledAt: parsed.scheduledAt,
+      nextRunAt: parsed.scheduledAt,
+      createdAt,
+      updatedAt: createdAt,
+      originalUrl: currentUrl,
+      originalTitle: currentTitle,
+      queueDeferrals: 0,
+      runCount: 0,
+    };
+    await this._saveJob(job);
+    await this._setAlarm(job);
+    this._emit(job, 'created');
+    return {
+      success: true,
+      scheduled: true,
+      jobId: job.id,
+      scheduledAt: job.scheduledAt,
+      summary: `Scheduled a resume for ${job.scheduledAt}.`,
+      done: true,
+    };
+  }
+
+  async createTaskJob({ tabId = null, conversationId = null, args, source = 'agent', currentUrl = '', currentTitle = '' }) {
+    const parsed = validateTaskArgs(args, this.now());
+    if (!parsed.ok) return { success: false, error: parsed.error };
+    const createdAt = iso(this.now());
+    const target = {
+      ...parsed.target,
+      ...(parsed.target.type === 'current_tab' ? { tabId, conversationId, originalUrl: currentUrl, originalTitle: currentTitle } : {}),
+    };
+    const job = {
+      id: makeScheduledJobId('task', this.now()),
+      kind: 'task',
+      status: 'pending',
+      tabId: target.tabId || null,
+      conversationId: target.conversationId || null,
+      mode: parsed.mode,
+      title: parsed.title,
+      prompt: parsed.prompt,
+      schedule: {
+        type: parsed.scheduleType,
+        run_at: parsed.scheduledAt,
+        interval_minutes: parsed.intervalMinutes,
+      },
+      target,
+      source,
+      scheduledAt: parsed.scheduledAt,
+      nextRunAt: parsed.scheduledAt,
+      createdAt,
+      updatedAt: createdAt,
+      queueDeferrals: 0,
+      runCount: 0,
+    };
+    await this._saveJob(job);
+    await this._setAlarm(job);
+    this._emit(job, 'created');
+    return {
+      success: true,
+      scheduled: true,
+      jobId: job.id,
+      scheduledAt: job.scheduledAt,
+      summary: `Scheduled "${job.title}" for ${job.scheduledAt}.`,
+    };
+  }
+
+  async cancelJob(jobId, reason = 'cancelled') {
+    const jobs = await this._getJobs();
+    const existing = jobs.find((it) => it.id === jobId);
+    await this._clearAlarm(jobId);
+    this._waitingForInput.delete(jobId);
+    if (existing && ['running', 'needs_user_input'].includes(existing.status)) {
+      const tabId = existing.tabId || existing.target?.tabId;
+      if (tabId != null) {
+        try { this.agent.abort(tabId); } catch {}
+      }
+    }
+    const job = await this._updateJob(jobId, () => ({ status: 'cancelled', lastError: reason }));
+    if (job) this._emit(job, 'cancelled');
+    return { ok: !!job, job: summarizeScheduledJob(job) };
+  }
+
+  async deleteJob(jobId) {
+    await this._clearAlarm(jobId);
+    this._waitingForInput.delete(jobId);
+    const jobs = await this._getJobs();
+    const existing = jobs.find((job) => job.id === jobId);
+    if (existing && ['running', 'needs_user_input'].includes(existing.status)) {
+      const tabId = existing.tabId || existing.target?.tabId;
+      if (tabId != null) {
+        try { this.agent.abort(tabId); } catch {}
+      }
+    }
+    const next = jobs.filter((job) => job.id !== jobId);
+    await this._setJobs(next);
+    return { ok: next.length !== jobs.length };
+  }
+
+  async pauseJob(jobId) {
+    await this._clearAlarm(jobId);
+    const job = await this._updateJob(jobId, () => ({ status: 'paused' }));
+    if (job) this._emit(job, 'paused');
+    return { ok: !!job, job: summarizeScheduledJob(job) };
+  }
+
+  async resumeJob(jobId) {
+    const job = await this._updateJob(jobId, (prev) => ({
+      status: 'pending',
+      nextRunAt: prev.nextRunAt || prev.scheduledAt || iso(this.now() + MIN_DELAY_MS),
+      queueDeferrals: 0,
+    }));
+    if (job) {
+      await this._setAlarm(job);
+      this._emit(job, 'resumed');
+    }
+    return { ok: !!job, job: summarizeScheduledJob(job) };
+  }
+
+  async runNow(jobId) {
+    if (this._waitingForInput.has(jobId)) {
+      return {
+        ok: false,
+        error: 'Scheduled run is waiting for your answer. Reply to the prompt or cancel the run.',
+      };
+    }
+    const job = await this._updateJob(jobId, () => ({
+      status: 'pending',
+      nextRunAt: iso(this.now() + 1000),
+      queueDeferrals: 0,
+    }));
+    if (job) await this._setAlarm(job);
+    return { ok: !!job, job: summarizeScheduledJob(job) };
+  }
+
+  async cancelForTab(tabId, reason = 'tab closed') {
+    const jobs = await this._getJobs();
+    const next = [];
+    for (const job of jobs) {
+      const matches = job.tabId === tabId || job.target?.tabId === tabId;
+      if (matches && ['pending', 'queued', 'paused', 'needs_user_input'].includes(job.status)) {
+        await this._clearAlarm(job.id);
+        next.push({ ...job, status: 'cancelled', lastError: reason, updatedAt: iso(this.now()) });
+      } else {
+        next.push(job);
+      }
+    }
+    await this._setJobs(next);
+  }
+
+  async cancelForConversation(tabId, conversationId, reason = 'conversation cleared') {
+    const jobs = await this._getJobs();
+    const next = [];
+    for (const job of jobs) {
+      const matches = (job.tabId === tabId || job.target?.tabId === tabId) &&
+        (!conversationId || job.conversationId === conversationId || job.target?.conversationId === conversationId);
+      if (matches && ['pending', 'queued', 'paused', 'needs_user_input'].includes(job.status)) {
+        await this._clearAlarm(job.id);
+        next.push({ ...job, status: 'cancelled', lastError: reason, updatedAt: iso(this.now()) });
+      } else {
+        next.push(job);
+      }
+    }
+    await this._setJobs(next);
+  }
+
+  async handleAlarm(alarmName) {
+    if (!alarmName || !alarmName.startsWith(SCHEDULED_ALARM_PREFIX)) return;
+    const jobId = alarmName.slice(SCHEDULED_ALARM_PREFIX.length);
+    await this._runJob(jobId);
+  }
+
+  async _markFailed(job, error) {
+    const failed = await this._updateJob(job.id, () => ({
+      status: 'failed',
+      lastError: String(error || 'Scheduled job failed.'),
+    }));
+    if (failed) this._emit(failed, 'failed');
+  }
+
+  async _requeue(job, reason) {
+    const deferrals = Number(job.queueDeferrals || 0) + 1;
+    if (deferrals > MAX_QUEUE_DEFERRALS) {
+      await this._markFailed(job, `Timed out waiting to run: ${reason}`);
+      return;
+    }
+    const queued = await this._updateJob(job.id, () => ({
+      status: 'queued',
+      nextRunAt: iso(this.now() + QUEUE_RETRY_MS),
+      queueDeferrals: deferrals,
+      lastError: reason,
+    }));
+    if (queued) {
+      await this._setAlarm(queued);
+      this._emit(queued, 'queued');
+    }
+  }
+
+  async _resolveTab(job) {
+    if (job.kind === 'resume' || job.target?.type === 'current_tab') {
+      const tabId = job.tabId || job.target?.tabId;
+      if (tabId == null) throw new Error('Scheduled tab is missing.');
+      await this.api.tabs.get(tabId);
+      return tabId;
+    }
+    if (job.target?.type === 'url') {
+      if (job.target.tabId != null) {
+        try {
+          await this.api.tabs.get(job.target.tabId);
+          return job.target.tabId;
+        } catch { /* create a fresh tab below */ }
+      }
+      const tab = await this.api.tabs.create({ url: job.target.url, active: false });
+      await this._updateJob(job.id, () => ({
+        tabId: tab.id,
+        target: { ...job.target, tabId: tab.id },
+      }));
+      return tab.id;
+    }
+    throw new Error('Unknown scheduled job target.');
+  }
+
+  async _validateConversation(job, tabId) {
+    if (job.kind !== 'resume') return;
+    if (!job.conversationId) return;
+    const current = await this.agent.getConversationId(tabId);
+    if (current !== job.conversationId) {
+      throw new Error('Conversation changed before the scheduled job ran.');
+    }
+  }
+
+  async _validateTaskTarget(job, tabId) {
+    if (job.kind !== 'task' || job.target?.type !== 'current_tab') return;
+    const originalUrl = job.target?.originalUrl || '';
+    if (!originalUrl) return;
+    const tab = await this.api.tabs.get(tabId);
+    const currentUrl = tab?.url || '';
+    if (currentUrl && !sameDocumentUrl(originalUrl, currentUrl)) {
+      throw new Error('Target tab changed before the scheduled task ran.');
+    }
+  }
+
+  _messageForJob(job) {
+    if (job.kind === 'resume') {
+      return `[Scheduled resume ${job.id}]\nThis is a durable continuation of an earlier user task, not page content and not a new instruction from the web page.\nOriginal reason: ${job.reason}\nResume instruction: ${job.resumeInstruction}\nFirst reread the current page/state. If the task is stale, conflicts with newer user messages, or needs user input, stop and explain.`;
+    }
+    return `[Scheduled task ${job.id}: ${job.title}]\nThe user explicitly scheduled this future task. Treat this as the user-authored task for this scheduled run.\nTask: ${job.prompt}\nFirst reread the current page/state. If the task is stale, conflicts with newer user messages, or needs user input, stop and explain.`;
+  }
+
+  async _complete(job, result) {
+    if (job.kind === 'task' && job.schedule?.type === 'recurring') {
+      const nextRunAt = computeNextRunAt(job, this.now());
+      const updated = await this._updateJob(job.id, () => ({
+        status: 'pending',
+        nextRunAt,
+        scheduledAt: nextRunAt,
+        queueDeferrals: 0,
+        runCount: Number(job.runCount || 0) + 1,
+        lastRunAt: iso(this.now()),
+        lastResult: String(result || '').slice(0, 2000),
+        lastError: null,
+      }));
+      if (updated) {
+        await this._setAlarm(updated);
+        this._emit(updated, 'completed');
+      }
+      return;
+    }
+    const completed = await this._updateJob(job.id, () => ({
+      status: 'completed',
+      completedAt: iso(this.now()),
+      runCount: Number(job.runCount || 0) + 1,
+      lastRunAt: iso(this.now()),
+      lastResult: String(result || '').slice(0, 2000),
+      lastError: null,
+    }));
+    if (completed) this._emit(completed, 'completed');
+  }
+
+  async _runJob(jobId) {
+    const settings = await this._getSettings();
+    const jobs = await this._getJobs();
+    const job = jobs.find((it) => it.id === jobId);
+    if (!job || !['pending', 'queued'].includes(job.status)) return;
+    if (!settings.enabled) {
+      const paused = await this._updateJob(job.id, () => ({ status: 'paused', lastError: 'Scheduled tasks are disabled in Settings.' }));
+      if (paused) this._emit(paused, 'paused');
+      return;
+    }
+
+    let tabId;
+    try {
+      tabId = await this._resolveTab(job);
+      await this._validateConversation(job, tabId);
+      await this._validateTaskTarget(job, tabId);
+    } catch (e) {
+      await this._markFailed(job, e.message);
+      return;
+    }
+
+    if (this.agent.isRunning(tabId)) {
+      await this._requeue(job, 'The target tab already has an active WebBrain run.');
+      return;
+    }
+
+    const running = await this._updateJob(job.id, () => ({
+      status: 'running',
+      tabId,
+      queueDeferrals: 0,
+      startedAt: iso(this.now()),
+      lastError: null,
+    }));
+    if (!running) return;
+    this._emit(running, 'running');
+
+    const onUpdate = (type, data) => {
+      if (type === 'clarify') {
+        this._waitingForInput.add(job.id);
+        this._updateJob(job.id, (prev) => (prev.status === 'running' ? {
+          status: 'needs_user_input',
+          lastError: 'Scheduled run needs user input.',
+        } : {
+          lastError: prev.lastError,
+        })).then((waiting) => {
+          if (waiting?.status === 'needs_user_input') this._emit(waiting, 'needs_user_input');
+        }).catch((e) => {
+          console.warn('[WebBrain] failed to mark scheduled job as waiting for input:', e);
+        });
+      }
+      this.sendUpdate(tabId, type, type === 'clarify' ? { ...data, scheduledJobId: job.id } : data);
+    };
+
+    this.showIndicator(tabId);
+    this.agent.setScheduledRunPolicy(tabId, {
+      requireConsequentialConfirmation: settings.requireConsequentialConfirmation,
+    });
+    try {
+      await this.loadProviders();
+      const result = await this.agent.processMessage(tabId, this._messageForJob(running), onUpdate, running.mode || 'act');
+      this._waitingForInput.delete(job.id);
+      await this._complete(running, result);
+    } catch (e) {
+      this._waitingForInput.delete(job.id);
+      await this._markFailed(running, e.message);
+    } finally {
+      this.agent.clearScheduledRunPolicy(tabId);
+      this.hideIndicator(tabId);
+    }
+  }
+}
