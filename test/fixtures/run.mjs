@@ -206,6 +206,24 @@ test('click_ax: placeholder popup anchor keeps popup guidance', async (page) => 
   if (opened !== true) throw new Error('expected click handler to run');
 });
 
+test('click_ax: hash popup anchor keeps popup guidance', async (page) => {
+  await setup(page, 'anchor-popup-click.html');
+  const tree = await call(page, 'get_accessibility_tree', { filter: 'visible', maxDepth: 8 });
+  const match = String(tree?.pageContent || '').match(/link "More" \[(ref_\d+)\] href="#menu"/);
+  if (!match) throw new Error(`could not find More link in tree: ${tree?.pageContent}`);
+
+  const resp = await call(page, 'click_ax', { ref_id: match[1] });
+  if (!resp?.success) throw new Error(`expected click_ax success, got: ${JSON.stringify(resp)}`);
+  if (resp.href !== '#menu') throw new Error(`expected href #menu, got ${resp.href}`);
+  if (resp.sameDocumentAnchor === true) throw new Error(`popup href must not be sameDocumentAnchor: ${JSON.stringify(resp)}`);
+  if (resp.opened_popup_likely !== true) throw new Error(`expected opened_popup_likely:true, got ${JSON.stringify(resp)}`);
+  if (!/popup-opener/i.test(resp.hint || '')) throw new Error(`expected popup guidance, got: ${resp.hint}`);
+  if (/Same-page anchor/i.test(resp.hint || '')) throw new Error(`hash popup used same-page anchor hint: ${resp.hint}`);
+
+  const opened = await page.evaluate(() => window.__hashMenuOpened);
+  if (opened !== true) throw new Error('expected hash popup click handler to run');
+});
+
 // ─── main ─────────────────────────────────────────────────────────────────
 // Social media downloader focus safety
 test('SMD: Instagram auto mode downloads the open dialog image, not the feed', async (page) => {

@@ -1776,6 +1776,14 @@
           try { el.focus({ preventScroll: true }); } catch {}
           const rect = el.getBoundingClientRect();
           const tag = el.tagName ? el.tagName.toLowerCase() : '';
+          let popupRole = '';
+          let popupHasPopup = null;
+          let isPopupOpener = false;
+          try {
+            popupRole = (el.getAttribute('role') || '').toLowerCase();
+            popupHasPopup = el.getAttribute('aria-haspopup');
+            isPopupOpener = popupRole === 'combobox' || !!popupHasPopup;
+          } catch {}
           let anchorMeta = null;
           if (tag === 'a') {
             try {
@@ -1799,7 +1807,7 @@
                       target.search === before.search;
                     const anchorTarget = target.hash || (trimmedHref.startsWith('#') && trimmedHref.length > 1 ? trimmedHref : '');
                     anchorMeta.targetUrl = target.href;
-                    if (sameDocumentBase && anchorTarget) {
+                    if (sameDocumentBase && anchorTarget && !isPopupOpener) {
                       anchorMeta.sameDocumentAnchor = true;
                       anchorMeta.anchorTarget = anchorTarget;
                     } else if (!sameDocumentBase) {
@@ -1894,12 +1902,9 @@
               // type-filter or press arrows — NOT keep clicking this button,
               // which toggles the popup closed.
               try {
-                const role = (el.getAttribute('role') || '').toLowerCase();
-                const hasPopup = el.getAttribute('aria-haspopup');
-                const isCombobox = role === 'combobox' || !!hasPopup;
-                if (isCombobox) {
+                if (isPopupOpener) {
                   resp.opened_popup_likely = true;
-                  resp.hint = `This element is a combobox / popup-opener (role="${role}"${hasPopup ? `, aria-haspopup="${hasPopup}"` : ''}). The popup is almost always rendered in a React portal at the end of <body>, OUTSIDE this button's subtree. Next step: call get_accessibility_tree({filter: "visible"}) — do NOT pass a ref_id (subtree filter will miss the portal). Look for a newly-appeared listbox / searchbox / menu. Then either (a) set_field({ref_id: <new search textbox ref>, text: "<query>", submit: true}), or (b) press_keys(["<first letter>"]) then press_keys(["Enter"]). Do NOT click this same ref_id again — it will just toggle the popup closed.`;
+                  resp.hint = `This element is a combobox / popup-opener (role="${popupRole}"${popupHasPopup ? `, aria-haspopup="${popupHasPopup}"` : ''}). The popup is almost always rendered in a React portal at the end of <body>, OUTSIDE this button's subtree. Next step: call get_accessibility_tree({filter: "visible"}) — do NOT pass a ref_id (subtree filter will miss the portal). Look for a newly-appeared listbox / searchbox / menu. Then either (a) set_field({ref_id: <new search textbox ref>, text: "<query>", submit: true}), or (b) press_keys(["<first letter>"]) then press_keys(["Enter"]). Do NOT click this same ref_id again — it will just toggle the popup closed.`;
                 }
               } catch {}
             }

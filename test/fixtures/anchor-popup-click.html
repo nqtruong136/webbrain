@@ -7,13 +7,15 @@
 <body>
   <nav>
     <a href="#" aria-haspopup="menu" onclick="event.preventDefault(); window.__menuOpened = true;">Options</a>
+    <a href="#menu" aria-haspopup="menu" onclick="event.preventDefault(); window.__hashMenuOpened = true;">More</a>
   </nav>
-  <div role="menu" hidden>
+  <div id="menu" role="menu" hidden>
     <button role="menuitem">Archive</button>
     <button role="menuitem">Delete</button>
   </div>
   <script>
     window.__menuOpened = false;
+    window.__hashMenuOpened = false;
   </script>
 </body>
 </html>
