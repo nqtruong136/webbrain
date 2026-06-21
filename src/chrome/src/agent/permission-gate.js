@@ -71,6 +71,8 @@ export const UNTRUSTED_CONTENT_TOOLS = new Set([
   'read_page_source',
   'read_downloaded_file',
   'inspect_element_styles',
+  'progress_update',
+  'progress_read',
   // click/type_text can return page-derived labels, option text, aria-labels,
   // and form-state hints (not just control status). Treat them as data.
   'click',
