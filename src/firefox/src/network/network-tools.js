@@ -50,6 +50,9 @@ const FETCH_JSON_LIMIT = 96000;
 const PAGE_SOURCE_DEFAULT_LIMIT = 6000;
 const PAGE_SOURCE_MIN_LIMIT = 1000;
 const PAGE_SOURCE_MAX_LIMIT = 7000;
+const PAGE_SOURCE_RESULT_MAX_CHARS = 8000;
+const PAGE_SOURCE_RESULT_SAFETY_CHARS = 200;
+const PAGE_SOURCE_ASSET_KINDS = ['stylesheets', 'scripts'];
 
 /**
  * Validate a URL before the agent fetches it.
@@ -287,6 +290,78 @@ export function slicePageSource(text, opts = {}) {
   };
 }
 
+export function constrainPageSourceResult(result, sourceLength = result?.originalLength, maxResultChars = PAGE_SOURCE_RESULT_MAX_CHARS) {
+  const resultLimit = Math.max(0, Math.floor(Number(maxResultChars) || 0));
+  if (!resultLimit) return result;
+
+  let fitted = { ...result, assetUrls: { stylesheets: [], scripts: [] } };
+  const assetBudget = Math.max(0, resultLimit - JSON.stringify(fitted).length - PAGE_SOURCE_RESULT_SAFETY_CHARS);
+  const limitedAssets = limitPageSourceAssetUrls(result?.assetUrls, assetBudget);
+  fitted = { ...result, assetUrls: limitedAssets.assetUrls };
+  if (limitedAssets.omitted.stylesheets || limitedAssets.omitted.scripts) {
+    fitted.assetUrlsOmitted = limitedAssets.omitted;
+  }
+  if (JSON.stringify(fitted).length <= resultLimit) return fitted;
+
+  // Escaped HTML or long metadata can still exceed the agent result cap.
+  // Shorten the delivered source and keep continuation metadata aligned.
+  let best = null;
+  let low = 0;
+  let high = typeof fitted.text === 'string' ? fitted.text.length : 0;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidate = pageSourceResultWithTextLength(fitted, sourceLength, mid);
+    if (JSON.stringify(candidate).length <= resultLimit) {
+      best = candidate;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return best || pageSourceResultWithTextLength({
+    ...fitted,
+    assetUrls: { stylesheets: [], scripts: [] },
+    assetUrlsOmitted: undefined,
+  }, sourceLength, 0);
+}
+
+function limitPageSourceAssetUrls(assetUrls, maxChars) {
+  const out = { stylesheets: [], scripts: [] };
+  const omitted = { stylesheets: 0, scripts: 0 };
+  const budget = Math.max(0, Math.floor(Number(maxChars) || 0));
+  let used = 0;
+  for (const kind of PAGE_SOURCE_ASSET_KINDS) {
+    const urls = Array.isArray(assetUrls?.[kind]) ? assetUrls[kind] : [];
+    for (const url of urls) {
+      const value = String(url || '');
+      if (!value) continue;
+      const cost = JSON.stringify(value).length + (out[kind].length ? 1 : 0);
+      if (used + cost > budget) {
+        omitted[kind] += 1;
+        continue;
+      }
+      out[kind].push(value);
+      used += cost;
+    }
+  }
+  return { assetUrls: out, omitted };
+}
+
+function pageSourceResultWithTextLength(result, sourceLength, textLength) {
+  const offset = Math.max(0, Math.floor(Number(result?.offset) || 0));
+  const totalLength = Math.max(offset, Math.floor(Number(sourceLength ?? result?.originalLength) || 0));
+  const text = String(result?.text || '').slice(0, Math.max(0, Math.floor(Number(textLength) || 0)));
+  const deliveredEnd = offset + text.length;
+  const nextOffset = deliveredEnd < totalLength ? deliveredEnd : null;
+  return {
+    ...result,
+    text,
+    maxChars: text.length,
+    nextOffset,
+    truncated: nextOffset != null,
+  };
+}
+
 /**
  * Fetch the raw server-delivered page source. Unlike fetchUrl(), HTML is not
  * stripped to prose; this intentionally mirrors View Source semantics.
@@ -353,7 +428,7 @@ export async function readPageSource(url, opts = {}, ctx = {}) {
     const source = await res.text();
     const slice = slicePageSource(source, opts);
     const assetUrls = extractPageSourceAssets(source, res.url || targetUrl);
-    return {
+    return constrainPageSourceResult({
       success: true,
       status: res.status,
       contentType,
@@ -367,7 +442,7 @@ export async function readPageSource(url, opts = {}, ctx = {}) {
       originalLength: slice.originalLength,
       assetUrls,
       note: 'Raw server-delivered source only. This is not the live DOM or computed styles; use inspect_element_styles for rendered layout/CSS issues.',
-    };
+    }, source.length);
   } catch (e) {
     return { success: false, error: `read_page_source failed: ${e.message}` };
   }

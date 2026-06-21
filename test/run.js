@@ -35,6 +35,7 @@ const {
   downloadFiles: downloadFilesCh,
   extractPageSourceAssets: extractPageSourceAssetsCh,
   slicePageSource: slicePageSourceCh,
+  constrainPageSourceResult: constrainPageSourceResultCh,
 } = await import(
   'file://' + path.join(ROOT, 'src/chrome/src/network/network-tools.js').replace(/\\/g, '/')
 );
@@ -44,6 +45,7 @@ const {
   downloadFiles: downloadFilesFx,
   extractPageSourceAssets: extractPageSourceAssetsFx,
   slicePageSource: slicePageSourceFx,
+  constrainPageSourceResult: constrainPageSourceResultFx,
 } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/network/network-tools.js').replace(/\\/g, '/')
 );
@@ -1273,6 +1275,48 @@ test('read_page_source helpers extract and resolve stylesheet/script assets', ()
       'https://example.com/js/app.js?debug=true&v=2',
       'https://cdn.example/lib.js',
     ], `${label}: scripts should decode entities, resolve relative URLs, and ignore data URLs`);
+  }
+});
+
+test('read_page_source result budget preserves continuation offsets', () => {
+  const longAsset = (kind, index) => `https://cdn.example/${kind}/${index}/` + 'q'.repeat(180) + `.${kind === 'css' ? 'css' : 'js'}`;
+  const assetUrls = {
+    stylesheets: Array.from({ length: 30 }, (_, i) => longAsset('css', i)),
+    scripts: Array.from({ length: 30 }, (_, i) => longAsset('js', i)),
+  };
+  const makeResult = (text, assets = assetUrls) => ({
+    success: true,
+    status: 200,
+    contentType: 'text/html',
+    url: 'https://example.com/page.html',
+    finalUrl: 'https://example.com/page.html',
+    text,
+    offset: 0,
+    maxChars: 7000,
+    nextOffset: 7000,
+    truncated: true,
+    originalLength: 9000,
+    assetUrls: assets,
+    note: 'Raw server-delivered source only. This is not the live DOM or computed styles; use inspect_element_styles for rendered layout/CSS issues.',
+  });
+
+  for (const [label, constrain] of [
+    ['chrome', constrainPageSourceResultCh],
+    ['firefox', constrainPageSourceResultFx],
+  ]) {
+    const fittedAssets = constrain(makeResult('x'.repeat(7000)), 9000, 8000);
+    assert.ok(JSON.stringify(fittedAssets).length <= 8000, `${label}: asset-heavy result should fit agent cap`);
+    assert.equal(fittedAssets.text.length, 7000, `${label}: asset budgeting should preserve the full source chunk`);
+    assert.equal(fittedAssets.maxChars, 7000, `${label}: maxChars should still match delivered source`);
+    assert.equal(fittedAssets.nextOffset, 7000, `${label}: nextOffset should still follow delivered source`);
+    assert.ok(fittedAssets.assetUrlsOmitted.stylesheets + fittedAssets.assetUrlsOmitted.scripts > 0, `${label}: omitted assets should be reported`);
+
+    const fittedEscaped = constrain(makeResult('"'.repeat(7000), { stylesheets: [], scripts: [] }), 9000, 8000);
+    assert.ok(JSON.stringify(fittedEscaped).length <= 8000, `${label}: escaped source result should fit agent cap`);
+    assert.ok(fittedEscaped.text.length < 7000, `${label}: escaped source may need source-text budgeting`);
+    assert.equal(fittedEscaped.maxChars, fittedEscaped.text.length, `${label}: maxChars should match budgeted source text`);
+    assert.equal(fittedEscaped.nextOffset, fittedEscaped.text.length, `${label}: nextOffset should resume after delivered source text`);
+    assert.equal(fittedEscaped.truncated, true, `${label}: shortened source should advertise continuation`);
   }
 });
 
