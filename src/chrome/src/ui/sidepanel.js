@@ -277,6 +277,7 @@ if (globalThis.chrome?.storage?.onChanged) {
 
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('user-input');
+const inputHighlightEl = document.getElementById('input-highlight');
 const sendBtn = document.getElementById('btn-send');
 const clearBtn = document.getElementById('btn-clear');
 const settingsBtn = document.getElementById('btn-settings');
@@ -289,6 +290,7 @@ const modeAskBtn = document.getElementById('btn-mode-ask');
 const modeActBtn = document.getElementById('btn-mode-act');
 const actWarning = document.getElementById('act-warning');
 const inputArea = document.getElementById('input-area');
+const slashCommandMenuEl = document.getElementById('slash-command-menu');
 const recommendedActionsEl = document.getElementById('recommended-actions');
 const recommendedActionsToggleEl = document.getElementById('recommended-actions-toggle');
 const recommendedActionsListEl = document.getElementById('recommended-actions-list');
@@ -301,6 +303,21 @@ const ASK_PLACEHOLDER_KEYS = [
   'sp.input.placeholder_tip.help',
   'sp.input.placeholder_tip.record',
 ];
+const SLASH_COMMANDS = [
+  { value: '/help', descriptionKey: 'sp.slash.help' },
+  { value: '/schedule', descriptionKey: 'sp.slash.schedule' },
+  { value: '/list-schedules', descriptionKey: 'sp.slash.list_schedules' },
+  { value: '/show-scratchpad', descriptionKey: 'sp.slash.show_scratchpad' },
+  { value: '/allow-api', descriptionKey: 'sp.slash.allow_api' },
+  { value: '/compact', descriptionKey: 'sp.slash.compact' },
+  { value: '/verbose', descriptionKey: 'sp.slash.verbose' },
+  { value: '/reset', descriptionKey: 'sp.slash.reset' },
+  { value: '/screenshot', descriptionKey: 'sp.slash.screenshot' },
+  { value: '/export', descriptionKey: 'sp.slash.export' },
+  { value: '/profile', descriptionKey: 'sp.slash.profile' },
+  { value: '/vision', descriptionKey: 'sp.slash.vision' },
+];
+const SLASH_COMMAND_OPTION_ID_PREFIX = 'slash-command-option-';
 let placeholderRotationIndex = 0;
 let placeholderRotationTimer = null;
 // Tab Recorder (v7.4) — recording is started entirely via the agent's
@@ -319,6 +336,8 @@ let agentMode = 'ask'; // 'ask' or 'act'
 let abortRequested = false;
 let recommendationsRequestId = 0;
 let recommendedActionsCollapsed = false;
+let slashCommandMatches = [];
+let slashCommandSelectedIndex = 0;
 // Notification sound on task completion. Default on; togglable via Settings.
 let notifySoundEnabled = true;
 let notifyAudio = null;
@@ -426,6 +445,8 @@ const TOOL_KEYS = {
   scroll: 'tool.scroll',
   navigate: 'tool.navigate',
   extract_data: 'tool.extract_data',
+  inspect_element_styles: 'tool.inspect_element_styles',
+  read_page_source: 'tool.read_page_source',
   wait_for_element: 'tool.wait_for_element',
   get_selection: 'tool.get_selection',
   new_tab: 'tool.new_tab',
@@ -1237,6 +1258,209 @@ async function testConnection(options = {}) {
   }
 }
 
+function getSlashCommandQuery() {
+  if (!inputEl) return null;
+  const value = inputEl.value;
+  const selectionStart = inputEl.selectionStart ?? value.length;
+  const selectionEnd = inputEl.selectionEnd ?? selectionStart;
+  if (selectionStart !== selectionEnd) return null;
+
+  const beforeCursor = value.slice(0, selectionStart);
+  const afterCursor = value.slice(selectionStart);
+  if (!/^\/[a-z-]*$/i.test(beforeCursor)) return null;
+  if (afterCursor.trim()) return null;
+  return beforeCursor.toLowerCase();
+}
+
+function getRecognizedSlashCommandPrefix(value) {
+  const leadingWhitespace = value.match(/^\s*/)?.[0] || '';
+  const text = value.slice(leadingWhitespace.length);
+  const lowerText = text.toLowerCase();
+  const command = SLASH_COMMANDS.find((candidate) => {
+    if (!lowerText.startsWith(candidate.value)) return false;
+    const next = text.charAt(candidate.value.length);
+    return !next || /\s/.test(next);
+  });
+  if (!command) return null;
+  return {
+    start: leadingWhitespace.length,
+    end: leadingWhitespace.length + command.value.length,
+  };
+}
+
+function syncSlashCommandHighlightScroll() {
+  if (!inputEl || !inputHighlightEl) return;
+  inputHighlightEl.scrollTop = inputEl.scrollTop;
+  inputHighlightEl.scrollLeft = inputEl.scrollLeft;
+}
+
+function updateSlashCommandHighlight() {
+  if (!inputEl || !inputHighlightEl) return;
+  const value = inputEl.value;
+  const commandRange = getRecognizedSlashCommandPrefix(value);
+  if (!commandRange) {
+    inputHighlightEl.textContent = value;
+    syncSlashCommandHighlightScroll();
+    return;
+  }
+
+  const before = escapeHtml(value.slice(0, commandRange.start));
+  const command = escapeHtml(value.slice(commandRange.start, commandRange.end));
+  const after = escapeHtml(value.slice(commandRange.end));
+  inputHighlightEl.innerHTML = `${before}<span class="input-highlight-command">${command}</span>${after}`;
+  syncSlashCommandHighlightScroll();
+}
+
+function scrollSlashCommandOptionIntoView(option) {
+  if (!slashCommandMenuEl || !option) return;
+
+  const menuRect = slashCommandMenuEl.getBoundingClientRect();
+  const optionRect = option.getBoundingClientRect();
+  if (optionRect.top < menuRect.top) {
+    slashCommandMenuEl.scrollTop -= menuRect.top - optionRect.top;
+  } else if (optionRect.bottom > menuRect.bottom) {
+    slashCommandMenuEl.scrollTop += optionRect.bottom - menuRect.bottom;
+  }
+}
+
+function updateSlashCommandActiveOption() {
+  const options = slashCommandMenuEl?.querySelectorAll('.slash-command-option') || [];
+  let selectedOption = null;
+  options.forEach((option, index) => {
+    const selected = index === slashCommandSelectedIndex;
+    option.classList.toggle('selected', selected);
+    option.setAttribute('aria-selected', String(selected));
+    if (selected) selectedOption = option;
+  });
+  const activeId = `${SLASH_COMMAND_OPTION_ID_PREFIX}${slashCommandSelectedIndex}`;
+  inputEl?.setAttribute('aria-activedescendant', activeId);
+  scrollSlashCommandOptionIntoView(selectedOption);
+}
+
+function renderSlashCommandAutocomplete() {
+  if (!slashCommandMenuEl || !inputEl || slashCommandMatches.length === 0) return;
+  slashCommandMenuEl.replaceChildren();
+  slashCommandMenuEl.setAttribute('aria-label', t('sp.slash.commands_label'));
+
+  slashCommandMatches.forEach((command, index) => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.id = `${SLASH_COMMAND_OPTION_ID_PREFIX}${index}`;
+    option.className = 'slash-command-option';
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-selected', String(index === slashCommandSelectedIndex));
+
+    const name = document.createElement('span');
+    name.className = 'slash-command-name';
+    name.textContent = command.value;
+
+    const description = document.createElement('span');
+    description.className = 'slash-command-description';
+    description.textContent = t(command.descriptionKey);
+
+    option.append(name, description);
+    option.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      applySlashCommandCompletion(index);
+    });
+    option.addEventListener('mousemove', () => setSlashCommandSelectedIndex(index));
+    slashCommandMenuEl.appendChild(option);
+  });
+
+  slashCommandMenuEl.classList.remove('hidden');
+  inputEl.setAttribute('aria-autocomplete', 'list');
+  inputEl.setAttribute('aria-controls', slashCommandMenuEl.id);
+  inputEl.setAttribute('aria-expanded', 'true');
+  updateSlashCommandActiveOption();
+}
+
+function hideSlashCommandAutocomplete() {
+  slashCommandMatches = [];
+  slashCommandSelectedIndex = 0;
+  slashCommandMenuEl?.classList.add('hidden');
+  slashCommandMenuEl?.replaceChildren();
+  inputEl?.setAttribute('aria-expanded', 'false');
+  inputEl?.removeAttribute('aria-activedescendant');
+}
+
+function updateSlashCommandAutocomplete() {
+  const query = getSlashCommandQuery();
+  if (!query) {
+    hideSlashCommandAutocomplete();
+    return;
+  }
+
+  const previouslySelected = slashCommandMatches[slashCommandSelectedIndex]?.value;
+  const matches = SLASH_COMMANDS.filter((command) => command.value.startsWith(query));
+  if (matches.length === 0) {
+    hideSlashCommandAutocomplete();
+    return;
+  }
+
+  slashCommandMatches = matches;
+  const selectedIndex = matches.findIndex((command) => command.value === previouslySelected);
+  slashCommandSelectedIndex = selectedIndex >= 0 ? selectedIndex : 0;
+  renderSlashCommandAutocomplete();
+}
+
+function setSlashCommandSelectedIndex(index) {
+  if (slashCommandMatches.length === 0) return;
+  slashCommandSelectedIndex = (index + slashCommandMatches.length) % slashCommandMatches.length;
+  updateSlashCommandActiveOption();
+}
+
+function applySlashCommandCompletion(index = slashCommandSelectedIndex) {
+  const command = slashCommandMatches[index];
+  if (!command || !inputEl) return false;
+  inputEl.value = `${command.value} `;
+  inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+  hideSlashCommandAutocomplete();
+  autoResizeInput();
+  inputEl.focus();
+  return true;
+}
+
+function isExactSlashCommandQuery() {
+  const query = getSlashCommandQuery();
+  return !!query && SLASH_COMMANDS.some((command) => command.value === query);
+}
+
+function handleSlashCommandKeydown(e) {
+  if (!slashCommandMatches.length || slashCommandMenuEl?.classList.contains('hidden')) {
+    return false;
+  }
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    setSlashCommandSelectedIndex(slashCommandSelectedIndex + 1);
+    return true;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    setSlashCommandSelectedIndex(slashCommandSelectedIndex - 1);
+    return true;
+  }
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    return applySlashCommandCompletion();
+  }
+  if (e.key === 'Enter' && !isExactSlashCommandQuery()) {
+    e.preventDefault();
+    return applySlashCommandCompletion();
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    hideSlashCommandAutocomplete();
+    return true;
+  }
+  return false;
+}
+
+function handleInput() {
+  autoResizeInput();
+  updateSlashCommandAutocomplete();
+}
+
 // --- Message Sending ---
 
 // Per-conversation flag for API mutation override (set via /allow-api).
@@ -1290,8 +1514,24 @@ async function parseSlashCommands(text) {
     return text.slice(mApi[0].length).trim();
   }
 
-  // /compact — toggle verbose/compact mode
-  if (/^\/compact\b\s*/i.test(text)) {
+  // /compact — force context compaction for this conversation
+  const mCompact = text.match(/^\/compact\b\s*/i);
+  if (mCompact) {
+    const res = await sendToBackground('compact_conversation', { tabId: currentTabId });
+    if (res?.ok && res.compacted) {
+      addContextCompactedNote({ ...res, manual: true });
+    } else if (res?.ok && res.reason === 'busy') {
+      addMessage('system', t('sp.compact.busy'));
+    } else if (res?.ok) {
+      addMessage('system', t('sp.compact.nothing_to_compact'));
+    } else {
+      addMessage('system', t('sp.compact.failed', { error: res?.error || 'unknown error' }));
+    }
+    return text.slice(mCompact[0].length).trim();
+  }
+
+  // /verbose — toggle verbose/compact tool display
+  if (/^\/verbose\b\s*/i.test(text)) {
     verboseMode = !verboseMode;
     if (verboseBtn) verboseBtn.classList.toggle('active', verboseMode);
     chrome.storage.local.set({ verboseMode }).catch(() => {});
@@ -1414,6 +1654,7 @@ function updateApiBadge() {
 async function sendMessage() {
   let text = inputEl.value.trim();
   if (!text || isProcessing) return;
+  hideSlashCommandAutocomplete();
 
   // Clear input early so slash commands don't linger visually.
   if (text.startsWith('/')) {
@@ -2191,7 +2432,7 @@ function addMessage(role, content) {
 function addContextCompactedNote(data) {
   const note = document.createElement('div');
   note.className = 'context-compacted-note';
-  note.textContent = t('sp.context_compacted');
+  note.textContent = t(data?.manual ? 'sp.context_compacted_manual' : 'sp.context_compacted');
   if (data && data.summarized != null && data.remaining != null) {
     note.title = t('sp.context_compacted_detail', {
       summarized: data.summarized,
@@ -2274,7 +2515,7 @@ chrome.storage.onChanged.addListener((changes) => {
 });
 
 // Page inspection banner — shown when agent starts interacting with the page
-const PAGE_TOOLS = new Set(['read_page', 'get_interactive_elements', 'click', 'type_text', 'scroll', 'extract_data', 'wait_for_element', 'get_selection', 'screenshot']);
+const PAGE_TOOLS = new Set(['read_page', 'read_page_source', 'get_interactive_elements', 'click', 'type_text', 'scroll', 'extract_data', 'inspect_element_styles', 'wait_for_element', 'get_selection', 'screenshot']);
 let inspectionBannerShown = false;
 
 function showInspectionBanner(toolName) {
@@ -2471,6 +2712,7 @@ function truncate(str, len) {
 function autoResizeInput() {
   inputEl.style.height = 'auto';
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
+  updateSlashCommandHighlight();
 }
 
 function getInputPlaceholderKeys() {
@@ -2603,13 +2845,20 @@ stopBtn.addEventListener('click', async () => {
 sendBtn.addEventListener('click', sendMessage);
 
 inputEl.addEventListener('keydown', (e) => {
+  if (handleSlashCommandKeydown(e)) return;
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
   }
 });
 
-inputEl.addEventListener('input', autoResizeInput);
+inputEl.addEventListener('input', handleInput);
+inputEl.addEventListener('scroll', syncSlashCommandHighlightScroll);
+inputEl.addEventListener('focus', updateSlashCommandAutocomplete);
+inputEl.addEventListener('blur', () => setTimeout(hideSlashCommandAutocomplete, 120));
+document.addEventListener('wb-locale-changed', () => {
+  if (slashCommandMatches.length) renderSlashCommandAutocomplete();
+});
 
 clearBtn.addEventListener('click', async () => {
   await sendToBackground('clear_conversation', { tabId: currentTabId });

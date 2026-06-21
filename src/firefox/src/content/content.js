@@ -1710,6 +1710,217 @@
     };
   }
 
+  function inspectElementStyles(params) {
+    params = params || {};
+    const warnings = [];
+    const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+    const maxAncestors = clamp(Math.floor(Number(params.maxAncestors) || 5), 0, 8);
+    const includeAncestors = params.includeAncestors !== false;
+    const includeMatchedRules = params.includeMatchedRules !== false;
+
+    const truncate = (value, max) => {
+      const s = String(value || '');
+      return s.length > max ? s.slice(0, max) + '...' : s;
+    };
+    const classList = (el) => {
+      try { return Array.from(el.classList || []).slice(0, 20); }
+      catch { return []; }
+    };
+    const rectInfo = (el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        x: Math.round(r.x), y: Math.round(r.y),
+        top: Math.round(r.top), left: Math.round(r.left),
+        width: Math.round(r.width), height: Math.round(r.height),
+        right: Math.round(r.right), bottom: Math.round(r.bottom),
+      };
+    };
+    const cssPath = (el) => {
+      const parts = [];
+      for (let node = el; node && node.nodeType === 1 && parts.length < 8; node = node.parentElement) {
+        let part = node.tagName.toLowerCase();
+        if (node.id) {
+          part += '#' + CSS.escape(node.id);
+          parts.unshift(part);
+          break;
+        }
+        const classes = classList(node).slice(0, 3);
+        if (classes.length) part += '.' + classes.map(c => CSS.escape(c)).join('.');
+        const parent = node.parentElement;
+        if (parent) {
+          const same = Array.from(parent.children).filter(c => c.tagName === node.tagName);
+          if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`;
+        }
+        parts.unshift(part);
+      }
+      return parts.join(' > ');
+    };
+    const summarize = (el) => ({
+      tag: (el.tagName || '').toLowerCase(),
+      id: el.id || '',
+      classes: classList(el),
+      path: cssPath(el),
+      inlineStyle: truncate(el.getAttribute('style') || '', 800),
+      textPreview: truncate((el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(), 160),
+      rect: rectInfo(el),
+    });
+    const pickComputed = (el) => {
+      const cs = getComputedStyle(el);
+      const props = [
+        'display', 'box-sizing', 'position', 'top', 'right', 'bottom', 'left',
+        'width', 'min-width', 'max-width', 'height', 'min-height', 'max-height',
+        'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+        'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+        'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+        'overflow', 'overflow-x', 'overflow-y', 'transform',
+        'gap', 'row-gap', 'column-gap',
+        'justify-content', 'align-items', 'align-content', 'justify-items',
+        'flex-direction', 'flex-wrap', 'grid-template-columns', 'grid-template-rows',
+      ];
+      const out = {};
+      for (const p of props) out[p] = cs.getPropertyValue(p);
+      return out;
+    };
+
+    let target = null;
+    let targetMethod = null;
+    const hasRefId = typeof params.ref_id === 'string' && params.ref_id;
+    const selector = typeof params.selector === 'string' ? params.selector.trim() : '';
+    const x = Number(params.x);
+    const y = Number(params.y);
+    const hasCoordinates = Number.isFinite(x) && Number.isFinite(y);
+    const hasTargetParams = !!(hasRefId || selector || hasCoordinates);
+    if (hasRefId) {
+      if (typeof window.__wb_ax_lookup === 'function') {
+        const refTarget = window.__wb_ax_lookup(params.ref_id);
+        if (refTarget && refTarget.nodeType === 1) {
+          target = refTarget;
+          targetMethod = 'ref_id';
+        } else if (refTarget) {
+          warnings.push(`ref_id "${params.ref_id}" resolved to a non-element node.`);
+        } else {
+          warnings.push(`No element found for ref_id "${params.ref_id}".`);
+        }
+      } else {
+        warnings.push('ref_id was provided but accessibility-tree.js is not available.');
+      }
+    }
+    if (!target && selector) {
+      try {
+        const selectorTarget = document.querySelector(selector);
+        if (selectorTarget && selectorTarget.nodeType === 1) {
+          target = selectorTarget;
+          targetMethod = 'selector';
+        } else if (selectorTarget) {
+          warnings.push(`Selector "${selector}" matched a non-element node.`);
+        } else {
+          warnings.push(`No element matched selector "${selector}".`);
+        }
+      } catch (e) {
+        warnings.push(`Invalid selector: ${e.message}`);
+      }
+    }
+    if (!target && hasCoordinates) {
+      const pointTarget = typeof document.elementFromPoint === 'function'
+        ? document.elementFromPoint(x, y)
+        : null;
+      if (pointTarget && pointTarget.nodeType === 1) {
+        target = pointTarget;
+        targetMethod = 'coordinates';
+      } else {
+        warnings.push(`No element found at coordinates (${x}, ${y}).`);
+      }
+    }
+    if (!target && hasTargetParams) {
+      return {
+        success: false,
+        error: 'Could not resolve requested DOM element to inspect.',
+        ref_id: params.ref_id || null,
+        selector: params.selector || null,
+        warnings,
+      };
+    }
+    if (!target) {
+      target = document.body || document.documentElement;
+      targetMethod = 'body';
+    }
+    if (!target || target.nodeType !== 1) {
+      return { success: false, error: 'Could not resolve a DOM element to inspect.' };
+    }
+
+    const matchedRules = [];
+    if (includeMatchedRules) {
+      const visitRules = (rules, sheetInfo) => {
+        for (const rule of Array.from(rules || [])) {
+          if (matchedRules.length >= 30) return;
+          if (rule.type === CSSRule.STYLE_RULE) {
+            let matched = false;
+            try { matched = target.matches(rule.selectorText); } catch { matched = false; }
+            if (matched) {
+              matchedRules.push({
+                selector: rule.selectorText,
+                cssText: truncate(rule.style?.cssText || rule.cssText || '', 1000),
+                href: sheetInfo.href,
+                media: sheetInfo.media,
+              });
+            }
+          } else if (rule.cssRules) {
+            visitRules(rule.cssRules, {
+              href: sheetInfo.href,
+              media: rule.conditionText || sheetInfo.media || '',
+            });
+          }
+        }
+      };
+      for (const sheet of Array.from(document.styleSheets || [])) {
+        try {
+          visitRules(sheet.cssRules, {
+            href: sheet.href || 'inline',
+            media: sheet.media ? Array.from(sheet.media).join(', ') : '',
+          });
+        } catch (e) {
+          if (warnings.length < 10) {
+            warnings.push(`Could not read stylesheet ${sheet.href || 'inline'}: ${e.name || e.message}`);
+          }
+        }
+      }
+    }
+
+    const ancestors = [];
+    if (includeAncestors) {
+      let node = target.parentElement;
+      while (node && ancestors.length < maxAncestors) {
+        ancestors.push({
+          ...summarize(node),
+          computed: pickComputed(node),
+        });
+        node = node.parentElement;
+      }
+    }
+
+    return {
+      success: true,
+      targetMethod,
+      ref_id: params.ref_id || null,
+      selector: params.selector || null,
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        scrollX: Math.round(window.scrollX),
+        scrollY: Math.round(window.scrollY),
+        devicePixelRatio: window.devicePixelRatio || 1,
+      },
+      target: {
+        ...summarize(target),
+        computed: pickComputed(target),
+      },
+      ancestors,
+      matchedRules,
+      warnings,
+      note: 'Live rendered DOM and computed CSS. Use read_page_source only when raw server-delivered HTML is needed.',
+    };
+  }
+
   // --- Message handler ---
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.target !== 'content') return;
@@ -1724,6 +1935,7 @@
       'press_keys': () => pressKeys(msg.params || {}),
       'scroll': () => scrollPage(msg.params || {}),
       'extract_data': () => extractData(msg.params || {}),
+      'inspect_element_styles': () => inspectElementStyles(msg.params || {}),
       'wait_for_element': () => waitForElement(msg.params || {}),
       'get_selection': () => ({ text: window.getSelection()?.toString() || '' }),
       // execute_js — model-supplied JS body, evaluated in the content

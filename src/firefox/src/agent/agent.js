@@ -6,6 +6,7 @@ import { buildGithubStargazerProgressItems } from './observers/github-stargazers
 import { getActiveAdapter, UNIVERSAL_PREAMBLE } from './adapters.js';
 import {
   fetchUrl,
+  readPageSource,
   researchUrl,
   listDownloads,
   readDownloadedFile,
@@ -2918,7 +2919,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return trimmed;
   }
 
-  async _manageContext(tabId, messages, onUpdate = null, costState = null) {
+  async _manageContext(tabId, messages, onUpdate = null, costState = null, { force = false } = {}) {
     const totalChars = this._estimateContextChars(messages);
 
     const tokenBudget = this._contextTokenBudget();
@@ -2952,12 +2953,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // thrash). A genuine token-budget overflow (tooManyTokens) is never
     // suppressed — that path still protects against provider hard-errors.
     const cooldown = this._compactCooldown.get(tabId) || 0;
-    if (cooldown > 0 && !tooManyTokens) {
+    if (!force && cooldown > 0 && !tooManyTokens) {
       this._compactCooldown.set(tabId, cooldown - 1);
-      return;
+      return { compacted: false, reason: 'cooldown', remaining: messages.length, tokens: usedTokens || null, budget: tokenBudget };
     }
 
-    if (!tooManyMessages && !tooManyChars && !tooManyTokens) return; // context is fine
+    if (!force && !tooManyMessages && !tooManyChars && !tooManyTokens) {
+      return { compacted: false, reason: 'not_needed', remaining: messages.length, tokens: usedTokens || null, budget: tokenBudget };
+    }
 
     // Strategy: keep system prompt + ORIGINAL USER TASK (pinned) + summarize
     // old messages + keep recent messages.
@@ -3005,8 +3008,26 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // over-budget request every step until the provider hard-errors. Shrink
       // oversized tool results / messages in place instead — keeps all turns
       // but caps the bloat — then re-measure on the next call.
-      if (tooManyTokens) this._truncateOversizedMessages(tabId, messages);
-      return;
+      if (tooManyTokens) {
+        const truncated = this._truncateOversizedMessages(tabId, messages);
+        if (truncated) {
+          const result = {
+            compacted: true,
+            reason: 'truncated_oversized_messages',
+            truncated: true,
+            remaining: messages.length,
+            tokens: usedTokens || null,
+            budget: tokenBudget,
+          };
+          if (typeof onUpdate === 'function') {
+            try {
+              onUpdate('context_compacted', result);
+            } catch { /* ignore */ }
+          }
+          return result;
+        }
+      }
+      return { compacted: false, reason: tooManyTokens ? 'over_budget_unshrinkable' : 'not_enough_history', remaining: messages.length, tokens: usedTokens || null, budget: tokenBudget };
     }
 
     // Build tool_call_id → name map so each tool result in the summary can be
@@ -3101,6 +3122,33 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         });
       } catch { /* ignore */ }
     }
+
+    return {
+      compacted: true,
+      summarized: oldMessages.length,
+      remaining: messages.length,
+      tokens: usedTokens || null,
+      budget: tokenBudget,
+    };
+  }
+
+  async compactConversation(tabId, onUpdate = null) {
+    if (this._runningTabs.has(tabId)) {
+      return { compacted: false, reason: 'busy', remaining: 0 };
+    }
+    const messages = this.conversations.get(tabId);
+    if (!messages || messages.length <= 1) {
+      return { compacted: false, reason: 'empty', remaining: messages?.length || 0 };
+    }
+
+    const result = await this._manageContext(
+      tabId,
+      messages,
+      onUpdate,
+      this.currentCostState.get(tabId) || null,
+      { force: true }
+    );
+    return result || { compacted: false, reason: 'not_needed', remaining: messages.length };
   }
 
   _truncate(str, len) {
@@ -3888,6 +3936,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (name === 'fetch_url') {
       return await fetchUrl(args.url, args, { tabId });
     }
+    if (name === 'read_page_source') {
+      return await readPageSource(args.url, args, { tabId });
+    }
     if (name === 'research_url') {
       return await researchUrl(args.url, { ...args, sourceTabId: tabId });
     }
@@ -4442,6 +4493,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       'press_keys': 'press_keys',
       'scroll': 'scroll',
       'extract_data': 'extract_data',
+      'inspect_element_styles': 'inspect_element_styles',
       'wait_for_element': 'wait_for_element',
       'wait_for_stable': 'wait_for_stable',
       'get_selection': 'get_selection',
@@ -4505,7 +4557,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           name === 'press_keys' || name === 'scroll' ||
           name === 'hover' || name === 'drag_drop' ||
           name === 'get_accessibility_tree' || name === 'get_interactive_elements' ||
-          name === 'extract_data' || name === 'wait_for_element' || name === 'wait_for_stable' ||
+          name === 'extract_data' || name === 'inspect_element_styles' ||
+          name === 'wait_for_element' || name === 'wait_for_stable' ||
           name === 'get_selection' || name === 'execute_js'
         ) {
           return {

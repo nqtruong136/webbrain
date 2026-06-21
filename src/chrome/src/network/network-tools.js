@@ -71,6 +71,13 @@ function htmlToText(html) {
 // the cap only bites on the long tail.
 const FETCH_TEXT_LIMIT = 192000;
 const FETCH_JSON_LIMIT = 96000;
+const PAGE_SOURCE_DEFAULT_LIMIT = 6000;
+const PAGE_SOURCE_MIN_LIMIT = 1000;
+const PAGE_SOURCE_MAX_LIMIT = 7000;
+const PAGE_SOURCE_RESULT_MAX_CHARS = 8000;
+const PAGE_SOURCE_RESULT_SAFETY_CHARS = 200;
+const PAGE_SOURCE_ASSET_KINDS = ['stylesheets', 'scripts'];
+const PAGE_SOURCE_BODY_MAX_BYTES = 1000000;
 
 /**
  * Validate a URL before the agent fetches it.
@@ -254,6 +261,334 @@ try {
 
 export function getAllowLocalNetwork() {
   return _allowLocalNetwork;
+}
+
+export function extractPageSourceAssets(html, baseUrl) {
+  const out = { stylesheets: [], scripts: [] };
+  const seen = { stylesheets: new Set(), scripts: new Set() };
+  if (!html) return out;
+
+  const add = (kind, raw) => {
+    const value = decodeHtmlAttributeValue(raw).trim();
+    if (!value || /^(data|javascript|mailto|tel):/i.test(value)) return;
+    let resolved = value;
+    try { resolved = new URL(value, baseUrl).href; } catch { /* keep raw */ }
+    if (seen[kind].has(resolved) || out[kind].length >= 50) return;
+    seen[kind].add(resolved);
+    out[kind].push(resolved);
+  };
+
+  const linkRe = /<link\b[^>]*>/gi;
+  let m;
+  while ((m = linkRe.exec(html))) {
+    const tag = m[0];
+    if (!/\brel\s*=\s*(?:"[^"]*\bstylesheet\b[^"]*"|'[^']*\bstylesheet\b[^']*'|[^\s>]*\bstylesheet\b[^\s>]*)/i.test(tag)) continue;
+    const href = tag.match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    add('stylesheets', href && (href[1] || href[2] || href[3]));
+  }
+
+  const scriptRe = /<script\b[^>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi;
+  while ((m = scriptRe.exec(html))) {
+    add('scripts', m[1] || m[2] || m[3]);
+  }
+
+  return out;
+}
+
+const HTML_ATTRIBUTE_ENTITIES = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
+function decodeHtmlAttributeValue(raw) {
+  return String(raw || '').replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi, (match, body) => {
+    if (body[0] === '#') {
+      const codePoint = body[1].toLowerCase() === 'x'
+        ? Number.parseInt(body.slice(2), 16)
+        : Number.parseInt(body.slice(1), 10);
+      if (!Number.isFinite(codePoint)) return match;
+      try { return String.fromCodePoint(codePoint); } catch { return match; }
+    }
+    return HTML_ATTRIBUTE_ENTITIES[body.toLowerCase()] ?? match;
+  });
+}
+
+export function slicePageSource(text, opts = {}) {
+  const source = String(text || '');
+  const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
+  const requested = Number(opts.maxChars) || PAGE_SOURCE_DEFAULT_LIMIT;
+  const maxChars = Math.max(PAGE_SOURCE_MIN_LIMIT, Math.min(PAGE_SOURCE_MAX_LIMIT, Math.floor(requested)));
+  const end = Math.min(source.length, offset + maxChars);
+  return {
+    text: source.slice(offset, end),
+    offset,
+    maxChars,
+    nextOffset: end < source.length ? end : null,
+    truncated: end < source.length,
+    originalLength: source.length,
+  };
+}
+
+export function isPageSourceTextContentType(contentType) {
+  const type = String(contentType || '').split(';', 1)[0].trim().toLowerCase();
+  if (!type) return true;
+  return type.startsWith('text/') ||
+    type.includes('html') ||
+    type.includes('xml') ||
+    type.includes('javascript') ||
+    type.includes('json') ||
+    type.includes('markdown') ||
+    type.includes('csv');
+}
+
+export function validatePageSourceResponseHeaders(headers, maxBytes = PAGE_SOURCE_BODY_MAX_BYTES) {
+  const contentType = String(headers?.get?.('content-type') || '').toLowerCase();
+  const sizeBytes = parseContentLength(headers?.get?.('content-length'));
+  const limit = Math.max(0, Math.floor(Number(maxBytes) || 0));
+  if (!isPageSourceTextContentType(contentType)) {
+    return {
+      ok: false,
+      contentType,
+      sizeBytes,
+      error: `read_page_source only supports HTML/text responses; got ${contentType || 'non-text content'}. Use download_file for binary resources.`,
+    };
+  }
+  if (limit && sizeBytes != null && sizeBytes > limit) {
+    return {
+      ok: false,
+      contentType,
+      sizeBytes,
+      error: `read_page_source response is too large (${sizeBytes} bytes; max ${limit}). Use fetch_url for extracted text or download_file for the raw resource.`,
+    };
+  }
+  return { ok: true, contentType, sizeBytes };
+}
+
+export async function readPageSourceResponseText(res, maxBytes = PAGE_SOURCE_BODY_MAX_BYTES) {
+  const limit = Math.max(0, Math.floor(Number(maxBytes) || 0));
+  if (!res?.body || typeof res.body.getReader !== 'function') {
+    const text = await res.text();
+    const bytesRead = new TextEncoder().encode(text).length;
+    return { text, bytesRead, exceeded: !!(limit && bytesRead > limit) };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let bytesRead = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+    if (limit && bytesRead + chunk.byteLength > limit) {
+      const allowed = Math.max(0, limit - bytesRead);
+      if (allowed > 0) {
+        text += decoder.decode(chunk.slice(0, allowed), { stream: true });
+      }
+      try { await reader.cancel(); } catch {}
+      return { text: text + decoder.decode(), bytesRead: limit, exceeded: true };
+    }
+    bytesRead += chunk.byteLength;
+    text += decoder.decode(chunk, { stream: true });
+  }
+  return { text: text + decoder.decode(), bytesRead, exceeded: false };
+}
+
+function parseContentLength(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+export function constrainPageSourceResult(result, sourceLength = result?.originalLength, maxResultChars = PAGE_SOURCE_RESULT_MAX_CHARS) {
+  const resultLimit = Math.max(0, Math.floor(Number(maxResultChars) || 0));
+  if (!resultLimit) return result;
+
+  let fitted = { ...result, assetUrls: { stylesheets: [], scripts: [] } };
+  const assetBudget = Math.max(0, resultLimit - JSON.stringify(fitted).length - PAGE_SOURCE_RESULT_SAFETY_CHARS);
+  const limitedAssets = limitPageSourceAssetUrls(result?.assetUrls, assetBudget);
+  fitted = { ...result, assetUrls: limitedAssets.assetUrls };
+  if (limitedAssets.omitted.stylesheets || limitedAssets.omitted.scripts) {
+    fitted.assetUrlsOmitted = limitedAssets.omitted;
+  }
+  if (JSON.stringify(fitted).length <= resultLimit) return fitted;
+
+  // Escaped HTML or long metadata can still exceed the agent result cap.
+  // Shorten the delivered source and keep continuation metadata aligned.
+  let best = null;
+  let low = 0;
+  let high = typeof fitted.text === 'string' ? fitted.text.length : 0;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidate = pageSourceResultWithTextLength(fitted, sourceLength, mid);
+    if (JSON.stringify(candidate).length <= resultLimit) {
+      best = candidate;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return best || pageSourceResultWithTextLength({
+    ...fitted,
+    assetUrls: { stylesheets: [], scripts: [] },
+    assetUrlsOmitted: undefined,
+  }, sourceLength, 0);
+}
+
+function limitPageSourceAssetUrls(assetUrls, maxChars) {
+  const out = { stylesheets: [], scripts: [] };
+  const omitted = { stylesheets: 0, scripts: 0 };
+  const budget = Math.max(0, Math.floor(Number(maxChars) || 0));
+  let used = 0;
+  for (const kind of PAGE_SOURCE_ASSET_KINDS) {
+    const urls = Array.isArray(assetUrls?.[kind]) ? assetUrls[kind] : [];
+    for (const url of urls) {
+      const value = String(url || '');
+      if (!value) continue;
+      const cost = JSON.stringify(value).length + (out[kind].length ? 1 : 0);
+      if (used + cost > budget) {
+        omitted[kind] += 1;
+        continue;
+      }
+      out[kind].push(value);
+      used += cost;
+    }
+  }
+  return { assetUrls: out, omitted };
+}
+
+function pageSourceResultWithTextLength(result, sourceLength, textLength) {
+  const offset = Math.max(0, Math.floor(Number(result?.offset) || 0));
+  const totalLength = Math.max(offset, Math.floor(Number(sourceLength ?? result?.originalLength) || 0));
+  const text = String(result?.text || '').slice(0, Math.max(0, Math.floor(Number(textLength) || 0)));
+  const deliveredEnd = offset + text.length;
+  const nextOffset = deliveredEnd < totalLength ? deliveredEnd : null;
+  return {
+    ...result,
+    text,
+    maxChars: text.length,
+    nextOffset,
+    truncated: nextOffset != null,
+  };
+}
+
+/**
+ * Fetch the raw server-delivered page source. Unlike fetchUrl(), HTML is not
+ * stripped to prose; this intentionally mirrors View Source semantics.
+ */
+export async function readPageSource(url, opts = {}, ctx = {}) {
+  let targetUrl = String(url || '').trim();
+  if (!targetUrl && ctx && ctx.tabId != null) {
+    try {
+      const tab = await chrome.tabs.get(ctx.tabId);
+      targetUrl = tab?.url || '';
+    } catch {}
+  }
+  if (!targetUrl) return { success: false, error: 'read_page_source: no url provided and could not read the active tab URL.' };
+
+  const allowLocal = getAllowLocalNetwork();
+  const v = validateFetchUrl(targetUrl, { allowLocalNetwork: allowLocal });
+  if (!v.ok) return { success: false, error: v.error };
+
+  let attachCookies = false;
+  let tabRegDomain = null;
+  if (ctx && ctx.tabId != null) {
+    try {
+      const tab = await chrome.tabs.get(ctx.tabId);
+      if (tab && tab.url) {
+        try {
+          const tabHost = new URL(tab.url).hostname;
+          const fetchHost = new URL(targetUrl).hostname;
+          tabRegDomain = registrableDomain(tabHost);
+          if (tabRegDomain && tabRegDomain === registrableDomain(fetchHost)) {
+            attachCookies = true;
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  try {
+    const res = await fetch(targetUrl, {
+      method: 'GET',
+      credentials: attachCookies ? 'include' : 'omit',
+      redirect: 'follow',
+    });
+
+    if (res.url && res.url !== targetUrl) {
+      const v2 = validateFetchUrl(res.url, { allowLocalNetwork: allowLocal });
+      if (!v2.ok) {
+        return { success: false, error: `Redirect to blocked URL: ${v2.error}`, finalUrl: res.url };
+      }
+      // Reject cross-eTLD+1 redirects unconditionally. Cookie attachment makes
+      // cross-domain redirects dangerous (cookies sent to wrong host), but even
+      // without cookies a silent host change is surprising and may expose data
+      // from an unintended host. Surface finalUrl so the caller can re-invoke.
+      try {
+        const initialRegDomain = registrableDomain(new URL(targetUrl).hostname);
+        const finalRegDomain = registrableDomain(new URL(res.url).hostname);
+        if (initialRegDomain && finalRegDomain && finalRegDomain !== initialRegDomain) {
+          return {
+            success: false,
+            error: `Redirect crossed registrable-domain boundary (${initialRegDomain} → ${finalRegDomain}); body discarded for safety. Re-call with the explicit final URL if needed.`,
+            finalUrl: res.url,
+          };
+        }
+      } catch {}
+    }
+
+    const headerCheck = validatePageSourceResponseHeaders(res.headers);
+    if (!headerCheck.ok) {
+      return {
+        success: false,
+        status: res.status,
+        contentType: headerCheck.contentType,
+        url: targetUrl,
+        finalUrl: res.url || targetUrl,
+        sizeBytes: headerCheck.sizeBytes,
+        error: headerCheck.error,
+      };
+    }
+
+    const read = await readPageSourceResponseText(res);
+    if (read.exceeded) {
+      return {
+        success: false,
+        status: res.status,
+        contentType: headerCheck.contentType,
+        url: targetUrl,
+        finalUrl: res.url || targetUrl,
+        sizeBytes: read.bytesRead,
+        error: `read_page_source response exceeded ${PAGE_SOURCE_BODY_MAX_BYTES} bytes while reading. Use fetch_url for extracted text or download_file for the raw resource.`,
+      };
+    }
+
+    const contentType = headerCheck.contentType;
+    const source = read.text;
+    const slice = slicePageSource(source, opts);
+    const assetUrls = extractPageSourceAssets(source, res.url || targetUrl);
+    return constrainPageSourceResult({
+      success: true,
+      status: res.status,
+      contentType,
+      url: targetUrl,
+      finalUrl: res.url || targetUrl,
+      text: slice.text,
+      offset: slice.offset,
+      maxChars: slice.maxChars,
+      nextOffset: slice.nextOffset,
+      truncated: slice.truncated,
+      originalLength: slice.originalLength,
+      assetUrls,
+      note: 'Raw server-delivered source only. This is not the live DOM or computed styles; use inspect_element_styles for rendered layout/CSS issues.',
+    }, source.length);
+  } catch (e) {
+    return { success: false, error: `read_page_source failed: ${e.message}` };
+  }
 }
 
 /**

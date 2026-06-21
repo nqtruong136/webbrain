@@ -205,7 +205,8 @@ WebBrain accepte les commandes slash en tant que premier élément d'une ligne d
 |---------|--------------|
 | `/help` | Affiche la liste des commandes disponibles |
 | `/allow-api` | **Dérogation de mutation API par conversation.** Lève la restriction UI-d'abord afin que l'agent puisse utiliser POST/PUT/PATCH/DELETE via `fetch_url` lorsque l'UI échoue. Un badge apparaît pendant l'activation ; il s'efface au `/reset`. |
-| `/compact` | Bascule l'affichage des outils verbeux/compact (identique au bouton de la barre d'outils) |
+| `/compact` | Force le compactage du contexte pour la conversation actuelle |
+| `/verbose` | Bascule l'affichage des outils verbeux/compact (identique au bouton de la barre d'outils) |
 | `/reset` | Efface la conversation et tous les indicateurs par conversation |
 | `/screenshot` | Capture l'onglet visible et affiche l'image en ligne dans le chat |
 | `/export` | Télécharge la conversation actuelle sous forme de fichier Markdown |
