@@ -172,6 +172,8 @@ export default {
   'tool.scroll': 'Scrolling',
   'tool.navigate': 'Navigating',
   'tool.extract_data': 'Extracting data',
+  'tool.inspect_element_styles': 'Inspecting styles',
+  'tool.read_page_source': 'Reading page source',
   'tool.wait_for_element': 'Waiting for element',
   'tool.get_selection': 'Reading selection',
   'tool.execute_js': 'Running script',

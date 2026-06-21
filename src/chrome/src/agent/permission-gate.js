@@ -68,7 +68,9 @@ export const UNTRUSTED_CONTENT_TOOLS = new Set([
   'fetch_url',
   'research_url',
   'read_pdf',
+  'read_page_source',
   'read_downloaded_file',
+  'inspect_element_styles',
   // click/type_text can return page-derived labels, option text, aria-labels,
   // and form-state hints (not just control status). Treat them as data.
   'click',
@@ -166,6 +168,11 @@ export function capabilityFor(name, args) {
     // (worse: it sends auth cookies). Gate per destination host when an
     // explicit url is given. With no url it reads the ACTIVE TAB's own PDF (the
     // page the user is already on), not an arbitrary request → ungated.
+    return args.url ? Capability.NETWORK : null;
+  }
+  if (name === 'read_page_source') {
+    // Same policy as read_pdf: no-url reads the active tab; explicit url is
+    // arbitrary network egress and must be permission-checked.
     return args.url ? Capability.NETWORK : null;
   }
   if (name === 'screenshot' || name === 'full_page_screenshot') {

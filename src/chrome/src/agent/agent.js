@@ -5,6 +5,7 @@ import { cdpClient } from '../cdp/cdp-client.js';
 import { getActiveAdapter, UNIVERSAL_PREAMBLE } from './adapters.js';
 import {
   fetchUrl,
+  readPageSource,
   researchUrl,
   listDownloads,
   readDownloadedFile,
@@ -4457,6 +4458,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (name === 'fetch_url') {
       return await fetchUrl(args.url, args, { tabId });
     }
+    if (name === 'read_page_source') {
+      return await readPageSource(args.url, args, { tabId });
+    }
     if (name === 'research_url') {
       return await researchUrl(args.url, { ...args, sourceTabId: tabId });
     }
@@ -6865,6 +6869,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       'press_keys': 'press_keys',
       'scroll': 'scroll',
       'extract_data': 'extract_data',
+      'inspect_element_styles': 'inspect_element_styles',
       'wait_for_element': 'wait_for_element',
       'wait_for_stable': 'wait_for_stable',
       'get_selection': 'get_selection',
@@ -6904,7 +6909,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           name === 'type_text' || name === 'type_ax' || name === 'set_field' ||
           name === 'press_keys' || name === 'scroll' ||
           name === 'get_accessibility_tree' || name === 'get_interactive_elements' ||
-          name === 'extract_data' || name === 'wait_for_element' || name === 'wait_for_stable' ||
+          name === 'extract_data' || name === 'inspect_element_styles' ||
+          name === 'wait_for_element' || name === 'wait_for_stable' ||
           name === 'get_selection'
         ) {
           return {
