@@ -2923,6 +2923,14 @@ test('progress ledger reconciles GitHub stargazer Follow and Unfollow buttons', 
       ['ryan-the-crayon', 'skipped', 'excluded by user request'],
     ]);
 
+    const laterFollow = buildItems([
+      { id: 'ChJus', label: 'ChJus', action: 'collect_email', status: 'processed' },
+    ], page);
+    assert.deepEqual(
+      laterFollow.items.filter(item => item.label === 'ChJus').map(item => [item.id, item.action, item.status]),
+      [['follow:chjus', 'follow', 'pending']],
+    );
+
     const completedAfterObservation = buildItems([
       {
         id: 'octocat',

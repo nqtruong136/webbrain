@@ -33,6 +33,16 @@ function rowKey(row) {
   return sanitizeText(row?.id, 180).toLowerCase();
 }
 
+function rowAction(row) {
+  return sanitizeText(row?.action, 80).toLowerCase();
+}
+
+function followItemId(username, existing) {
+  return existing && rowAction(existing) && rowAction(existing) !== 'follow'
+    ? `follow:${usernameKey(username) || sanitizeText(username, 80)}`
+    : username;
+}
+
 export function parseGithubStargazerFollowButtons(pageContent = '') {
   const text = String(pageContent || '');
   const buttons = [];
@@ -60,6 +70,7 @@ export function buildGithubStargazerProgressItems(rows = [], pageContent = '', o
     .map(usernameKey)
     .filter(Boolean));
   const existingByKey = new Map();
+  const existingFollowByKey = new Map();
   for (const row of Array.isArray(rows) ? rows : []) {
     const keys = [
       rowKey(row),
@@ -68,6 +79,9 @@ export function buildGithubStargazerProgressItems(rows = [], pageContent = '', o
     ].filter(Boolean);
     for (const key of keys) {
       if (!existingByKey.has(key)) existingByKey.set(key, row);
+      if (rowAction(row) === 'follow' && !existingFollowByKey.has(key)) {
+        existingFollowByKey.set(key, row);
+      }
     }
   }
 
@@ -83,10 +97,11 @@ export function buildGithubStargazerProgressItems(rows = [], pageContent = '', o
     const key = usernameKey(button.username);
     if (!key) continue;
     const existing = existingByKey.get(key);
+    const existingFollow = existingFollowByKey.get(key);
     if (excluded.has(key)) {
-      if (!existing || !isTerminalLedgerStatus(existing.status)) {
+      if (!existingFollow || !isTerminalLedgerStatus(existingFollow.status)) {
         items.push({
-          id: button.username,
+          id: existingFollow?.id || followItemId(button.username, existing),
           label: button.username,
           action: 'follow',
           status: 'skipped',
@@ -99,28 +114,28 @@ export function buildGithubStargazerProgressItems(rows = [], pageContent = '', o
     }
 
     if (button.state === 'not_followed') {
-      if (existing && isTerminalLedgerStatus(existing.status)) continue;
+      if (existingFollow && isTerminalLedgerStatus(existingFollow.status)) continue;
       items.push({
-        id: button.username,
+        id: existingFollow?.id || followItemId(button.username, existing),
         label: button.username,
         action: 'follow',
-        status: existing?.status === 'acted' ? 'acted' : 'pending',
+        status: existingFollow?.status === 'acted' ? 'acted' : 'pending',
         url: `/${button.username}`,
         fields: { followState: 'not_followed', refId: button.refId },
       });
-      if (!existing) stats.addedPending += 1;
+      if (!existingFollow) stats.addedPending += 1;
       continue;
     }
 
-    const existingFollowState = sanitizeText(existing?.fields?.followState, 80).toLowerCase();
+    const existingFollowState = sanitizeText(existingFollow?.fields?.followState, 80).toLowerCase();
     if (
-      existing?.action === 'follow'
-      && normalizeStatus(existing.status, 'pending') === 'pending'
+      existingFollow
+      && normalizeStatus(existingFollow.status, 'pending') === 'pending'
       && existingFollowState !== 'not_followed'
     ) {
       items.push({
-        id: existing.id || button.username,
-        label: existing.label || button.username,
+        id: existingFollow.id || button.username,
+        label: existingFollow.label || button.username,
         action: 'follow',
         status: 'skipped',
         reason: 'already followed before this task',
