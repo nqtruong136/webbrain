@@ -578,6 +578,31 @@ test('Firefox: type_text rejects non-text input after it receives focus', async 
   }
 });
 
+test('Firefox: type_text rejects disabled indexed text input fallback', async (page) => {
+  await setupFirefoxHtml(page, `<!doctype html>
+    <style>
+      body { margin: 0; font: 16px sans-serif; }
+      #disabled-field { position: absolute; left: 20px; top: 20px; width: 220px; height: 40px; }
+    </style>
+    <input id="disabled-field" value="Locked" disabled>`);
+
+  const elements = await call(page, 'get_interactive_elements_cdp', {});
+  const disabledIndex = elements.findIndex(e => e.id === 'disabled-field');
+  if (disabledIndex < 0) throw new Error(`expected disabled field in elements, got: ${JSON.stringify(elements)}`);
+
+  const click = await call(page, 'click', { index: disabledIndex });
+  if (!click?.success) throw new Error(`expected disabled field click path to complete, got: ${JSON.stringify(click)}`);
+
+  const activeTag = await page.evaluate(() => document.activeElement?.tagName || '');
+  if (activeTag === 'INPUT') throw new Error('disabled input should not receive focus');
+
+  const rejected = await call(page, 'type', { text: ' hacked' });
+  if (rejected?.success) throw new Error(`expected disabled input type failure, got: ${JSON.stringify(rejected)}`);
+
+  const value = await page.evaluate(() => document.getElementById('disabled-field').value);
+  if (value !== 'Locked') throw new Error(`expected disabled value to remain unchanged, got: ${value}`);
+});
+
 // ─── main ─────────────────────────────────────────────────────────────────
 // Social media downloader focus safety
 test('SMD: Instagram auto mode downloads the open dialog image, not the feed', async (page) => {

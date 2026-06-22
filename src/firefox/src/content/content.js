@@ -745,7 +745,16 @@
     return !_NON_TEXT_INPUT_TYPES.has(inputType);
   }
 
+  function _isDisabledEditable(el) {
+    return !!(el && (
+      el.disabled ||
+      el.getAttribute?.('aria-disabled') === 'true' ||
+      el.matches?.(':disabled')
+    ));
+  }
+
   function _isTypeableElement(el) {
+    if (!el || _isDisabledEditable(el)) return false;
     return !!(el && (
       el.isContentEditable ||
       _isTextTypeableInput(el) ||
