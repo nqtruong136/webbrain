@@ -403,6 +403,72 @@ test('Firefox: non-modal dialogs do not hide full indexed page controls', async 
   }
 });
 
+test('Firefox: native non-modal dialog does not hide full indexed page controls', async (page) => {
+  await setupFirefoxHtml(page, `<!doctype html>
+    <style>
+      body { margin: 0; font: 16px sans-serif; }
+      #page-action { position: absolute; left: 20px; top: 20px; width: 160px; height: 40px; }
+      #native-help { position: absolute; left: 20px; top: 90px; width: 220px; padding: 16px; border: 1px solid #888; background: white; }
+      #help-action { width: 160px; height: 40px; }
+    </style>
+    <button id="page-action" onclick="window.__pageClicked = true">Save page</button>
+    <dialog id="native-help" open>
+      <button id="help-action" onclick="window.__helpClicked = true">Open help</button>
+    </dialog>`);
+
+  const elements = await call(page, 'get_interactive_elements_cdp', {});
+  const pageIndex = elements.findIndex(e => e.id === 'page-action');
+  const helpIndex = elements.findIndex(e => e.id === 'help-action');
+  if (pageIndex < 0 || helpIndex < 0) {
+    throw new Error(`expected page and native non-modal dialog controls in elements, got: ${JSON.stringify(elements)}`);
+  }
+
+  const click = await call(page, 'click', { index: pageIndex });
+  if (!click?.success) throw new Error(`expected page action click success, got: ${JSON.stringify(click)}`);
+
+  const state = await page.evaluate(() => ({
+    page: window.__pageClicked === true,
+    help: window.__helpClicked === true,
+  }));
+  if (!state.page || state.help) {
+    throw new Error(`expected only page action to run, got: ${JSON.stringify(state)}`);
+  }
+});
+
+test('Firefox: native modal dialog scopes full indexed page controls', async (page) => {
+  await setupFirefoxHtml(page, `<!doctype html>
+    <style>
+      body { margin: 0; font: 16px sans-serif; }
+      #page-action { position: absolute; left: 20px; top: 20px; width: 160px; height: 40px; }
+      #native-modal { width: 220px; padding: 16px; border: 1px solid #888; background: white; }
+      #modal-action { width: 160px; height: 40px; }
+    </style>
+    <button id="page-action" onclick="window.__pageClicked = true">Save page</button>
+    <dialog id="native-modal">
+      <button id="modal-action" onclick="window.__modalClicked = true">Confirm</button>
+    </dialog>
+    <script>document.getElementById('native-modal').showModal();</script>`);
+
+  const elements = await call(page, 'get_interactive_elements_cdp', {});
+  if (elements.some(e => e.id === 'page-action')) {
+    throw new Error(`expected page action to be filtered behind native modal, got: ${JSON.stringify(elements)}`);
+  }
+  if (elements?.[0]?.id !== 'modal-action') {
+    throw new Error(`expected modal action to be first actionable index, got: ${JSON.stringify(elements?.[0])}`);
+  }
+
+  const click = await call(page, 'click', { index: 0 });
+  if (!click?.success) throw new Error(`expected modal action click success, got: ${JSON.stringify(click)}`);
+
+  const state = await page.evaluate(() => ({
+    page: window.__pageClicked === true,
+    modal: window.__modalClicked === true,
+  }));
+  if (state.page || !state.modal) {
+    throw new Error(`expected only modal action to run, got: ${JSON.stringify(state)}`);
+  }
+});
+
 test('Firefox: type_text rejects non-text input after it receives focus', async (page) => {
   await setupFirefoxHtml(page, `<!doctype html>
     <style>

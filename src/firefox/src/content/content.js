@@ -375,6 +375,14 @@
     }
   }
 
+  function _isNativeBlockingDialog(dialog) {
+    if (!dialog) return false;
+    try {
+      if (dialog.matches(':modal')) return true;
+    } catch {}
+    return dialog.getAttribute('aria-modal') === 'true';
+  }
+
   /**
    * Detect the topmost modal/overlay/dialog on the page. Returns the modal
    * container element, or null if no overlay is detected.
@@ -382,7 +390,9 @@
   function _findTopmostModal(opts = {}) {
     const includeNonModalDialogs = opts.includeNonModalDialogs !== false;
     const dialogs = document.querySelectorAll('dialog[open]');
-    if (dialogs.length > 0) return dialogs[dialogs.length - 1];
+    for (let i = dialogs.length - 1; i >= 0; i--) {
+      if (includeNonModalDialogs || _isNativeBlockingDialog(dialogs[i])) return dialogs[i];
+    }
 
     const ariaModals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
     for (let i = ariaModals.length - 1; i >= 0; i--) {
