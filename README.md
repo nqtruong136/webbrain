@@ -205,7 +205,8 @@ WebBrain accepts slash commands as the first thing on a line in the input box. T
 |---------|--------------|
 | `/help` | Show the list of available commands |
 | `/allow-api` | **Per-conversation API mutation override.** Lifts the UI-first restriction so the agent may use POST/PUT/PATCH/DELETE via `fetch_url` when UI is failing. Badge appears while active; clears on `/reset`. |
-| `/compact` | Toggle verbose/compact tool display (same as the toolbar button) |
+| `/compact` | Force context compaction for the current conversation |
+| `/verbose` | Toggle verbose/compact tool display (same as the toolbar button) |
 | `/reset` | Clear the conversation and all per-conversation flags |
 | `/screenshot` | Capture the visible tab and display the image inline in chat |
 | `/export` | Download the current conversation as a Markdown file |

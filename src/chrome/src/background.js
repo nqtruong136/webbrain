@@ -53,8 +53,10 @@ setRecorderProviderManager(providerManager);
 // Load maxSteps setting
 async function loadMaxSteps() {
   const stored = await chrome.storage.local.get('maxAgentSteps');
-  if (stored.maxAgentSteps) agent.maxSteps = stored.maxAgentSteps;
+  if (stored.maxAgentSteps === 0) agent.maxSteps = Infinity;
+  else if (stored.maxAgentSteps) agent.maxSteps = stored.maxAgentSteps;
 }
+loadMaxSteps();
 
 async function loadAutoScreenshot() {
   const stored = await chrome.storage.local.get('autoScreenshot');
@@ -113,7 +115,7 @@ chrome.runtime.onStartup?.addListener(async () => {
 // Listen for setting changes
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.maxAgentSteps) {
-    agent.maxSteps = changes.maxAgentSteps.newValue;
+    agent.maxSteps = changes.maxAgentSteps.newValue === 0 ? Infinity : changes.maxAgentSteps.newValue;
   }
   if (changes.autoScreenshot) {
     agent.autoScreenshot = changes.autoScreenshot.newValue;
@@ -548,6 +550,12 @@ async function handleMessage(msg, sender) {
         agent.clearConversation(tabId);
       }
       return { ok: true };
+    }
+
+    case 'compact_conversation': {
+      const tabId = msg.tabId || sender.tab?.id;
+      if (!tabId) return { ok: false, error: 'No tab ID' };
+      return { ok: true, ...(await agent.compactConversation(tabId)) };
     }
 
     case 'abort': {
