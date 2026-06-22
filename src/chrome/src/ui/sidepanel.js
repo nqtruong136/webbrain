@@ -313,6 +313,7 @@ const SLASH_COMMANDS = [
   { value: '/verbose', descriptionKey: 'sp.slash.verbose' },
   { value: '/reset', descriptionKey: 'sp.slash.reset' },
   { value: '/screenshot', descriptionKey: 'sp.slash.screenshot' },
+  { value: '/record', descriptionKey: 'sp.slash.record' },
   { value: '/export', descriptionKey: 'sp.slash.export' },
   { value: '/profile', descriptionKey: 'sp.slash.profile' },
   { value: '/vision', descriptionKey: 'sp.slash.vision' },
@@ -1570,6 +1571,18 @@ async function parseSlashCommands(text) {
       }
     } catch (e) {
       addMessage('system', t('sp.screenshot.error', { msg: e.message }));
+    }
+    return '';
+  }
+
+  // /record — start recording the current tab without LLM involvement
+  if (/^\/record\b\s*/i.test(text)) {
+    const res = await sendToBackground('start_tab_recording', {
+      tabId: currentTabId,
+      options: { video: true, mic: true },
+    });
+    if (!res?.ok) {
+      addMessage('system', t('sp.record.error', { error: res?.error || 'unknown' }));
     }
     return '';
   }

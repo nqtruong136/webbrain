@@ -42,6 +42,7 @@ export default {
   'sp.slash.verbose': 'Toggle verbose or compact tool display',
   'sp.slash.reset': 'Clear this conversation',
   'sp.slash.screenshot': 'Capture the current tab',
+  'sp.slash.record': 'Start recording the current tab',
   'sp.slash.export': 'Download this conversation as Markdown',
   'sp.slash.profile': 'Toggle profile auto-fill',
   'sp.slash.vision': 'Toggle vision mode on the active provider',
