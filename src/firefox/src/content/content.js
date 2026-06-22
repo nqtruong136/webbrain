@@ -662,6 +662,47 @@
     return el;
   }
 
+  function _shadowAwareElementFromPoint(x, y) {
+    let topmost = document.elementFromPoint(x, y);
+    const seen = new Set();
+    while (topmost && topmost.shadowRoot && !seen.has(topmost)) {
+      seen.add(topmost);
+      let inner = null;
+      try { inner = topmost.shadowRoot.elementFromPoint(x, y); } catch {}
+      if (!inner || inner === topmost) break;
+      topmost = inner;
+    }
+    return topmost;
+  }
+
+  function _isComposedAncestor(ancestor, node) {
+    let cur = node;
+    while (cur) {
+      if (cur === ancestor) return true;
+      const parent = cur.parentNode;
+      if (parent) {
+        cur = (typeof ShadowRoot !== 'undefined' && parent instanceof ShadowRoot)
+          ? parent.host
+          : parent;
+      } else {
+        const root = cur.getRootNode?.();
+        cur = (typeof ShadowRoot !== 'undefined' && root instanceof ShadowRoot)
+          ? root.host
+          : null;
+      }
+    }
+    return false;
+  }
+
+  function _hitTestMatchesTarget(target, topmost) {
+    if (!target || !topmost) return false;
+    if (target === topmost) return true;
+    try {
+      if (target.contains(topmost) || topmost.contains(target)) return true;
+    } catch {}
+    return _isComposedAncestor(target, topmost) || _isComposedAncestor(topmost, target);
+  }
+
   /**
    * Click an element by selector or coordinates.
    */
@@ -1004,8 +1045,8 @@
         if (r.width >= 1 && r.height >= 1 && r.top >= 0 && r.left >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth) {
           const cx = Math.round(r.left + r.width / 2);
           const cy = Math.round(r.top + r.height / 2);
-          const topmost = document.elementFromPoint(cx, cy);
-          if (topmost && topmost !== el && !el.contains(topmost) && !topmost.contains(el)) {
+          const topmost = _shadowAwareElementFromPoint(cx, cy);
+          if (topmost && !_hitTestMatchesTarget(el, topmost)) {
             let blockerInfo = topmost.tagName.toLowerCase();
             const role = topmost.getAttribute && topmost.getAttribute('role');
             if (role) blockerInfo += `[role=${role}]`;

@@ -272,6 +272,36 @@ test('Firefox: click({index}) matches full interactive ordering and preserves ty
   if (value !== 'mchiang0610') throw new Error(`expected typed value, got: ${value}`);
 });
 
+test('Firefox: indexed shadow-DOM click passes occlusion hit test', async (page) => {
+  await setupFirefoxHtml(page, `<!doctype html>
+    <style>
+      body { margin: 0; font: 16px sans-serif; }
+      #host { position: absolute; left: 20px; top: 20px; width: 180px; height: 44px; }
+      #late { position: absolute; left: 20px; top: 160px; width: 120px; height: 40px; }
+    </style>
+    <div id="host"></div>
+    <button id="late">Later button</button>
+    <script>
+      const root = document.getElementById('host').attachShadow({ mode: 'open' });
+      root.innerHTML = '<style>button { width: 180px; height: 44px; }</style><button id="shadow-button">Shadow Action</button>';
+      root.getElementById('shadow-button').addEventListener('click', () => { window.__shadowClicked = true; });
+    </script>`);
+
+  const elements = await call(page, 'get_interactive_elements_cdp', {});
+  const shadowIndex = elements.findIndex(e => e.text === 'Shadow Action');
+  if (shadowIndex < 0) throw new Error(`expected shadow button in elements, got: ${JSON.stringify(elements)}`);
+  if (elements[shadowIndex].inShadowDOM !== true) {
+    throw new Error(`expected inShadowDOM:true, got: ${JSON.stringify(elements[shadowIndex])}`);
+  }
+
+  const click = await call(page, 'click', { index: shadowIndex });
+  if (!click?.success) throw new Error(`expected shadow click success, got: ${JSON.stringify(click)}`);
+  if (click.occluded) throw new Error(`shadow click should not be reported occluded: ${JSON.stringify(click)}`);
+
+  const clicked = await page.evaluate(() => window.__shadowClicked === true);
+  if (!clicked) throw new Error('expected shadow button click handler to run');
+});
+
 // ─── main ─────────────────────────────────────────────────────────────────
 // Social media downloader focus safety
 test('SMD: Instagram auto mode downloads the open dialog image, not the feed', async (page) => {
