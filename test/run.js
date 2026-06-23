@@ -2741,6 +2741,66 @@ test('settings page drops stale provider activation completions', () => {
   }
 });
 
+test('settings provider save and test status updates are DOM-safe', () => {
+  for (const [label, settingsRel] of [
+    ['chrome', 'src/chrome/src/ui/settings.js'],
+    ['firefox', 'src/firefox/src/ui/settings.js'],
+  ]) {
+    const settings = fs.readFileSync(path.join(ROOT, settingsRel), 'utf8');
+    assert.match(
+      settings,
+      /function setProviderTestResult\(id, className, message, color\) \{[\s\S]*?const testEl = document\.getElementById\(`test-\$\{id\}`\);[\s\S]*?if \(!testEl\) return null;[\s\S]*?testEl\.className = `test-result show\$\{className \? ` \$\{className\}` : ''\}`;[\s\S]*?return testEl;[\s\S]*?\}/,
+      `${label}: provider status writes should tolerate re-rendered or filtered-away cards`,
+    );
+
+    const saveStart = settings.indexOf('async function saveProvider(id, { showFlash = true } = {}) {');
+    assert.notEqual(saveStart, -1, `${label}: saveProvider missing`);
+    const saveBody = settings.slice(saveStart, settings.indexOf('\n}\n\nasync function testProvider', saveStart) + 2);
+    assert.match(
+      saveBody,
+      /try \{[\s\S]*?await sendToBackground\('update_provider', \{ providerId: id, config \}\);[\s\S]*?\} catch \(e\) \{[\s\S]*?setProviderTestResult\(id, 'fail', t\('st\.providers\.failed', \{ error: e\.message \}\)\);[\s\S]*?throw e;[\s\S]*?\}[\s\S]*?if \(providersData\[id\]\) Object\.assign\(providersData\[id\], config\);/,
+      `${label}: successful saves should update in-memory provider data and failed saves should report safely`,
+    );
+    assert.match(
+      saveBody,
+      /const testEl = setProviderTestResult\(id, 'ok', t\('st\.providers\.saved'\)\);[\s\S]*?if \(testEl\) setTimeout\(\(\) => testEl\.classList\.remove\('show'\), 2000\);/,
+      `${label}: save flash should only touch an existing provider result node`,
+    );
+
+    const testStart = settings.indexOf('async function testProvider(id) {');
+    assert.notEqual(testStart, -1, `${label}: testProvider missing`);
+    const testEnd = settings.indexOf('\n}\n\nfunction syncInputsIntoProvidersData', testStart);
+    const testEndWithComment = settings.indexOf('\n}\n\n/**', testStart);
+    const testBoundary = testEnd === -1 ? testEndWithComment : testEnd;
+    assert.notEqual(testBoundary, -1, `${label}: testProvider boundary missing`);
+    const testBody = settings.slice(testStart, testBoundary + 2);
+    assert.match(
+      testBody,
+      /try \{[\s\S]*?await saveProvider\(id, \{ showFlash: false \}\);[\s\S]*?\} catch \(e\) \{[\s\S]*?setProviderTestResult\(id, 'fail', t\('st\.providers\.failed', \{ error: e\.message \}\)\);[\s\S]*?return;[\s\S]*?\}/,
+      `${label}: provider tests should surface save failures without continuing`,
+    );
+    assert.match(
+      testBody,
+      /if \(!setProviderTestResult\(id, '', t\('st\.providers\.testing'\), 'var\(--text2\)'\)\) return;/,
+      `${label}: provider tests should stop if the card was re-rendered away`,
+    );
+    assert.match(
+      testBody,
+      /try \{[\s\S]*?const res = await sendToBackground\('test_provider', \{ providerId: id \}\);[\s\S]*?setProviderTestResult\(id, 'ok'[\s\S]*?setProviderTestResult\(id, 'fail'[\s\S]*?\} catch \(e\) \{[\s\S]*?setProviderTestResult\(id, 'fail', t\('st\.providers\.failed', \{ error: e\.message \}\)\);[\s\S]*?\}/,
+      `${label}: provider tests should handle background failures through safe status writes`,
+    );
+
+    const loadStart = settings.indexOf('async function loadProviderModels(id) {');
+    assert.notEqual(loadStart, -1, `${label}: loadProviderModels missing`);
+    const loadBody = settings.slice(loadStart, settings.indexOf('\n}\n\nfunction setProviderTestResult', loadStart) + 2);
+    assert.match(
+      loadBody,
+      /try \{[\s\S]*?await saveProvider\(id, \{ showFlash: false \}\);[\s\S]*?\} catch \(e\) \{[\s\S]*?statusEl\.textContent = e\.message;[\s\S]*?return;[\s\S]*?\}/,
+      `${label}: model loading should stop and report if the pre-save fails`,
+    );
+  }
+});
+
 test('sidepanel scopes allow-api override to the tab conversation', () => {
   for (const [label, panelRel] of [
     ['chrome', 'src/chrome/src/ui/sidepanel.js'],
