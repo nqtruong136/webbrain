@@ -84,9 +84,12 @@ export function createContextMenuStorage(getStore) {
   }
 
   // Call on tab close or navigation to purge in-memory state and storage.
-  function cleanup(tabId) {
-    pending.delete(Number(tabId));
-    getStore()?.remove(key(tabId)).catch(() => {});
+  // Awaits any in-flight save() so the remove() always wins the race.
+  async function cleanup(tabId) {
+    const numericTabId = Number(tabId);
+    pending.delete(numericTabId);
+    await waitForWrite(numericTabId);
+    getStore()?.remove(key(numericTabId)).catch(() => {});
   }
 
   return { key, save, consume, clear, cleanup };

@@ -72,7 +72,7 @@ export function createContextMenuPromptHandler({
     }
   }
 
-  function runContextMenuPrompt(payload) {
+  async function runContextMenuPrompt(payload) {
     if (!payload?.text) return;
     if (getIsProcessing()) {
       queuedContextMenuPrompts.push(payload);
@@ -87,14 +87,16 @@ export function createContextMenuPromptHandler({
     getInputEl().dispatchEvent(new Event('input', { bubbles: true }));
     autoResizeInput();
 
-    // Only clear storage once sendMessage() settles successfully so that a
-    // background rejection (agent already running) leaves the prompt
-    // recoverable; re-queue it so drainQueuedContextMenuPrompts retries it
-    // when the current run finishes.
-    sendMessage().then(
-      () => sendToBackground('clear_context_menu_prompt', clearPayload).catch(() => {}),
-      () => { queuedContextMenuPrompts.push(payload); },
-    );
+    // sendMessage() catches background errors internally and always resolves;
+    // it returns true only if the background accepted the chat request.
+    // Clear storage on acceptance; re-queue on rejection so
+    // drainQueuedContextMenuPrompts retries after the current run finishes.
+    const accepted = await sendMessage();
+    if (accepted) {
+      sendToBackground('clear_context_menu_prompt', clearPayload).catch(() => {});
+    } else {
+      queuedContextMenuPrompts.push(payload);
+    }
   }
 
   async function consumePendingContextMenuPrompt() {

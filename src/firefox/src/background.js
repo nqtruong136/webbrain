@@ -338,16 +338,26 @@ browser.tabs.onRemoved.addListener((tabId) => {
   try { agent._cleanupTab(tabId); } catch { /* ignore */ }
 });
 
-// Invalidate pending context-menu prompts on navigation so a prompt recorded
-// on page A is not injected into chat in the context of page B.
-browser.webNavigation?.onCommitted?.addListener?.((details) => {
-  if (details.frameId !== 0) return;
-  contextMenuStorage.cleanup(details.tabId);
+// Invalidate pending context-menu prompts on any navigation (full page load or
+// SPA history/fragment change) so a prompt recorded on page A is never
+// submitted in the context of page B.
+function invalidateContextMenuForTab(tabId) {
+  contextMenuStorage.cleanup(tabId);
   browser.runtime.sendMessage({
     target: 'sidepanel',
     action: 'context_menu_tab_navigated',
-    tabId: details.tabId,
+    tabId,
   }).catch(() => {});
+}
+
+browser.webNavigation?.onCommitted?.addListener?.((details) => {
+  if (details.frameId === 0) invalidateContextMenuForTab(details.tabId);
+});
+browser.webNavigation?.onHistoryStateUpdated?.addListener?.((details) => {
+  if (details.frameId === 0) invalidateContextMenuForTab(details.tabId);
+});
+browser.webNavigation?.onReferenceFragmentUpdated?.addListener?.((details) => {
+  if (details.frameId === 0) invalidateContextMenuForTab(details.tabId);
 });
 
 // Action click: toggle sidebar (existing UX) AND ensure source tab is

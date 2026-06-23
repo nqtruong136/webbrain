@@ -496,18 +496,17 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   try { agent._cleanupTab(tabId); } catch { /* ignore */ }
 });
 
-// Invalidate pending context-menu prompts when the tab navigates to a new URL.
-// Without this a prompt recorded on page A would be injected into chat in the
-// context of page B if the tab redirected before the panel opened.
-chrome.webNavigation?.onCommitted?.addListener((details) => {
-  if (details.frameId !== 0) return;
-  contextMenuStorage.cleanup(details.tabId);
+// Invalidate pending context-menu prompts on any navigation (full page load or
+// SPA history/fragment change) so a prompt recorded on page A is never
+// submitted in the context of page B.
+function invalidateContextMenuForTab(tabId) {
+  contextMenuStorage.cleanup(tabId);
   chrome.runtime.sendMessage({
     target: 'sidepanel',
     action: 'context_menu_tab_navigated',
-    tabId: details.tabId,
+    tabId,
   }).catch(() => {});
-});
+}
 
 // SPA navigation tracking. Many sites change route via History API without
 // a full page load — content scripts and any cached element snapshots become
@@ -524,13 +523,19 @@ function recordNav(tabId, type, url) {
 }
 
 chrome.webNavigation?.onHistoryStateUpdated?.addListener((details) => {
-  if (details.frameId === 0) recordNav(details.tabId, 'history', details.url);
+  if (details.frameId !== 0) return;
+  recordNav(details.tabId, 'history', details.url);
+  invalidateContextMenuForTab(details.tabId);
 });
 chrome.webNavigation?.onReferenceFragmentUpdated?.addListener((details) => {
-  if (details.frameId === 0) recordNav(details.tabId, 'fragment', details.url);
+  if (details.frameId !== 0) return;
+  recordNav(details.tabId, 'fragment', details.url);
+  invalidateContextMenuForTab(details.tabId);
 });
 chrome.webNavigation?.onCommitted?.addListener((details) => {
-  if (details.frameId === 0) recordNav(details.tabId, 'committed', details.url);
+  if (details.frameId !== 0) return;
+  recordNav(details.tabId, 'committed', details.url);
+  invalidateContextMenuForTab(details.tabId);
 });
 chrome.webNavigation?.onCompleted?.addListener((details) => {
   if (details.frameId === 0) recordNav(details.tabId, 'completed', details.url);

@@ -1620,6 +1620,7 @@ async function sendMessage() {
 
   currentAssistantEl = addMessage('assistant', '');
 
+  let accepted = false;
   try {
     const res = await sendToBackground('chat', {
       tabId: currentTabId,
@@ -1627,6 +1628,7 @@ async function sendMessage() {
       mode: agentMode,
       apiMutationsAllowed,
     });
+    accepted = true;
 
     if (abortRequested) {
       // Agent was stopped — show what we got so far
@@ -1657,6 +1659,7 @@ async function sendMessage() {
     refreshRecommendedActions();
     drainQueuedContextMenuPrompts();
   }
+  return accepted;
 }
 
 // --- Listen for Agent Updates ---
