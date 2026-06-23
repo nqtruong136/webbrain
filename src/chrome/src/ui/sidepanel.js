@@ -2682,6 +2682,7 @@ async function continueAgent() {
     hideActivity();
     currentAssistantEl = null;
     scrollToBottom();
+    drainQueuedContextMenuPrompts();
   }
 }
 
