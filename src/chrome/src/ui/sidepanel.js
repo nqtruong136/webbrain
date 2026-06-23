@@ -467,6 +467,11 @@ function persistTabChat(tabId, html) {
 
 function clearCachedTabChat(tabId) {
   if (tabId == null) return;
+  if (persistTimer && persistTimerTabId === tabId) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+    persistTimerTabId = null;
+  }
   tabChats.delete(tabId);
   try {
     chrome.storage.session?.remove(TAB_CHAT_PREFIX + tabId).catch(() => {});
@@ -486,12 +491,15 @@ function renderClearedConversationForTab(tabId) {
 // Save current tab's chat to storage on a debounced cadence — we don't want
 // to thrash storage on every keystroke / streamed token.
 let persistTimer = null;
+let persistTimerTabId = null;
 function schedulePersist() {
   if (persistTimer) clearTimeout(persistTimer);
   const tabId = currentTabId;
   const html = messagesEl.innerHTML;
+  persistTimerTabId = tabId;
   persistTimer = setTimeout(() => {
     persistTimer = null;
+    persistTimerTabId = null;
     if (tabId != null) persistTabChat(tabId, html);
   }, 400);
 }

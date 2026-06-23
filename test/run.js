@@ -2097,6 +2097,29 @@ test('chrome sidepanel persists tab chat to the tab captured before debounce', (
   assert.doesNotMatch(body, /persistTabChat\(currentTabId,\s*messagesEl\.innerHTML\)/, 'chrome: debounced persistence should not save live DOM under the later currentTabId');
 });
 
+test('chrome sidepanel cancels stale tab-chat persistence when clearing a tab', () => {
+  const panel = fs.readFileSync(path.join(ROOT, 'src/chrome/src/ui/sidepanel.js'), 'utf8');
+  assert.match(panel, /let persistTimer = null;\s*let persistTimerTabId = null;/, 'chrome: pending persistence should remember its target tab');
+
+  const scheduleStart = panel.indexOf('function schedulePersist() {');
+  assert.notEqual(scheduleStart, -1, 'chrome: schedulePersist missing');
+  const scheduleBody = panel.slice(scheduleStart, panel.indexOf('\n}\n\n// Observe', scheduleStart) + 2);
+  assert.match(
+    scheduleBody,
+    /const tabId = currentTabId;[\s\S]*?const html = messagesEl\.innerHTML;[\s\S]*?persistTimerTabId = tabId;[\s\S]*?persistTimer = setTimeout\(\(\) => \{[\s\S]*?persistTimer = null;[\s\S]*?persistTimerTabId = null;[\s\S]*?persistTabChat\(tabId, html\);/,
+    'chrome: debounced persistence should associate and clear the pending tab id',
+  );
+
+  const clearStart = panel.indexOf('function clearCachedTabChat(tabId) {');
+  assert.notEqual(clearStart, -1, 'chrome: clearCachedTabChat missing');
+  const clearBody = panel.slice(clearStart, panel.indexOf('\n}\n\nfunction renderClearedConversationForTab', clearStart) + 2);
+  assert.match(
+    clearBody,
+    /if \(persistTimer && persistTimerTabId === tabId\) \{[\s\S]*?clearTimeout\(persistTimer\);[\s\S]*?persistTimer = null;[\s\S]*?persistTimerTabId = null;[\s\S]*?\}[\s\S]*?tabChats\.delete\(tabId\);[\s\S]*?chrome\.storage\.session\?\.remove\(TAB_CHAT_PREFIX \+ tabId\)/,
+    'chrome: clearing a tab should cancel any pending stale write before removing cached chat',
+  );
+});
+
 test('sidepanel does not miss startup tab switches before consuming tab-scoped state', () => {
   for (const [label, panelRel] of [
     ['chrome', 'src/chrome/src/ui/sidepanel.js'],
