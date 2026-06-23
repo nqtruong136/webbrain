@@ -87,14 +87,13 @@ export function createContextMenuPromptHandler({
     getInputEl().dispatchEvent(new Event('input', { bubbles: true }));
     autoResizeInput();
 
-    // sendMessage() catches background errors internally and always resolves;
-    // it returns true only if the background accepted the chat request.
-    // Clear storage on acceptance; re-queue on rejection so
-    // drainQueuedContextMenuPrompts retries after the current run finishes.
+    // Clear storage before awaiting the run so that if the panel is closed or
+    // reloaded mid-run the stored copy is already gone and won't be resubmitted
+    // on reopen. If the backend rejects the request (accepted === false) we
+    // re-queue in-memory only; drainQueuedContextMenuPrompts will retry it.
+    sendToBackground('clear_context_menu_prompt', clearPayload).catch(() => {});
     const accepted = await sendMessage();
-    if (accepted) {
-      sendToBackground('clear_context_menu_prompt', clearPayload).catch(() => {});
-    } else {
+    if (!accepted) {
       queuedContextMenuPrompts.push(payload);
     }
   }
