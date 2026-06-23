@@ -348,15 +348,25 @@ async function ensureWebBrainGroup(tab) {
   }
 }
 
+// Tracks the pending 250 ms retry timer per tab so it can be cancelled if the
+// tab navigates before the timer fires.
+const pendingContextMenuNotifications = new Map();
+
 function notifySidePanelOfContextMenuPrompt(payload) {
+  const tabId = payload.tabId;
   const msg = {
     target: 'sidepanel',
     action: 'context_menu_prompt',
-    tabId: payload.tabId,
+    tabId,
     prompt: payload,
   };
+  clearTimeout(pendingContextMenuNotifications.get(tabId));
   chrome.runtime.sendMessage(msg).catch(() => {});
-  setTimeout(() => chrome.runtime.sendMessage(msg).catch(() => {}), 250);
+  const timerId = setTimeout(() => {
+    pendingContextMenuNotifications.delete(tabId);
+    chrome.runtime.sendMessage(msg).catch(() => {});
+  }, 250);
+  pendingContextMenuNotifications.set(tabId, timerId);
 }
 
 function openSidePanelForContextMenu(tab) {
@@ -489,6 +499,8 @@ chrome.windows?.onRemoved?.addListener?.((windowId) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   panelTabs.delete(tabId);
+  clearTimeout(pendingContextMenuNotifications.get(tabId));
+  pendingContextMenuNotifications.delete(tabId);
   contextMenuStorage.cleanup(tabId);
   savePanelTabs();
   chrome.storage.session?.remove(`tabChat:${tabId}`).catch(() => {});
@@ -500,6 +512,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // SPA history/fragment change) so a prompt recorded on page A is never
 // submitted in the context of page B.
 function invalidateContextMenuForTab(tabId) {
+  clearTimeout(pendingContextMenuNotifications.get(tabId));
+  pendingContextMenuNotifications.delete(tabId);
   contextMenuStorage.cleanup(tabId);
   chrome.runtime.sendMessage({
     target: 'sidepanel',
