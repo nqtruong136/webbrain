@@ -150,11 +150,13 @@ function scheduledJobPayloadKey(job) {
 
 function scheduledJobIsImmediate(job) {
   if (job?.kind !== 'task') return false;
-  if (job.immediate === true) return true;
-  if (job.immediate === false) return false;
   const created = Date.parse(job?.createdAt || '');
   const scheduled = Date.parse(job?.scheduledAt || job?.schedule?.run_at || '');
-  return Number.isFinite(created) && Number.isFinite(scheduled) && scheduled <= created + 1000;
+  const derivesImmediate = Number.isFinite(created) && Number.isFinite(scheduled);
+  if (job.immediate === true && derivesImmediate) return scheduled <= created + 1000;
+  if (job.immediate === true) return true;
+  if (job.immediate === false) return false;
+  return derivesImmediate && scheduled <= created + 1000;
 }
 
 function scheduledJobScheduleType(job) {
@@ -948,6 +950,7 @@ export class ScheduledJobManager {
           status: 'pending',
           nextRunAt,
           scheduledAt: nextRunAt,
+          immediate: false,
           queueDeferrals: 0,
           runCount: Number(prev.runCount || 0) + 1,
           lastRunAt: iso(this.now()),

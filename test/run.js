@@ -3210,6 +3210,55 @@ test('ScheduledJobManager completes recurring tasks and schedules the next run',
   }
 });
 
+test('ScheduledJobManager dedupes recurring tasks after immediate first runs', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    const h = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async () => 'checked',
+    });
+    const baseArgs = {
+      title: 'Check inbox',
+      prompt: 'Look for new priority mail.',
+      target: { type: 'current_tab' },
+      mode: 'act',
+    };
+    const created = await h.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        ...baseArgs,
+        schedule: { type: 'recurring', after_seconds: 0, interval_minutes: 5 },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/',
+      currentTitle: 'Example',
+    });
+    assert.equal(created.success, true, `${label}: immediate recurring task should schedule`);
+
+    await h.manager.handleAlarm(h.alarmName(created.jobId));
+    const nextJob = h.jobs()[0];
+    assert.equal(nextJob.immediate, false, `${label}: next recurring run should not keep stale immediate state`);
+
+    const duplicate = await h.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        ...baseArgs,
+        schedule: { type: 'recurring', run_at: nextJob.nextRunAt, interval_minutes: 5 },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/',
+      currentTitle: 'Example',
+    });
+
+    assert.equal(duplicate.success, true, `${label}: duplicate next recurring task should succeed`);
+    assert.equal(duplicate.deduped, true, `${label}: duplicate next recurring task should be deduped`);
+    assert.equal(duplicate.jobId, created.jobId, `${label}: duplicate should reuse the recurring job id`);
+    assert.equal(h.jobs().length, 1, `${label}: duplicate recurring schedule should not create a second job`);
+  }
+});
+
 test('social media downloader copies stay in sync', () => {
   const chrome = fs.readFileSync(path.join(ROOT, 'src/chrome/src/agent/social-media-downloader.js'), 'utf8');
   const firefox = fs.readFileSync(path.join(ROOT, 'src/firefox/src/agent/social-media-downloader.js'), 'utf8');
