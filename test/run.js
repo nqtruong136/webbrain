@@ -2025,6 +2025,89 @@ test('background awaits context-menu prompt clear before agent chat starts', () 
   }
 });
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+function createDeferredRemoveStore() {
+  const data = new Map();
+  const removes = [];
+  const store = {
+    async set(obj) {
+      for (const [k, v] of Object.entries(obj || {})) data.set(k, v);
+    },
+    async get(k) {
+      return data.has(k) ? { [k]: data.get(k) } : {};
+    },
+    remove(k) {
+      const gate = deferred();
+      removes.push({ key: k, gate });
+      return gate.promise.then(() => { data.delete(k); });
+    },
+  };
+  return { store, data, removes };
+}
+
+async function waitMicrotasks(count = 2) {
+  for (let i = 0; i < count; i += 1) await Promise.resolve();
+}
+
+test('context-menu cleanup blocks stale consume until storage removal finishes', async () => {
+  for (const [label, createStorage] of [
+    ['chrome', createContextMenuStorageCh],
+    ['firefox', createContextMenuStorageFx],
+  ]) {
+    const { store, removes } = createDeferredRemoveStore();
+    const storage = createStorage(() => store);
+    const prompt = { id: 'old', tabId: 7, text: 'old prompt' };
+    await storage.save(7, prompt);
+
+    const cleanupPromise = storage.cleanup(7);
+    await waitMicrotasks();
+    assert.equal(removes.length, 1, `${label}: cleanup should start storage removal`);
+
+    let consumed = false;
+    const consumePromise = storage.consume(7).then((res) => {
+      consumed = true;
+      return res;
+    });
+    await waitMicrotasks();
+    assert.equal(consumed, false, `${label}: consume should wait for cleanup removal`);
+
+    removes[0].gate.resolve();
+    await cleanupPromise;
+    const res = await consumePromise;
+    assert.equal(res.prompt, null, `${label}: stale prompt should not be consumed after cleanup`);
+  }
+});
+
+test('context-menu save after cleanup is not erased by the older cleanup', async () => {
+  for (const [label, createStorage] of [
+    ['chrome', createContextMenuStorageCh],
+    ['firefox', createContextMenuStorageFx],
+  ]) {
+    const { store, data, removes } = createDeferredRemoveStore();
+    const storage = createStorage(() => store);
+    await storage.save(7, { id: 'old', tabId: 7, text: 'old prompt' });
+
+    const cleanupPromise = storage.cleanup(7);
+    await waitMicrotasks();
+    assert.equal(removes.length, 1, `${label}: cleanup should start storage removal`);
+
+    const next = { id: 'new', tabId: 7, text: 'new prompt' };
+    const savePromise = storage.save(7, next);
+    removes[0].gate.resolve();
+    await cleanupPromise;
+    await savePromise;
+
+    assert.deepEqual(data.get(storage.key(7)), next, `${label}: newer prompt should remain in storage after older cleanup`);
+    const res = await storage.consume(7);
+    assert.deepEqual(res.prompt, next, `${label}: newer prompt should remain consumable after older cleanup`);
+  }
+});
+
 test('max agent steps treats the slider maximum as unlimited', () => {
   for (const [label, bgRel, settingsRel, panelRel] of [
     ['chrome', 'src/chrome/src/background.js', 'src/chrome/src/ui/settings.js', 'src/chrome/src/ui/sidepanel.js'],
