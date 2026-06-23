@@ -2843,7 +2843,7 @@ async function ensureActMode() {
     if (!stored.actConfirmed) {
       const ok = confirm(t('sp.mode.act.confirm'));
       if (!ok) return false;
-      browser.storage.local.set({ actConfirmed: true }).catch(() => {});
+      await browser.storage.local.set({ actConfirmed: true }).catch(() => {});
     }
   } catch (e) { /* ignore */ }
   setMode('act');
@@ -2852,8 +2852,8 @@ async function ensureActMode() {
 
 modeAskBtn.addEventListener('click', () => setMode('ask'));
 
-modeActBtn.addEventListener('click', () => {
-  ensureActMode();
+modeActBtn.addEventListener('click', async () => {
+  await ensureActMode();
 });
 
 

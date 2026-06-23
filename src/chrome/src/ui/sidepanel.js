@@ -3225,7 +3225,7 @@ function sendToBackground(action, data = {}) {
 
 // --- Keyboard shortcuts ---
 
-function handleGlobalKeydown(e) {
+async function handleGlobalKeydown(e) {
   if (e.defaultPrevented) return;
 
   // Don't steal shortcuts from other input elements (e.g. schedule form fields)
@@ -3250,7 +3250,7 @@ function handleGlobalKeydown(e) {
   // Ctrl+Shift+X: switch to Act mode (blocked while agent is running)
   if (mod && e.shiftKey && e.key === 'X' && !isProcessing) {
     e.preventDefault();
-    ensureActMode();
+    await ensureActMode();
     return;
   }
   // Escape: abort running agent (only when slash menu is not open)
@@ -3293,7 +3293,7 @@ async function ensureActMode() {
     if (!stored.actConfirmed) {
       const ok = confirm(t('sp.mode.act.confirm'));
       if (!ok) return false;
-      chrome.storage.local.set({ actConfirmed: true }).catch(() => {});
+      await chrome.storage.local.set({ actConfirmed: true }).catch(() => {});
     }
   } catch (e) { /* storage unavailable, fall through */ }
   setMode('act');
@@ -3302,8 +3302,8 @@ async function ensureActMode() {
 
 modeAskBtn.addEventListener('click', () => setMode('ask'));
 
-modeActBtn.addEventListener('click', () => {
-  ensureActMode();
+modeActBtn.addEventListener('click', async () => {
+  await ensureActMode();
 });
 
 

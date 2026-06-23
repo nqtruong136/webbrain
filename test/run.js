@@ -2717,6 +2717,35 @@ test('sidepanel drops stale recommended-action clicks after async act confirmati
   }
 });
 
+test('sidepanel awaits act confirmation persistence before switching modes', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const ensureStart = panel.indexOf('async function ensureActMode() {');
+    assert.notEqual(ensureStart, -1, `${label}: ensureActMode missing`);
+    const ensureBody = panel.slice(ensureStart, panel.indexOf('\n}\n\nmodeAskBtn.addEventListener', ensureStart) + 2);
+    assert.match(
+      ensureBody,
+      /const stored = await (chrome|browser)\.storage\.local\.get\('actConfirmed'\);[\s\S]*?if \(!stored\.actConfirmed\) \{[\s\S]*?const ok = confirm\(t\('sp\.mode\.act\.confirm'\)\);[\s\S]*?if \(!ok\) return false;[\s\S]*?await (chrome|browser)\.storage\.local\.set\(\{ actConfirmed: true \}\)\.catch\(\(\) => \{\}\);[\s\S]*?\}[\s\S]*?setMode\('act'\);/,
+      `${label}: act confirmation should persist before mode switches to Act`,
+    );
+    assert.match(
+      panel,
+      /modeActBtn\.addEventListener\('click', async \(\) => \{[\s\S]*?await ensureActMode\(\);[\s\S]*?\}\);/,
+      `${label}: Act button should await confirmation persistence`,
+    );
+    if (label === 'chrome') {
+      assert.match(
+        panel,
+        /async function handleGlobalKeydown\(e\) \{[\s\S]*?await ensureActMode\(\);[\s\S]*?\}/,
+        `${label}: Ctrl+Shift+X should await act confirmation persistence`,
+      );
+    }
+  }
+});
+
 test('sidepanel drops stale provider selection and connection checks', () => {
   for (const [label, panelRel] of [
     ['chrome', 'src/chrome/src/ui/sidepanel.js'],
