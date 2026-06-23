@@ -2079,27 +2079,33 @@ test('sidepanel scopes async tab commands to the original tab', () => {
   }
 });
 
-test('sidepanel drains queued context-menu prompts after Continue finishes', () => {
+test('sidepanel drains queued context-menu prompts after pending tab switches on run completion', () => {
   for (const [label, panelRel] of [
     ['chrome', 'src/chrome/src/ui/sidepanel.js'],
     ['firefox', 'src/firefox/src/ui/sidepanel.js'],
   ]) {
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
-    const match = panel.match(/async function continueAgent\(\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n\}/);
-    assert.ok(match, `${label}: continueAgent finally block missing`);
-    const finallyBody = match[1];
-    const idleIdx = finallyBody.indexOf('isProcessing = false;');
-    const pendingIdx = finallyBody.indexOf('if (pendingTabSwitch != null)');
-    const switchIdx = finallyBody.indexOf('switchToTab(pending);');
-    const drainIdx = finallyBody.indexOf('drainQueuedContextMenuPrompts();');
-    assert.notEqual(idleIdx, -1, `${label}: continueAgent should clear processing state`);
-    assert.notEqual(pendingIdx, -1, `${label}: Continue completion should apply pending tab switches`);
-    assert.notEqual(switchIdx, -1, `${label}: Continue completion should switch to the pending tab`);
-    assert.notEqual(drainIdx, -1, `${label}: Continue completion should drain queued context-menu prompts`);
-    assert.equal(idleIdx < drainIdx, true, `${label}: context-menu queue must drain after processing is cleared`);
-    assert.equal(idleIdx < pendingIdx, true, `${label}: pending tab switch must wait until processing is cleared`);
-    assert.equal(pendingIdx < switchIdx, true, `${label}: pending tab switch should capture the target before switching`);
-    assert.equal(switchIdx < drainIdx, true, `${label}: context-menu queue must drain after pending tab switch is applied`);
+    const completions = [
+      ['sendMessage', /async function sendMessage\([^)]*\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n  return accepted;/],
+      ['continueAgent', /async function continueAgent\(\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n\}/],
+    ];
+    for (const [fnName, pattern] of completions) {
+      const match = panel.match(pattern);
+      assert.ok(match, `${label}: ${fnName} finally block missing`);
+      const finallyBody = match[1];
+      const idleIdx = finallyBody.indexOf('isProcessing = false;');
+      const pendingIdx = finallyBody.indexOf('if (pendingTabSwitch != null)');
+      const switchIdx = finallyBody.indexOf('await switchToTab(pending);');
+      const drainIdx = finallyBody.indexOf('drainQueuedContextMenuPrompts();');
+      assert.notEqual(idleIdx, -1, `${label}: ${fnName} should clear processing state`);
+      assert.notEqual(pendingIdx, -1, `${label}: ${fnName} completion should apply pending tab switches`);
+      assert.notEqual(switchIdx, -1, `${label}: ${fnName} completion should await the pending tab switch`);
+      assert.notEqual(drainIdx, -1, `${label}: ${fnName} completion should drain queued context-menu prompts`);
+      assert.equal(idleIdx < drainIdx, true, `${label}: ${fnName} context-menu queue must drain after processing is cleared`);
+      assert.equal(idleIdx < pendingIdx, true, `${label}: ${fnName} pending tab switch must wait until processing is cleared`);
+      assert.equal(pendingIdx < switchIdx, true, `${label}: ${fnName} pending tab switch should capture the target before switching`);
+      assert.equal(switchIdx < drainIdx, true, `${label}: ${fnName} context-menu queue must drain after pending tab switch is applied`);
+    }
   }
 });
 

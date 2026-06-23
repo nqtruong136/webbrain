@@ -1766,7 +1766,7 @@ async function sendMessage(extraChatParams) {
     if (pendingTabSwitch != null) {
       const pending = pendingTabSwitch;
       pendingTabSwitch = null;
-      switchToTab(pending);
+      await switchToTab(pending);
     }
     drainQueuedContextMenuPrompts();
   }
@@ -2372,7 +2372,7 @@ async function continueAgent() {
     if (pendingTabSwitch != null) {
       const pending = pendingTabSwitch;
       pendingTabSwitch = null;
-      switchToTab(pending);
+      await switchToTab(pending);
     }
     drainQueuedContextMenuPrompts();
   }
