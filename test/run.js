@@ -1982,6 +1982,29 @@ test('sidepanel reports missing background responses without res.content crash',
   }
 });
 
+test('sidepanel rebinds copy buttons after restoring serialized tab chat', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    assert.match(panel, /function rebindCopyButtons\(\)/, `${label}: copy-button rebinding helper missing`);
+    assert.match(panel, /document\.querySelectorAll\('\.msg-copy-btn'\)[\s\S]*?addEventListener\('click'/, `${label}: assistant message copy buttons should be rebound`);
+    assert.match(panel, /document\.querySelectorAll\('\.code-copy-btn'\)[\s\S]*?addEventListener\('click'/, `${label}: code copy buttons should be rebound`);
+
+    const match = panel.match(/(?:async\s+)?function switchToTab\(newTabId\) \{[\s\S]*?consumePendingContextMenuPrompt\(\)/);
+    assert.ok(match, `${label}: switchToTab body missing`);
+    const body = match[0];
+    const restoreIdx = body.indexOf('messagesEl.innerHTML =');
+    const clearBoundIdx = body.indexOf("messagesEl.querySelectorAll('[data-bound]')");
+    const rebindIdx = body.indexOf('rebindCopyButtons();');
+    assert.notEqual(restoreIdx, -1, `${label}: restored tab chat should write serialized HTML`);
+    assert.notEqual(clearBoundIdx, -1, `${label}: restored copy buttons should clear serialized bound markers`);
+    assert.notEqual(rebindIdx, -1, `${label}: restored tab chat should rebind copy buttons`);
+    assert.equal(restoreIdx < clearBoundIdx && clearBoundIdx < rebindIdx, true, `${label}: copy handlers must be rebound immediately after restoring tab chat HTML`);
+  }
+});
+
 test('sidepanel drains queued context-menu prompts after Continue finishes', () => {
   for (const [label, panelRel] of [
     ['chrome', 'src/chrome/src/ui/sidepanel.js'],

@@ -1089,6 +1089,8 @@ function switchToTab(newTabId) {
   // Restore new tab's chat or start fresh
   if (tabChats.has(newTabId)) {
     messagesEl.innerHTML = tabChats.get(newTabId);
+    messagesEl.querySelectorAll('[data-bound]').forEach(el => delete el.dataset.bound);
+    rebindCopyButtons();
   } else {
     messagesEl.innerHTML = '';
     addMessage('system', t('sp.help_message'));
@@ -1183,6 +1185,42 @@ async function runRecommendedAction(action) {
   inputEl.value = prompt;
   autoResizeInput();
   sendMessage();
+}
+
+// After restoring innerHTML the copy buttons need their click handlers re-bound,
+// since serialized HTML loses listeners.
+function rebindCopyButtons() {
+  document.querySelectorAll('.msg-copy-btn').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = 'true';
+    btn.addEventListener('click', () => {
+      const content = btn.closest('.message-content');
+      const textEl = content?.querySelector('.message-text');
+      if (textEl) {
+        navigator.clipboard.writeText(textEl.innerText).then(() => {
+          btn.textContent = t('sp.copied');
+          btn.classList.add('copied');
+          setTimeout(() => { btn.textContent = t('sp.copy'); btn.classList.remove('copied'); }, 1500);
+        });
+      }
+    });
+  });
+  document.querySelectorAll('.code-copy-btn').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = 'true';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wrapper = btn.closest('.code-block-wrapper');
+      const codeEl = wrapper?.querySelector('pre code');
+      if (codeEl) {
+        navigator.clipboard.writeText(codeEl.textContent).then(() => {
+          btn.textContent = t('sp.copied');
+          btn.classList.add('copied');
+          setTimeout(() => { btn.textContent = t('sp.copy'); btn.classList.remove('copied'); }, 1500);
+        });
+      }
+    });
+  });
 }
 
 async function loadProviders() {
