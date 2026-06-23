@@ -88,6 +88,7 @@ function renderList() {
   }
   listEl.innerHTML = filtered.map(r => {
     const status = r.status || 'done';
+    const statusClass = safeClassToken(status, 'done');
     const started = new Date(r.startedAt).toLocaleString();
     const dur = r.durationMs ? `${(r.durationMs / 1000).toFixed(1)}s` : '—';
     const steps = r.stepCount || 0;
@@ -109,7 +110,7 @@ function renderList() {
     const costClass = isCostlyFailure ? 'cost-warn' : '';
     return `
       <div class="${cls}" data-run-id="${escapeAttr(r.runId)}">
-        <div class="run-title"><span class="status-dot ${status}"></span>${escapeHtml(title.slice(0, 120))}${convChip}</div>
+        <div class="run-title"><span class="status-dot ${statusClass}"></span>${escapeHtml(title.slice(0, 120))}${convChip}</div>
         <div class="run-meta">
           <span class="run-model">${escapeHtml(r.model || '?')}</span>
           <span>${escapeHtml(r.providerId || '')}</span>
@@ -304,7 +305,7 @@ function renderEvent(ev, shotCache, compact, objectUrls = new Set()) {
       return `
         <div class="event screenshot">
           <div class="event-head"><span class="kind">📷 ${escapeHtml(caption)}</span>${stepBadge}<span class="latency">${ts}</span></div>
-          ${src ? `<img src="${src}" alt="${escapeAttr(caption)}" loading="lazy">` : `<span class="latency">${escapeHtml(t('tr.event.screenshot_missing'))}</span>`}
+          ${src ? `<img src="${escapeAttr(src)}" alt="${escapeAttr(caption)}" loading="lazy">` : `<span class="latency">${escapeHtml(t('tr.event.screenshot_missing'))}</span>`}
         </div>`;
     }
     case 'error': {
@@ -480,6 +481,10 @@ function escapeHtml(s) {
 function escapeAttr(s) {
   if (s == null) return '';
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function safeClassToken(value, fallback = 'unknown') {
+  const token = String(value == null ? '' : value).trim();
+  return /^[A-Za-z0-9_-]+$/.test(token) ? token : fallback;
 }
 function blobToBase64(blob) {
   return new Promise((resolve) => {

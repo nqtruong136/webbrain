@@ -2133,6 +2133,35 @@ test('trace viewer revokes screenshot object URLs when replacing rendered timeli
   }
 });
 
+test('trace viewer escapes attribute data from stored trace records', () => {
+  for (const [label, tracesRel] of [
+    ['chrome', 'src/chrome/src/ui/traces.js'],
+    ['firefox', 'src/firefox/src/ui/traces.js'],
+  ]) {
+    const traces = fs.readFileSync(path.join(ROOT, tracesRel), 'utf8');
+    assert.match(
+      traces,
+      /function safeClassToken\(value, fallback = 'unknown'\) \{[\s\S]*?String\(value == null \? '' : value\)\.trim\(\);[\s\S]*?\^\[A-Za-z0-9_-\]\+\$[\s\S]*?fallback;[\s\S]*?\}/,
+      `${label}: trace viewer should constrain stored values before using them as CSS classes`,
+    );
+    assert.match(
+      traces,
+      /const status = r\.status \|\| 'done';\s*const statusClass = safeClassToken\(status, 'done'\);[\s\S]*?<span class="status-dot \$\{statusClass\}"><\/span>/,
+      `${label}: trace list status class should use a sanitized token`,
+    );
+    assert.doesNotMatch(
+      traces,
+      /<span class="status-dot \$\{status\}"><\/span>/,
+      `${label}: trace list must not interpolate raw status into a class attribute`,
+    );
+    assert.match(
+      traces,
+      /<img src="\$\{escapeAttr\(src\)\}" alt="\$\{escapeAttr\(caption\)\}" loading="lazy">/,
+      `${label}: trace screenshot src and alt should be attribute-escaped`,
+    );
+  }
+});
+
 test('trace viewer export keeps blob URLs alive until the download is committed', () => {
   for (const [label, tracesRel] of [
     ['chrome', 'src/chrome/src/ui/traces.js'],
