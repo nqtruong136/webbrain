@@ -2795,8 +2795,79 @@ test('settings provider save and test status updates are DOM-safe', () => {
     const loadBody = settings.slice(loadStart, settings.indexOf('\n}\n\nfunction setProviderTestResult', loadStart) + 2);
     assert.match(
       loadBody,
-      /try \{[\s\S]*?await saveProvider\(id, \{ showFlash: false \}\);[\s\S]*?\} catch \(e\) \{[\s\S]*?statusEl\.textContent = e\.message;[\s\S]*?return;[\s\S]*?\}/,
+      /try \{[\s\S]*?await saveProvider\(id, \{ showFlash: false \}\);[\s\S]*?\} catch \(e\) \{[\s\S]*?setProviderLoadModelsStatus\(id, e\.message, 'var\(--danger, #c33\)'\);[\s\S]*?return;[\s\S]*?\}/,
       `${label}: model loading should stop and report if the pre-save fails`,
+    );
+  }
+});
+
+test('settings async test controls surface rejected background results', () => {
+  for (const [label, settingsRel] of [
+    ['chrome', 'src/chrome/src/ui/settings.js'],
+    ['firefox', 'src/firefox/src/ui/settings.js'],
+  ]) {
+    const settings = fs.readFileSync(path.join(ROOT, settingsRel), 'utf8');
+
+    assert.match(
+      settings,
+      /function showVisionResult\(className, text, color = ''\) \{[\s\S]*?visionTestResult\.style\.color = color;[\s\S]*?return visionTestResult;[\s\S]*?\}/,
+      `${label}: vision status helper should clear stale inline colors and return the current node`,
+    );
+    assert.match(
+      settings,
+      /function showTranscriptionResult\(className, text, color = ''\) \{[\s\S]*?if \(!transcriptionTestResult\) return;[\s\S]*?transcriptionTestResult\.style\.color = color;[\s\S]*?return transcriptionTestResult;[\s\S]*?\}/,
+      `${label}: transcription status helper should clear stale inline colors and tolerate absent controls`,
+    );
+    assert.match(
+      settings,
+      /function showCaptchaResult\(className, text, color = ''\) \{[\s\S]*?if \(!captchaTestResult\) return;[\s\S]*?captchaTestResult\.style\.color = color;[\s\S]*?return captchaTestResult;[\s\S]*?\}/,
+      `${label}: captcha status helper should clear stale inline colors and tolerate absent controls`,
+    );
+
+    const visionStart = settings.indexOf("btnTestVision.addEventListener('click', async () => {");
+    assert.notEqual(visionStart, -1, `${label}: vision test handler missing`);
+    const visionBody = settings.slice(visionStart, settings.indexOf('\n});\n\nbtnClearVision', visionStart) + 4);
+    assert.match(
+      visionBody,
+      /showVisionResult\('', t\('st\.vision\.testing'\), 'var\(--text2\)'\);[\s\S]*?try \{[\s\S]*?const res = await sendToBackground\('test_vision_provider'\);[\s\S]*?showVisionResult\('ok'[\s\S]*?showVisionResult\('fail'[\s\S]*?\} catch \(e\) \{[\s\S]*?showVisionResult\('fail', t\('st\.vision\.failed', \{ error: e\.message \}\)\);[\s\S]*?\}/,
+      `${label}: rejected vision provider checks should replace the testing state with a failure`,
+    );
+
+    const transcriptionStart = settings.indexOf("btnTestTranscription.addEventListener('click', async () => {");
+    assert.notEqual(transcriptionStart, -1, `${label}: transcription test handler missing`);
+    const transcriptionEnd = settings.indexOf('\n  });\n}\n\nif (btnClearTranscription', transcriptionStart);
+    assert.notEqual(transcriptionEnd, -1, `${label}: transcription test handler boundary missing`);
+    const transcriptionBody = settings.slice(transcriptionStart, transcriptionEnd + 7);
+    assert.match(
+      transcriptionBody,
+      /showTranscriptionResult\('', t\('st\.transcription\.testing'\), 'var\(--text2\)'\);[\s\S]*?try \{[\s\S]*?const res = await sendToBackground\('test_transcription_provider'\);[\s\S]*?showTranscriptionResult\('ok'[\s\S]*?showTranscriptionResult\('fail'[\s\S]*?\} catch \(e\) \{[\s\S]*?showTranscriptionResult\('fail', t\('st\.transcription\.failed', \{ error: e\.message \}\)\);[\s\S]*?\}/,
+      `${label}: rejected transcription provider checks should replace the testing state with a failure`,
+    );
+
+    const captchaStart = settings.indexOf("btnTestCaptcha.addEventListener('click', async () => {");
+    assert.notEqual(captchaStart, -1, `${label}: captcha test handler missing`);
+    const captchaEnd = settings.indexOf('\n  });\n}\n\nif (btnClearCaptcha', captchaStart);
+    assert.notEqual(captchaEnd, -1, `${label}: captcha test handler boundary missing`);
+    const captchaBody = settings.slice(captchaStart, captchaEnd + 7);
+    assert.match(
+      captchaBody,
+      /showCaptchaResult\('', t\('st\.captcha\.checking'\), 'var\(--text2\)'\);[\s\S]*?try \{[\s\S]*?const res = await sendToBackground\('test_capsolver_balance', \{ apiKey: key \}\);[\s\S]*?flashCaptchaResult\('ok'[\s\S]*?flashCaptchaResult\('fail'[\s\S]*?\} catch \(e\) \{[\s\S]*?flashCaptchaResult\('fail', t\('st\.captcha\.balance_fail', \{ error: e\.message \}\)\);[\s\S]*?\}/,
+      `${label}: rejected captcha balance checks should replace the checking state with a failure`,
+    );
+
+    assert.match(
+      settings,
+      /function setProviderLoadModelsStatus\(id, message, color = 'var\(--text2\)'\) \{[\s\S]*?document\.querySelector\(`\.load-models-status\[data-provider="\$\{id\}"\]`\);[\s\S]*?statusEl\.textContent = message;[\s\S]*?statusEl\.style\.color = color;[\s\S]*?return statusEl;[\s\S]*?\}/,
+      `${label}: model-load status writes should re-query the current provider card`,
+    );
+
+    const loadStart = settings.indexOf('async function loadProviderModels(id) {');
+    assert.notEqual(loadStart, -1, `${label}: loadProviderModels missing`);
+    const loadBody = settings.slice(loadStart, settings.indexOf('\n}\n\nfunction setProviderTestResult', loadStart) + 2);
+    assert.match(
+      loadBody,
+      /let datalistEl = document\.getElementById\(`models-\$\{id\}`\);[\s\S]*?setProviderLoadModelsStatus\(id, t\('st\.providers\.loading'\)\);[\s\S]*?try \{[\s\S]*?res = await sendToBackground\('list_provider_models', \{ providerId: id \}\);[\s\S]*?\} catch \(e\) \{[\s\S]*?setProviderLoadModelsStatus\(id, e\.message, 'var\(--danger, #c33\)'\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?datalistEl = document\.getElementById\(`models-\$\{id\}`\);[\s\S]*?if \(!datalistEl\) return;[\s\S]*?setProviderLoadModelsStatus\(id, res\?\.error \|\| 'Failed to load models', 'var\(--danger, #c33\)'\);/,
+      `${label}: model loading should report rejected background results and avoid stale datalist writes`,
     );
   }
 });

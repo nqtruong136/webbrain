@@ -506,10 +506,16 @@ if (scheduledConfirmToggle) {
 
 // --- Vision Model ---
 
-function flashVisionResult(className, text) {
-  visionTestResult.className = `test-result show ${className}`;
+function showVisionResult(className, text, color = '') {
+  visionTestResult.className = `test-result show${className ? ` ${className}` : ''}`;
   visionTestResult.textContent = text;
-  setTimeout(() => visionTestResult.classList.remove('show'), 2000);
+  visionTestResult.style.color = color;
+  return visionTestResult;
+}
+
+function flashVisionResult(className, text) {
+  const resultEl = showVisionResult(className, text);
+  setTimeout(() => resultEl.classList.remove('show'), 2000);
 }
 
 btnSaveVision.addEventListener('click', async () => {
@@ -535,9 +541,8 @@ btnTestVision.addEventListener('click', async () => {
   const model = visionModelInput.value.trim();
 
   if (!baseUrl || !model) {
-    visionTestResult.className = 'test-result show fail';
-    visionTestResult.textContent = t('st.vision.fill_required');
-    setTimeout(() => visionTestResult.classList.remove('show'), 2500);
+    const resultEl = showVisionResult('fail', t('st.vision.fill_required'));
+    setTimeout(() => resultEl.classList.remove('show'), 2500);
     return;
   }
 
@@ -545,17 +550,17 @@ btnTestVision.addEventListener('click', async () => {
     visionModel: { baseUrl, apiKey, model },
   });
 
-  visionTestResult.className = 'test-result show';
-  visionTestResult.textContent = t('st.vision.testing');
-  visionTestResult.style.color = 'var(--text2)';
+  showVisionResult('', t('st.vision.testing'), 'var(--text2)');
 
-  const res = await sendToBackground('test_vision_provider');
-  if (res.ok) {
-    visionTestResult.className = 'test-result show ok';
-    visionTestResult.textContent = t('st.vision.connected', { model: res.model || model });
-  } else {
-    visionTestResult.className = 'test-result show fail';
-    visionTestResult.textContent = t('st.vision.failed', { error: res.error });
+  try {
+    const res = await sendToBackground('test_vision_provider');
+    if (res?.ok) {
+      showVisionResult('ok', t('st.vision.connected', { model: res.model || model }));
+    } else {
+      showVisionResult('fail', t('st.vision.failed', { error: res?.error || 'Unknown error' }));
+    }
+  } catch (e) {
+    showVisionResult('fail', t('st.vision.failed', { error: e.message }));
   }
 });
 
@@ -575,11 +580,17 @@ btnClearVision.addEventListener('click', async () => {
 // filled, and falls back to the auto-pick-from-providers behavior when
 // any field is empty.
 
-function flashTranscriptionResult(className, text) {
+function showTranscriptionResult(className, text, color = '') {
   if (!transcriptionTestResult) return;
-  transcriptionTestResult.className = `test-result show ${className}`;
+  transcriptionTestResult.className = `test-result show${className ? ` ${className}` : ''}`;
   transcriptionTestResult.textContent = text;
-  setTimeout(() => transcriptionTestResult.classList.remove('show'), 2000);
+  transcriptionTestResult.style.color = color;
+  return transcriptionTestResult;
+}
+
+function flashTranscriptionResult(className, text) {
+  const resultEl = showTranscriptionResult(className, text);
+  if (resultEl) setTimeout(() => resultEl.classList.remove('show'), 2000);
 }
 
 if (btnSaveTranscription) {
@@ -608,9 +619,8 @@ if (btnTestTranscription) {
     const model = transcriptionModelInput.value.trim();
 
     if (!baseUrl || !model) {
-      transcriptionTestResult.className = 'test-result show fail';
-      transcriptionTestResult.textContent = t('st.transcription.fill_required');
-      setTimeout(() => transcriptionTestResult.classList.remove('show'), 2500);
+      const resultEl = showTranscriptionResult('fail', t('st.transcription.fill_required'));
+      if (resultEl) setTimeout(() => resultEl.classList.remove('show'), 2500);
       return;
     }
 
@@ -619,17 +629,17 @@ if (btnTestTranscription) {
       transcriptionModel: { baseUrl, apiKey, model },
     });
 
-    transcriptionTestResult.className = 'test-result show';
-    transcriptionTestResult.textContent = t('st.transcription.testing');
-    transcriptionTestResult.style.color = 'var(--text2)';
+    showTranscriptionResult('', t('st.transcription.testing'), 'var(--text2)');
 
-    const res = await sendToBackground('test_transcription_provider');
-    if (res.ok) {
-      transcriptionTestResult.className = 'test-result show ok';
-      transcriptionTestResult.textContent = t('st.transcription.connected', { model: res.model || model });
-    } else {
-      transcriptionTestResult.className = 'test-result show fail';
-      transcriptionTestResult.textContent = t('st.transcription.failed', { error: res.error });
+    try {
+      const res = await sendToBackground('test_transcription_provider');
+      if (res?.ok) {
+        showTranscriptionResult('ok', t('st.transcription.connected', { model: res.model || model }));
+      } else {
+        showTranscriptionResult('fail', t('st.transcription.failed', { error: res?.error || 'Unknown error' }));
+      }
+    } catch (e) {
+      showTranscriptionResult('fail', t('st.transcription.failed', { error: e.message }));
     }
   });
 }
@@ -685,11 +695,17 @@ if (btnClearProfile) {
 // Toggle persists immediately so the prompt updates on the next agent turn
 // without forcing a Save click. The API key needs an explicit Save.
 
-function flashCaptchaResult(className, text) {
+function showCaptchaResult(className, text, color = '') {
   if (!captchaTestResult) return;
-  captchaTestResult.className = `test-result show ${className}`;
+  captchaTestResult.className = `test-result show${className ? ` ${className}` : ''}`;
   captchaTestResult.textContent = text;
-  setTimeout(() => captchaTestResult.classList.remove('show'), 3000);
+  captchaTestResult.style.color = color;
+  return captchaTestResult;
+}
+
+function flashCaptchaResult(className, text) {
+  const resultEl = showCaptchaResult(className, text);
+  if (resultEl) setTimeout(() => resultEl.classList.remove('show'), 3000);
 }
 
 if (captchaEnabledToggle) {
@@ -713,14 +729,16 @@ if (btnTestCaptcha) {
       flashCaptchaResult('fail', t('st.captcha.need_key'));
       return;
     }
-    captchaTestResult.className = 'test-result show';
-    captchaTestResult.textContent = t('st.captcha.checking');
-    captchaTestResult.style.color = 'var(--text2)';
-    const res = await sendToBackground('test_capsolver_balance', { apiKey: key });
-    if (res.ok) {
-      flashCaptchaResult('ok', t('st.captcha.balance_ok', { balance: `$${Number(res.balance).toFixed(4)}` }));
-    } else {
-      flashCaptchaResult('fail', t('st.captcha.balance_fail', { error: res.error }));
+    showCaptchaResult('', t('st.captcha.checking'), 'var(--text2)');
+    try {
+      const res = await sendToBackground('test_capsolver_balance', { apiKey: key });
+      if (res?.ok) {
+        flashCaptchaResult('ok', t('st.captcha.balance_ok', { balance: `$${Number(res.balance).toFixed(4)}` }));
+      } else {
+        flashCaptchaResult('fail', t('st.captcha.balance_fail', { error: res?.error || 'Unknown error' }));
+      }
+    } catch (e) {
+      flashCaptchaResult('fail', t('st.captcha.balance_fail', { error: e.message }));
     }
   });
 }
@@ -1355,36 +1373,44 @@ async function signOutOfClaude(id) {
   await refreshClaudeOAuthStatus(id);
 }
 
-async function loadProviderModels(id) {
+function setProviderLoadModelsStatus(id, message, color = 'var(--text2)') {
   const statusEl = document.querySelector(`.load-models-status[data-provider="${id}"]`);
-  const datalistEl = document.getElementById(`models-${id}`);
+  if (!statusEl) return null;
+  statusEl.textContent = message;
+  statusEl.style.color = color;
+  return statusEl;
+}
+
+async function loadProviderModels(id) {
+  let datalistEl = document.getElementById(`models-${id}`);
   if (!datalistEl) return;
   // Persist whatever the user has typed in baseUrl/model so the background
   // call uses the current values, not stale storage.
   try {
     await saveProvider(id, { showFlash: false });
   } catch (e) {
-    if (statusEl) {
-      statusEl.textContent = e.message;
-      statusEl.style.color = 'var(--danger, #c33)';
-    }
+    setProviderLoadModelsStatus(id, e.message, 'var(--danger, #c33)');
     return;
   }
-  if (statusEl) statusEl.textContent = t('st.providers.loading');
-  const res = await sendToBackground('list_provider_models', { providerId: id });
-  if (res.ok) {
+
+  setProviderLoadModelsStatus(id, t('st.providers.loading'));
+  let res;
+  try {
+    res = await sendToBackground('list_provider_models', { providerId: id });
+  } catch (e) {
+    setProviderLoadModelsStatus(id, e.message, 'var(--danger, #c33)');
+    return;
+  }
+
+  datalistEl = document.getElementById(`models-${id}`);
+  if (!datalistEl) return;
+  if (res?.ok) {
     datalistEl.innerHTML = res.models
       .map((m) => `<option value="${escapeHtml(m)}"></option>`)
       .join('');
-    if (statusEl) {
-      statusEl.textContent = t('st.providers.models_loaded', { count: res.models.length });
-      statusEl.style.color = 'var(--text2)';
-    }
+    setProviderLoadModelsStatus(id, t('st.providers.models_loaded', { count: res.models.length }));
   } else {
-    if (statusEl) {
-      statusEl.textContent = res.error || 'Failed to load models';
-      statusEl.style.color = 'var(--danger, #c33)';
-    }
+    setProviderLoadModelsStatus(id, res?.error || 'Failed to load models', 'var(--danger, #c33)');
   }
 }
 
