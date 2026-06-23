@@ -509,7 +509,7 @@ if (scheduledConfirmToggle) {
 function showVisionResult(className, text, color = '') {
   visionTestResult.className = `test-result show${className ? ` ${className}` : ''}`;
   visionTestResult.textContent = text;
-  visionTestResult.style.color = color;
+  visionTestResult.style.color = color || '';
   return visionTestResult;
 }
 
@@ -584,7 +584,7 @@ function showTranscriptionResult(className, text, color = '') {
   if (!transcriptionTestResult) return;
   transcriptionTestResult.className = `test-result show${className ? ` ${className}` : ''}`;
   transcriptionTestResult.textContent = text;
-  transcriptionTestResult.style.color = color;
+  transcriptionTestResult.style.color = color || '';
   return transcriptionTestResult;
 }
 
@@ -699,7 +699,7 @@ function showCaptchaResult(className, text, color = '') {
   if (!captchaTestResult) return;
   captchaTestResult.className = `test-result show${className ? ` ${className}` : ''}`;
   captchaTestResult.textContent = text;
-  captchaTestResult.style.color = color;
+  captchaTestResult.style.color = color || '';
   return captchaTestResult;
 }
 
@@ -1419,7 +1419,7 @@ function setProviderTestResult(id, className, message, color) {
   if (!testEl) return null;
   testEl.className = `test-result show${className ? ` ${className}` : ''}`;
   testEl.textContent = message;
-  if (color) testEl.style.color = color;
+  testEl.style.color = color || '';
   return testEl;
 }
 

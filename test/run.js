@@ -2810,9 +2810,12 @@ test('settings provider save and test status updates are DOM-safe', () => {
     const settings = fs.readFileSync(path.join(ROOT, settingsRel), 'utf8');
     assert.match(
       settings,
-      /function setProviderTestResult\(id, className, message, color\) \{[\s\S]*?const testEl = document\.getElementById\(`test-\$\{id\}`\);[\s\S]*?if \(!testEl\) return null;[\s\S]*?testEl\.className = `test-result show\$\{className \? ` \$\{className\}` : ''\}`;[\s\S]*?return testEl;[\s\S]*?\}/,
+      /function setProviderTestResult\(id, className, message, color\) \{[\s\S]*?const testEl = document\.getElementById\(`test-\$\{id\}`\);[\s\S]*?if \(!testEl\) return null;[\s\S]*?testEl\.className = `test-result show\$\{className \? ` \$\{className\}` : ''\}`;[\s\S]*?testEl\.style\.color = color \|\| '';[\s\S]*?return testEl;[\s\S]*?\}/,
       `${label}: provider status writes should tolerate re-rendered or filtered-away cards`,
     );
+    assert.match(settings, /visionTestResult\.style\.color = color \|\| '';/, `${label}: vision results should clear stale inline colors`);
+    assert.match(settings, /transcriptionTestResult\.style\.color = color \|\| '';/, `${label}: transcription results should clear stale inline colors`);
+    assert.match(settings, /captchaTestResult\.style\.color = color \|\| '';/, `${label}: captcha results should clear stale inline colors`);
 
     const saveStart = settings.indexOf('async function saveProvider(id, { showFlash = true } = {}) {');
     assert.notEqual(saveStart, -1, `${label}: saveProvider missing`);
@@ -2871,17 +2874,17 @@ test('settings async test controls surface rejected background results', () => {
 
     assert.match(
       settings,
-      /function showVisionResult\(className, text, color = ''\) \{[\s\S]*?visionTestResult\.style\.color = color;[\s\S]*?return visionTestResult;[\s\S]*?\}/,
+      /function showVisionResult\(className, text, color = ''\) \{[\s\S]*?visionTestResult\.style\.color = color \|\| '';[\s\S]*?return visionTestResult;[\s\S]*?\}/,
       `${label}: vision status helper should clear stale inline colors and return the current node`,
     );
     assert.match(
       settings,
-      /function showTranscriptionResult\(className, text, color = ''\) \{[\s\S]*?if \(!transcriptionTestResult\) return;[\s\S]*?transcriptionTestResult\.style\.color = color;[\s\S]*?return transcriptionTestResult;[\s\S]*?\}/,
+      /function showTranscriptionResult\(className, text, color = ''\) \{[\s\S]*?if \(!transcriptionTestResult\) return;[\s\S]*?transcriptionTestResult\.style\.color = color \|\| '';[\s\S]*?return transcriptionTestResult;[\s\S]*?\}/,
       `${label}: transcription status helper should clear stale inline colors and tolerate absent controls`,
     );
     assert.match(
       settings,
-      /function showCaptchaResult\(className, text, color = ''\) \{[\s\S]*?if \(!captchaTestResult\) return;[\s\S]*?captchaTestResult\.style\.color = color;[\s\S]*?return captchaTestResult;[\s\S]*?\}/,
+      /function showCaptchaResult\(className, text, color = ''\) \{[\s\S]*?if \(!captchaTestResult\) return;[\s\S]*?captchaTestResult\.style\.color = color \|\| '';[\s\S]*?return captchaTestResult;[\s\S]*?\}/,
       `${label}: captcha status helper should clear stale inline colors and tolerate absent controls`,
     );
 
