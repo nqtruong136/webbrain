@@ -11,7 +11,7 @@ export const MAX_QUEUE_DEFERRALS = 120;
 export const DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 export const MIN_INTERVAL_MINUTES = 1;
 export const MAX_INTERVAL_MINUTES = 525600; // one year
-const LIVE_SCHEDULED_STATUSES = new Set(['pending', 'queued', 'running', 'needs_user_input', 'paused']);
+const LIVE_SCHEDULED_STATUSES = new Set(['pending', 'queued', 'running', 'needs_user_input']);
 const DUPLICATE_COALESCED_ERROR = 'Duplicate scheduled job coalesced into an existing live job.';
 
 function asObject(value) {

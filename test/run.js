@@ -2206,6 +2206,38 @@ test('ScheduledJobManager dedupes near-matching resume jobs', async () => {
   }
 });
 
+test('ScheduledJobManager does not dedupe against paused jobs', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    const h = makeSchedulerHarness(SchedulerMod, { now });
+    const args = { after_seconds: 60, reason: 'wait for account page', resume_instruction: 'continue the next batch' };
+    const first = await h.manager.createResumeJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      mode: 'act',
+      args,
+    });
+
+    const paused = await h.manager.pauseJob(first.jobId);
+    const second = await h.manager.createResumeJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      mode: 'act',
+      args,
+    });
+
+    assert.equal(paused.ok, true, `${label}: initial resume should pause`);
+    assert.equal(second.success, true, `${label}: rescheduled resume should succeed`);
+    assert.equal(second.deduped, undefined, `${label}: paused resume should not be treated as a duplicate`);
+    assert.notEqual(second.jobId, first.jobId, `${label}: rescheduled resume should create a new job`);
+    assert.equal(h.jobs().length, 2, `${label}: paused and rescheduled resumes should both be stored`);
+    assert.equal(h.jobs().find((job) => job.id === first.jobId)?.status, 'paused', `${label}: original job should remain paused`);
+    assert.equal(h.jobs().find((job) => job.id === second.jobId)?.status, 'pending', `${label}: new job should be pending`);
+    assert.equal(h.alarms.has(h.alarmName(first.jobId)), false, `${label}: paused job alarm should stay cleared`);
+    assert.equal(h.alarms.get(h.alarmName(second.jobId)).when, now + 60000, `${label}: new job should have a scheduled alarm`);
+  }
+});
+
 test('ScheduledJobManager dedupes near-matching task jobs', async () => {
   const now = Date.UTC(2026, 0, 1, 12, 0, 0);
   for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
