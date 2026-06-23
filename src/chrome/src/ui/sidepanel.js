@@ -7,6 +7,7 @@ import { t, getLocale, setLocale, LANGUAGES, applyDOMTranslations } from './i18n
 import { sanitizeMarkdownLinks } from './markdown-link.js';
 import { applyMode, loadMode, watch } from './theme.js';
 import { buildRecommendedActions } from './recommended-actions.js';
+import { createContextMenuPromptHandler } from './context-menu-prompts.js';
 
 // Hydrate the theme from chrome.storage.local (the inline <head> bootstrap
 // only sees localStorage; if the user changes the theme on another device
@@ -355,6 +356,7 @@ const recordingTimerEl = document.getElementById('recording-timer');
 const recordingStopBtn = document.getElementById('btn-recording-stop');
 
 let currentTabId = null;
+let pendingTabSwitch = null; // tab the user switched to while isProcessing was true
 let isProcessing = false;
 let currentAssistantEl = null;
 let verboseMode = false;
@@ -364,6 +366,21 @@ let recommendationsRequestId = 0;
 let recommendedActionsCollapsed = false;
 let slashCommandMatches = [];
 let slashCommandSelectedIndex = 0;
+const {
+  acceptContextMenuPrompt,
+  drainQueuedContextMenuPrompts,
+  consumePendingContextMenuPrompt,
+  clearQueuedForTab,
+} = createContextMenuPromptHandler({
+  getCurrentTabId: () => currentTabId,
+  getIsProcessing: () => isProcessing,
+  getAgentMode: () => agentMode,
+  setMode,
+  getInputEl: () => inputEl,
+  autoResizeInput,
+  sendMessage,
+  sendToBackground,
+});
 // Notification sound on task completion. Default on; togglable via Settings.
 let notifySoundEnabled = true;
 let notifyAudio = null;
@@ -754,6 +771,7 @@ function settleScheduledRun(event, job) {
     hideActivity();
     if (currentAssistantEl === assistantEl) currentAssistantEl = null;
     abortRequested = false;
+    drainQueuedContextMenuPrompts();
   }
   if (event === 'completed') playCompletionSound();
 }
@@ -801,6 +819,7 @@ function handleScheduledJobEvent(data, tabId) {
       isProcessing = false;
       sendBtn.disabled = false;
       addMessage('system', t('sp.scheduled.needs_user_input', { title: safeTitle }));
+      drainQueuedContextMenuPrompts();
     }
   }
 }
@@ -823,6 +842,25 @@ function datetimeLocalValue(ms) {
   return local.toISOString().slice(0, 16);
 }
 
+function isHttpScheduleUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+async function getCurrentScheduleUrl() {
+  if (currentTabId == null) return '';
+  try {
+    const tab = await chrome.tabs.get(currentTabId);
+    return tab?.url || '';
+  } catch {
+    return '';
+  }
+}
+
 function addScheduleField(form, labelText, control) {
   const label = document.createElement('label');
   label.className = 'schedule-field';
@@ -834,11 +872,12 @@ function addScheduleField(form, labelText, control) {
   return label;
 }
 
-function renderScheduleComposer(prefillPrompt = '') {
+async function renderScheduleComposer(prefillPrompt = '') {
   const msgEl = addMessage('system', t('sp.schedule_form.opened'));
   const content = msgEl.querySelector('.message-content');
   const form = document.createElement('form');
   form.className = 'schedule-composer';
+  const initialScheduleUrl = await getCurrentScheduleUrl();
 
   const titleInput = document.createElement('input');
   titleInput.type = 'text';
@@ -894,6 +933,10 @@ function renderScheduleComposer(prefillPrompt = '') {
   urlInput.type = 'url';
   urlInput.placeholder = 'https://example.com/';
   const urlField = addScheduleField(form, t('sp.schedule_form.target_url'), urlInput);
+  if (isHttpScheduleUrl(initialScheduleUrl)) {
+    urlInput.value = initialScheduleUrl;
+    targetType.value = 'url';
+  }
 
   const modeInput = document.createElement('select');
   modeInput.innerHTML = `<option value="act">${escapeHtml(t('sp.mode.act'))}</option><option value="ask">${escapeHtml(t('sp.mode.ask'))}</option>`;
@@ -1051,6 +1094,8 @@ async function init() {
   await testConnection({ skipWebBrainCloud: true });
   refreshScheduledJobs();
   refreshRecommendedActions();
+  await consumePendingContextMenuPrompt();
+  drainQueuedContextMenuPrompts();
 
   chrome.tabs.onActivated.addListener(async (info) => {
     switchToTab(info.tabId);
@@ -1132,8 +1177,12 @@ if (verboseBtn) {
 }
 
 async function switchToTab(newTabId) {
-  if (newTabId === currentTabId) return;
-  if (isProcessing) return; // don't switch while agent is running
+  if (newTabId === currentTabId) { pendingTabSwitch = null; return; }
+  if (isProcessing) {
+    pendingTabSwitch = newTabId; // apply after the run ends
+    return;
+  }
+  pendingTabSwitch = null;
 
   // Save current tab's chat (in-memory + storage).
   if (currentTabId != null) {
@@ -1155,6 +1204,7 @@ async function switchToTab(newTabId) {
   scrollToBottom();
   refreshScheduledJobs();
   refreshRecommendedActions();
+  consumePendingContextMenuPrompt().then(() => drainQueuedContextMenuPrompts()).catch(() => {});
 }
 
 function hideRecommendedActions() {
@@ -1750,7 +1800,7 @@ function updateApiBadge() {
   }
 }
 
-async function sendMessage() {
+async function sendMessage(extraChatParams) {
   let text = inputEl.value.trim();
   if (!text || isProcessing) return;
   hideSlashCommandAutocomplete();
@@ -1784,13 +1834,16 @@ async function sendMessage() {
 
   currentAssistantEl = addMessage('assistant', '');
 
+  let accepted = false;
   try {
     const res = await sendToBackground('chat', {
       tabId: currentTabId,
       text,
       mode: agentMode,
       apiMutationsAllowed,
+      ...extraChatParams,
     });
+    accepted = true;
 
     if (abortRequested) {
       // Agent was stopped — show what we got so far
@@ -1825,7 +1878,14 @@ async function sendMessage() {
     scrollToBottom();
     if (!wasAborted) playCompletionSound();
     refreshRecommendedActions();
+    if (pendingTabSwitch != null) {
+      const pending = pendingTabSwitch;
+      pendingTabSwitch = null;
+      await switchToTab(pending);
+    }
+    drainQueuedContextMenuPrompts();
   }
+  return accepted;
 }
 
 // ─── Tab Recorder (v7.4) ────────────────────────────────────────────
@@ -1929,6 +1989,16 @@ hydrateRecordingFromBackground();
 // transcript) so Phase 3's "Summarize" CTA can read it.
 let lastRecordingResult = null;
 let lastTranscript = null;
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.target !== 'sidepanel' || msg.action !== 'context_menu_prompt') return;
+  acceptContextMenuPrompt(msg.prompt || msg);
+});
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.target !== 'sidepanel' || msg.action !== 'context_menu_tab_navigated') return;
+  clearQueuedForTab(msg.tabId);
+});
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.target !== 'sidepanel' || msg.action !== 'recording_update') return;
@@ -2326,6 +2396,7 @@ function submitClarify(card, tabId, clarifyId, answer, source) {
         isProcessing = false;
         sendBtn.disabled = false;
         hideActivity();
+        drainQueuedContextMenuPrompts();
       }
       /* background may be torn down — clarify state already lives there */
     });
@@ -2611,6 +2682,7 @@ async function continueAgent() {
     hideActivity();
     currentAssistantEl = null;
     scrollToBottom();
+    drainQueuedContextMenuPrompts();
   }
 }
 
@@ -2870,6 +2942,44 @@ function sendToBackground(action, data = {}) {
   });
 }
 
+// --- Keyboard shortcuts ---
+
+function handleGlobalKeydown(e) {
+  if (e.defaultPrevented) return;
+
+  // Don't steal shortcuts from other input elements (e.g. schedule form fields)
+  const tag = e.target?.tagName;
+  if (e.target !== inputEl && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')) return;
+
+  const mod = e.ctrlKey || e.metaKey;
+
+  // Ctrl+/ (Cmd+/ on Mac): focus input
+  if (mod && e.key === '/') {
+    e.preventDefault();
+    inputEl.focus();
+    inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+    return;
+  }
+  // Ctrl+Shift+A: switch to Ask mode (blocked while agent is running)
+  if (mod && e.shiftKey && e.key === 'A' && !isProcessing) {
+    e.preventDefault();
+    setMode('ask');
+    return;
+  }
+  // Ctrl+Shift+X: switch to Act mode (blocked while agent is running)
+  if (mod && e.shiftKey && e.key === 'X' && !isProcessing) {
+    e.preventDefault();
+    ensureActMode();
+    return;
+  }
+  // Escape: abort running agent (only when slash menu is not open)
+  if (e.key === 'Escape' && isProcessing &&
+      slashCommandMenuEl?.classList.contains('hidden')) {
+    e.preventDefault();
+    abortRun();
+  }
+}
+
 // --- Mode Toggle ---
 
 function setMode(mode) {
@@ -2918,7 +3028,7 @@ modeActBtn.addEventListener('click', () => {
 
 // --- Stop / Abort ---
 
-stopBtn.addEventListener('click', async () => {
+async function abortRun() {
   if (!isProcessing) return;
   abortRequested = true;
   showActivity(t('sp.activity.stopping'));
@@ -2946,18 +3056,23 @@ stopBtn.addEventListener('click', async () => {
       abortRequested = false;
     }
   }, 3000); // safety timeout if background takes too long
-});
+}
+
+stopBtn.addEventListener('click', abortRun);
 
 
 // --- Event Listeners ---
 
 sendBtn.addEventListener('click', sendMessage);
 
+document.addEventListener('keydown', handleGlobalKeydown);
+
 inputEl.addEventListener('keydown', (e) => {
   if (handleSlashCommandKeydown(e)) return;
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
+    return;
   }
 });
 
