@@ -2279,6 +2279,47 @@ test('ScheduledJobManager dedupes near-matching task jobs', async () => {
   }
 });
 
+test('ScheduledJobManager does not dedupe current-tab tasks across page navigation', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    const h = makeSchedulerHarness(SchedulerMod, { now });
+    const args = {
+      title: 'Check page',
+      prompt: 'Summarize the current page.',
+      schedule: { type: 'once', after_seconds: 60 },
+      target: { type: 'current_tab' },
+      mode: 'act',
+    };
+    const first = await h.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args,
+      source: 'user',
+      currentUrl: 'https://example.com/inbox',
+      currentTitle: 'Inbox',
+    });
+    h.tabs.set(77, { id: 77, url: 'https://example.com/settings', title: 'Settings' });
+    const second = await h.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args,
+      source: 'user',
+      currentUrl: 'https://example.com/settings',
+      currentTitle: 'Settings',
+    });
+
+    assert.equal(first.success, true, `${label}: first current-tab task should schedule`);
+    assert.equal(second.success, true, `${label}: second current-tab task should schedule`);
+    assert.equal(second.deduped, undefined, `${label}: navigated current-tab task should not be deduped`);
+    assert.notEqual(second.jobId, first.jobId, `${label}: navigated current-tab task should create a separate job`);
+    assert.equal(h.jobs().length, 2, `${label}: both page-specific tasks should be stored`);
+    assert.equal(h.jobs().find((job) => job.id === first.jobId)?.target?.originalUrl, 'https://example.com/inbox', `${label}: first job should keep its original URL`);
+    assert.equal(h.jobs().find((job) => job.id === second.jobId)?.target?.originalUrl, 'https://example.com/settings', `${label}: second job should keep its original URL`);
+    assert.equal(h.alarms.has(h.alarmName(first.jobId)), true, `${label}: first job should keep an alarm`);
+    assert.equal(h.alarms.has(h.alarmName(second.jobId)), true, `${label}: second job should have an alarm`);
+  }
+});
+
 test('ScheduledJobManager allows same intent outside the duplicate window', async () => {
   const now = Date.UTC(2026, 0, 1, 12, 0, 0);
   for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {

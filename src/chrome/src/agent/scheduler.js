@@ -124,6 +124,13 @@ function scheduledJobTargetKey(job) {
   return tabId == null ? null : `tab:${tabId}`;
 }
 
+function scheduledJobDuplicateTargetKey(job) {
+  const targetKey = scheduledJobTargetKey(job);
+  if (!targetKey || job?.kind !== 'task' || job.target?.type !== 'current_tab') return targetKey;
+  const originalUrl = canonicalUrl(job.target.originalUrl);
+  return originalUrl ? `${targetKey}:url:${originalUrl}` : targetKey;
+}
+
 function scheduledJobConversationKey(job) {
   return String(job?.conversationId ?? job?.target?.conversationId ?? '');
 }
@@ -151,8 +158,8 @@ function scheduledTimesAreNear(a, b) {
 }
 
 function sameScheduledIntent(a, b) {
-  const targetA = scheduledJobTargetKey(a);
-  const targetB = scheduledJobTargetKey(b);
+  const targetA = scheduledJobDuplicateTargetKey(a);
+  const targetB = scheduledJobDuplicateTargetKey(b);
   return !!targetA &&
     targetA === targetB &&
     a?.kind === b?.kind &&
