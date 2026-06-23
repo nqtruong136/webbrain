@@ -4893,6 +4893,21 @@ test('isNetworkMutation: only write-method fetches (so /allow-api cannot waive G
   assert.equal(isNetworkMutation('navigate', { url: 'https://x.com' }), false);
 });
 
+test('agent clearConversation drops /allow-api override in both builds', () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({});
+    const tabId = 4891;
+    agent.conversations.set(tabId, [{ role: 'system', content: 'sys' }]);
+    agent.setApiMutationsAllowed(tabId, true);
+    agent.apiAllowedInjected.add(tabId);
+
+    agent.clearConversation(tabId);
+
+    assert.equal(agent.apiAllowedTabs.has(tabId), false, `${AgentClass.name}: /allow-api survived clearConversation`);
+    assert.equal(agent.apiAllowedInjected.has(tabId), false, `${AgentClass.name}: injected /allow-api marker survived clearConversation`);
+  }
+});
+
 test('capabilityFor: screenshot is read-only, but save:true is a download', () => {
   assert.equal(capabilityFor('screenshot', {}), null);
   assert.equal(capabilityFor('full_page_screenshot', {}), null);

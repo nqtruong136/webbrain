@@ -2233,6 +2233,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this._lastInputTokens.delete(tabId);
     this._lastEstCharsAtReport.delete(tabId);
     this._compactCooldown.delete(tabId);
+    this.apiAllowedTabs.delete(tabId);
+    this.apiAllowedInjected.delete(tabId);
     this._cleanupTab(tabId, { preserveRunGuard: true });
   }
 
