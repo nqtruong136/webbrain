@@ -22,6 +22,7 @@ let allRuns = [];
 let selectedRunId = null;
 let compareMode = false;
 let compareIds = []; // length 0..2
+let timelineObjectUrls = new Set();
 
 // conversationId → [runs, oldest first]. Rebuilt from allRuns on every refresh.
 let conversationMap = new Map();
@@ -136,6 +137,7 @@ function handleRunClick(runId) {
     if (compareIds.length === 2) renderCompare(compareIds[0], compareIds[1]);
     else {
       mainPane.classList.remove('compare-mode');
+      replaceTimelineObjectUrls(new Set());
       mainPane.innerHTML = `<div id="empty-state"><div><p style="font-size:14px;">${escapeHtml(t('tr.compare_mode.title'))}</p><p style="color:var(--text3);">${escapeHtml(t('tr.compare_mode.picked', { n: compareIds.length }))}</p></div></div>`;
     }
   } else {
@@ -149,10 +151,16 @@ function handleRunClick(runId) {
 
 async function renderRun(runId) {
   const run = await getRun(runId);
-  if (!run) return;
+  if (!run) {
+    replaceTimelineObjectUrls(new Set());
+    return;
+  }
   const events = await getRunEvents(runId);
   mainPane.classList.remove('compare-mode');
-  mainPane.innerHTML = await buildRunView(run, events, false);
+  const objectUrls = new Set();
+  const html = await buildRunView(run, events, false, objectUrls);
+  replaceTimelineObjectUrls(objectUrls);
+  mainPane.innerHTML = html;
   wireTimelineImages(mainPane);
 }
 
@@ -160,10 +168,15 @@ async function renderCompare(aId, bId) {
   const [a, b, aEv, bEv] = await Promise.all([
     getRun(aId), getRun(bId), getRunEvents(aId), getRunEvents(bId),
   ]);
-  if (!a || !b) return;
+  if (!a || !b) {
+    replaceTimelineObjectUrls(new Set());
+    return;
+  }
   mainPane.classList.add('compare-mode');
-  const aHtml = await buildRunView(a, aEv, true);
-  const bHtml = await buildRunView(b, bEv, true);
+  const objectUrls = new Set();
+  const aHtml = await buildRunView(a, aEv, true, objectUrls);
+  const bHtml = await buildRunView(b, bEv, true, objectUrls);
+  replaceTimelineObjectUrls(objectUrls);
   mainPane.innerHTML = `<div class="pane">${aHtml}</div><div class="pane">${bHtml}</div>`;
   wireTimelineImages(mainPane);
 }
@@ -195,7 +208,7 @@ function renderConversationPanel(run, compact) {
   `;
 }
 
-async function buildRunView(run, events, compact) {
+async function buildRunView(run, events, compact, objectUrls = new Set()) {
   const header = `
     <div class="run-header">
       <h2>${escapeHtml(run.model || t('tr.unknown_model'))}</h2>
@@ -221,11 +234,11 @@ async function buildRunView(run, events, compact) {
       if (shot) shotCache.set(ev.seq, shot);
     }
   }
-  const items = events.map(ev => renderEvent(ev, shotCache, compact)).join('');
+  const items = events.map(ev => renderEvent(ev, shotCache, compact, objectUrls)).join('');
   return `${header}<div class="timeline">${items}</div>`;
 }
 
-function renderEvent(ev, shotCache, compact) {
+function renderEvent(ev, shotCache, compact, objectUrls = new Set()) {
   const ts = new Date(ev.ts).toLocaleTimeString();
   const stepBadge = ev.data?.step != null ? `<span class="step">${escapeHtml(t('tr.event.step', { step: ev.data.step }))}</span>` : '';
   switch (ev.kind) {
@@ -285,7 +298,7 @@ function renderEvent(ev, shotCache, compact) {
     case 'screenshot': {
       const shot = shotCache.get(ev.seq);
       let src = '';
-      if (shot?.blob) src = URL.createObjectURL(shot.blob);
+      if (shot?.blob) src = createTrackedObjectUrl(shot.blob, objectUrls);
       else if (shot?.dataUrl) src = shot.dataUrl;
       const caption = ev.data?.caption || t('tr.event.screenshot_caption');
       return `
@@ -327,6 +340,26 @@ function renderEvent(ev, shotCache, compact) {
   }
 }
 
+function createTrackedObjectUrl(blob, objectUrls) {
+  const url = URL.createObjectURL(blob);
+  objectUrls.add(url);
+  return url;
+}
+
+function replaceTimelineObjectUrls(nextUrls) {
+  const oldUrls = timelineObjectUrls;
+  if (oldUrls.size > 0) {
+    const modalSrc = imgModalImg?.src || '';
+    const modalUsesOldUrl = oldUrls.has(modalSrc);
+    for (const url of oldUrls) URL.revokeObjectURL(url);
+    if (modalUsesOldUrl) {
+      imgModal.classList.remove('show');
+      imgModalImg.removeAttribute('src');
+    }
+  }
+  timelineObjectUrls = nextUrls;
+}
+
 function wireTimelineImages(root) {
   root.querySelectorAll('.event.screenshot img').forEach(img => {
     img.addEventListener('click', () => {
@@ -366,12 +399,14 @@ document.getElementById('btn-compare').addEventListener('click', () => {
     compareIds = [];
     selectedRunId = null;
     mainPane.classList.remove('compare-mode');
+    replaceTimelineObjectUrls(new Set());
     mainPane.innerHTML = `<div id="empty-state"><div><p style="font-size:14px;">${escapeHtml(t('tr.compare_mode.title'))}</p><p style="color:var(--text3);">${escapeHtml(t('tr.compare_mode.hint'))}</p></div></div>`;
   } else {
     btn.classList.remove('primary');
     btn.textContent = t('tr.btn.compare');
     compareIds = [];
     mainPane.classList.remove('compare-mode');
+    replaceTimelineObjectUrls(new Set());
     mainPane.innerHTML = `<div id="empty-state"><div><p style="font-size:14px;">${escapeHtml(t('tr.empty.title'))}</p></div></div>`;
   }
   renderList();
@@ -408,6 +443,7 @@ document.getElementById('btn-delete').addEventListener('click', async () => {
   if (!confirm(t('tr.confirm_delete'))) return;
   await deleteRun(selectedRunId);
   selectedRunId = null;
+  replaceTimelineObjectUrls(new Set());
   mainPane.innerHTML = `<div id="empty-state"><div><p>${escapeHtml(t('tr.deleted'))}</p></div></div>`;
   refresh();
 });
@@ -417,6 +453,7 @@ document.getElementById('btn-clear-all').addEventListener('click', async () => {
   await clearAllRuns();
   selectedRunId = null;
   compareIds = [];
+  replaceTimelineObjectUrls(new Set());
   mainPane.innerHTML = `<div id="empty-state"><div><p>${escapeHtml(t('tr.all_deleted'))}</p></div></div>`;
   refresh();
 });

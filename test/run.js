@@ -2095,6 +2095,43 @@ test('chrome fetch fallback clears offscreen proxy timeout after success', async
   }
 });
 
+test('trace viewer revokes screenshot object URLs when replacing rendered timelines', () => {
+  for (const [label, tracesRel] of [
+    ['chrome', 'src/chrome/src/ui/traces.js'],
+    ['firefox', 'src/firefox/src/ui/traces.js'],
+  ]) {
+    const traces = fs.readFileSync(path.join(ROOT, tracesRel), 'utf8');
+    assert.match(traces, /let timelineObjectUrls = new Set\(\);/, `${label}: trace viewer should track timeline object URLs`);
+    assert.match(traces, /async function buildRunView\(run, events, compact, objectUrls = new Set\(\)\)/, `${label}: buildRunView should collect object URLs for each render`);
+    assert.match(traces, /function renderEvent\(ev, shotCache, compact, objectUrls = new Set\(\)\)/, `${label}: renderEvent should receive the current object URL collection`);
+    assert.match(traces, /if \(shot\?\.blob\) src = createTrackedObjectUrl\(shot\.blob, objectUrls\);/, `${label}: screenshots should create tracked object URLs`);
+    assert.match(
+      traces,
+      /function createTrackedObjectUrl\(blob, objectUrls\) \{[\s\S]*?const url = URL\.createObjectURL\(blob\);[\s\S]*?objectUrls\.add\(url\);[\s\S]*?return url;[\s\S]*?\}/,
+      `${label}: tracked object URL helper missing`,
+    );
+    assert.match(
+      traces,
+      /function replaceTimelineObjectUrls\(nextUrls\) \{[\s\S]*?const oldUrls = timelineObjectUrls;[\s\S]*?for \(const url of oldUrls\) URL\.revokeObjectURL\(url\);[\s\S]*?imgModal\.classList\.remove\('show'\);[\s\S]*?imgModalImg\.removeAttribute\('src'\);[\s\S]*?timelineObjectUrls = nextUrls;[\s\S]*?\}/,
+      `${label}: replacing a rendered timeline should revoke old URLs and clear stale modal images`,
+    );
+
+    const renderRunStart = traces.indexOf('async function renderRun(runId) {');
+    assert.notEqual(renderRunStart, -1, `${label}: renderRun missing`);
+    const renderRunBody = traces.slice(renderRunStart, traces.indexOf('\n}\n\nasync function renderCompare', renderRunStart) + 2);
+    assert.match(
+      renderRunBody,
+      /if \(!run\) \{[\s\S]*?replaceTimelineObjectUrls\(new Set\(\)\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?const objectUrls = new Set\(\);[\s\S]*?const html = await buildRunView\(run, events, false, objectUrls\);[\s\S]*?replaceTimelineObjectUrls\(objectUrls\);[\s\S]*?mainPane\.innerHTML = html;/,
+      `${label}: single-run rendering should swap object URL ownership before replacing HTML`,
+    );
+    assert.equal(
+      (traces.match(/replaceTimelineObjectUrls\(new Set\(\)\);/g) || []).length >= 5,
+      true,
+      `${label}: empty-state transitions should clear timeline object URLs`,
+    );
+  }
+});
+
 test('chrome sidepanel Escape abort honors slash autocomplete dismissal', () => {
   const panel = fs.readFileSync(path.join(ROOT, 'src/chrome/src/ui/sidepanel.js'), 'utf8');
   assert.match(panel, /if \(e\.key === 'Escape'\) \{\s*e\.preventDefault\(\);\s*hideSlashCommandAutocomplete\(\);\s*return true;\s*\}/, 'chrome: slash autocomplete Escape should consume the key event');
