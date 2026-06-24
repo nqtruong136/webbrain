@@ -1615,11 +1615,20 @@ function rebindScheduleComposers() {
   });
 }
 
+function rebindSubscribeButtons() {
+  document.querySelectorAll('.subscribe-btn').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = 'true';
+    btn.addEventListener('click', () => openSubscribeUrl(btn.dataset.subscribeUrl));
+  });
+}
+
 function rebindRestoredMessageControls() {
   rebindCopyButtons();
   rebindContinueButtons();
   rebindClarifyCards();
   rebindScheduleComposers();
+  rebindSubscribeButtons();
 }
 
 async function loadProviders() {
@@ -2926,9 +2935,17 @@ function parseSubscribeError(content) {
   return { url, message };
 }
 
+function openSubscribeUrl(url) {
+  if (!url) return;
+  try { chrome.tabs.create({ url }); }
+  catch { window.open(url, '_blank', 'noopener'); }
+}
+
 // Render the quota error as a card with a one-click Subscribe button. Returns
 // true when `content` matched and the card was rendered into `textEl`, so the
-// caller can skip its normal markdown rendering.
+// caller can skip its normal markdown rendering. The URL is stashed on the
+// button's dataset so it survives chat-history restore (messagesEl.innerHTML),
+// where the click closure is lost and rebindSubscribeButtons re-attaches it.
 function renderSubscribeError(textEl, content) {
   const parsed = parseSubscribeError(content);
   if (!parsed) return false;
@@ -2944,10 +2961,9 @@ function renderSubscribeError(textEl, content) {
   const btn = document.createElement('button');
   btn.className = 'subscribe-btn';
   btn.textContent = t('sp.subscribe.btn');
-  btn.addEventListener('click', () => {
-    try { chrome.tabs.create({ url: parsed.url }); }
-    catch { window.open(parsed.url, '_blank', 'noopener'); }
-  });
+  btn.dataset.subscribeUrl = parsed.url;
+  btn.dataset.bound = 'true';
+  btn.addEventListener('click', () => openSubscribeUrl(btn.dataset.subscribeUrl));
   textEl.appendChild(btn);
   return true;
 }
