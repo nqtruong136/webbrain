@@ -205,14 +205,20 @@ WebBrain accepte les commandes slash en tant que premier élément d'une ligne d
 | Commande | Ce qu'elle fait |
 |---------|--------------|
 | `/help` | Affiche la liste des commandes disponibles |
+| `/schedule` | Créer une tâche planifiée |
+| `/list-schedules` | Afficher les tâches planifiées |
+| `/show-scratchpad` | Afficher le bloc-notes actuel |
 | `/allow-api` | **Dérogation de mutation API par conversation.** Lève la restriction UI-d'abord afin que l'agent puisse utiliser POST/PUT/PATCH/DELETE via `fetch_url` lorsque l'UI échoue. Un badge apparaît pendant l'activation ; il s'efface au `/reset`. |
 | `/compact` | Force le compactage du contexte pour la conversation actuelle |
 | `/verbose` | Bascule l'affichage des outils verbeux/compact (identique au bouton de la barre d'outils) |
 | `/reset` | Efface la conversation et tous les indicateurs par conversation |
 | `/screenshot` | Capture l'onglet visible et affiche l'image en ligne dans le chat |
+| `/record` | Démarrer l'enregistrement de l'onglet actuel |
 | `/export` | Télécharge la conversation actuelle sous forme de fichier Markdown |
 | `/profile` | Bascule le remplissage automatique du profil sans ouvrir les Paramètres |
 | `/vision` | Bascule le mode vision (compréhension de captures d'écran) sur le fournisseur actif |
+| `/ask` | Passer en mode Demander avant d'envoyer |
+| `/plan` | Passer en mode Demander avec une intention de planification |
 
 La règle UI-d'abord par défaut existe parce que les actions API sont invisibles (vous ne voyez pas ce qui est envoyé), nécessitent souvent des jetons d'authentification distincts que vous n'avez peut-être pas configurés, et peuvent avoir un rayon d'impact bien plus grand qu'un mauvais clic visible. N'utilisez `/allow-api` que lorsque vous avez décidé d'accepter ce compromis pour une tâche spécifique.
 
