@@ -215,14 +215,20 @@ WebBrain accepts slash commands as the first thing on a line in the input box. T
 | Command | What it does |
 |---------|--------------|
 | `/help` | Show the list of available commands |
+| `/schedule` | Create a scheduled task |
+| `/list-schedules` | Show scheduled tasks |
+| `/show-scratchpad` | Show the current scratchpad |
 | `/allow-api` | **Per-conversation API mutation override.** Lifts the UI-first restriction so the agent may use POST/PUT/PATCH/DELETE via `fetch_url` when UI is failing. Badge appears while active; clears on `/reset`. |
 | `/compact` | Force context compaction for the current conversation |
 | `/verbose` | Toggle verbose/compact tool display (same as the toolbar button) |
 | `/reset` | Clear the conversation and all per-conversation flags |
 | `/screenshot` | Capture the visible tab and display the image inline in chat |
+| `/record` | Start recording the current tab |
 | `/export` | Download the current conversation as a Markdown file |
 | `/profile` | Toggle profile auto-fill on/off without opening Settings |
 | `/vision` | Toggle vision mode (screenshot understanding) on the active provider |
+| `/ask` | Switch to Ask mode before sending |
+| `/plan` | Switch to Ask mode with planning intent |
 
 The default UI-first rule exists because API actions are invisible (you don't see what's being sent), often require separate auth tokens you may not have configured, and can have a much larger blast radius than a visible mis-click. Only use `/allow-api` when you've decided you want that tradeoff for a specific job.
 
