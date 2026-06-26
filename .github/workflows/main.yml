@@ -28,3 +28,20 @@ jobs:
           git add -A dist
           git commit -m "chore: rebuild dist zips"
       - run: git push
+      - name: Get release metadata
+        id: release_meta
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          SHA=$(git rev-parse HEAD)
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "SHA=$SHA" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ steps.release_meta.outputs.VERSION }}
+          target_commitish: ${{ steps.release_meta.outputs.SHA }}
+          name: Release v${{ steps.release_meta.outputs.VERSION }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.zip
