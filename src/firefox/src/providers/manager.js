@@ -8,6 +8,7 @@ const OPENROUTER_DEFAULT_MODEL = 'minimax/minimax-m3';
 const OPENROUTER_LEGACY_DEFAULT_MODEL = 'stepfun/step-3.7-flash';
 const SUPPORTED_PROVIDER_TYPES = new Set(['llamacpp', 'openai', 'anthropic', 'anthropic_oauth']);
 const SAFE_PROVIDER_ID_RE = /^[A-Za-z0-9_-]+$/;
+const ROUTER_PROVIDER_IDS = ['openrouter', 'cloudflare', 'nvidia', 'groq'];
 
 /**
  * Manages LLM provider instances and persists configuration.
@@ -208,6 +209,20 @@ export class ProviderManager {
         apiKey: '',
         enabled: false,
       },
+      cloudflare: {
+        type: 'openai',
+        category: 'router',
+        label: 'Cloudflare Workers AI',
+        providerName: 'cloudflare',
+        baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1',
+        model: '@cf/zai-org/glm-5.2',
+        contextWindow: 262144,
+        supportsStreamUsageOptions: false,
+        accountId: '',
+        apiKey: '',
+        apiKeyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+        enabled: false,
+      },
       mistral: {
         type: 'openai',
         category: 'cloud',
@@ -252,7 +267,7 @@ export class ProviderManager {
       },
       nvidia: {
         type: 'openai',
-        category: 'cloud',
+        category: 'router',
         label: 'Nvidia NIM',
         providerName: 'nvidia',
         baseUrl: 'https://integrate.api.nvidia.com/v1',
@@ -265,7 +280,7 @@ export class ProviderManager {
       },
       groq: {
         type: 'openai',
-        category: 'cloud',
+        category: 'router',
         label: 'Groq',
         providerName: 'groq',
         baseUrl: 'https://api.groq.com/openai/v1',
@@ -341,6 +356,14 @@ export class ProviderManager {
         omitToolsWhenImagesPresent: false,
       };
     }
+    for (const id of ROUTER_PROVIDER_IDS) {
+      if (migrated[id] && migrated[id].category !== 'router') {
+        migrated[id] = {
+          ...migrated[id],
+          category: 'router',
+        };
+      }
+    }
     return migrated;
   }
 
@@ -369,7 +392,7 @@ export class ProviderManager {
   static categoryFor(id, config) {
     if (config && config.category) return config.category;
     if (['llamacpp', 'ollama', 'lmstudio', 'jan', 'vllm', 'sglang'].includes(id)) return 'local';
-    if (id === 'openrouter') return 'router';
+    if (ROUTER_PROVIDER_IDS.includes(id)) return 'router';
     return 'cloud';
   }
 

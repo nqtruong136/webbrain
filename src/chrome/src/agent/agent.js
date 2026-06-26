@@ -248,6 +248,20 @@ export class Agent {
     return this._scratchpadWrite(tabId, { text, replace: !!options?.replace });
   }
 
+  clearScratchpad(tabId) {
+    const messages = this.conversations.get(tabId);
+    if (!messages) {
+      return { success: true, existed: false, note: 'scratchpad already empty' };
+    }
+    const idx = this._findScratchpadIndex(messages);
+    if (idx < 0) {
+      return { success: true, existed: false, note: 'scratchpad already empty' };
+    }
+    messages.splice(idx, 1);
+    if (typeof this._persist === 'function') this._persist(tabId);
+    return { success: true, existed: true, note: 'scratchpad cleared' };
+  }
+
   setScheduledRunPolicy(tabId, policy) {
     this.scheduledRunPolicies.set(tabId, {
       requireConsequentialConfirmation: policy?.requireConsequentialConfirmation !== false,

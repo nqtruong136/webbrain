@@ -8,7 +8,7 @@ import { CAPABILITY_LABEL } from '../agent/permission-gate.js';
 
 // Version shown in the subtitle. Kept here so it only needs one update per
 // release; the subtitle string itself is translated.
-const EXT_VERSION = '17.6.2';
+const EXT_VERSION = '17.7.0';
 
 const providersContainer = document.getElementById('providers');
 const verboseToggle = document.getElementById('toggle-verbose');
@@ -873,6 +873,16 @@ function renderProviders() {
         { key: 'model', labelKey: 'st.provider.field.model', type: 'text', placeholder: 'gemini-3.1-pro',
           suggestions: ['gemini-3.1-pro', 'gemini-3-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'] },
         { key: 'baseUrl', labelKey: 'st.provider.field.api_base_url', type: 'text', placeholder: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+        ...COST_ESTIMATE_FIELDS,
+      ],
+    },
+    cloudflare: {
+      fields: [
+        { key: 'apiKey', labelKey: 'st.provider.field.api_key', type: 'password', placeholder: 'API token' },
+        { key: 'accountId', label: 'Cloudflare Account ID', type: 'text', placeholder: '0123456789abcdef0123456789abcdef' },
+        { key: 'model', labelKey: 'st.provider.field.model', type: 'text', placeholder: '@cf/zai-org/glm-5.2',
+          suggestions: ['@cf/zai-org/glm-5.2'] },
+        { key: 'baseUrl', labelKey: 'st.provider.field.api_base_url', type: 'text', placeholder: 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1' },
         ...COST_ESTIMATE_FIELDS,
       ],
     },

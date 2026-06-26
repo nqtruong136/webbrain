@@ -4,6 +4,24 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / `manifest.json` version.
 
+## [17.7.0] - 2026-06-26
+
+### Added
+- Added `/clear-scratchpad` in the Chrome and Firefox side panels so users can clear the current conversation scratchpad from slash-command autocomplete and help.
+- Added Cloudflare Workers AI to the provider list with the OpenAI-compatible Workers AI endpoint, default model `@cf/zai-org/glm-5.2`, and a 262k-token context window.
+
+### Changed
+- Translated the `/clear-scratchpad` label, help text, and cleared-state message across all supported locales.
+- Classified OpenRouter, Cloudflare Workers AI, Nvidia NIM, and Groq under the Router provider bucket in Chrome and Firefox settings.
+- Added a dedicated Cloudflare account ID field and URL validation so the Workers AI provider substitutes the account into the API base URL before testing or chatting.
+- Updated release metadata, Settings subtitle versions, architecture docs, Chrome / Firefox manifests, and package versions for 17.7.0.
+
+### Fixed
+- Migrated saved OpenRouter, Cloudflare Workers AI, Nvidia NIM, and Groq provider categories to Router so upgraded installs do not keep older Cloud filter state.
+
+### Tests
+- Added regression coverage for the synchronous scratchpad clear path, locale coverage for `/clear-scratchpad`, Cloudflare defaults, context-window inference, and the Router provider bucket.
+
 ## [17.6.0] - 2026-06-26
 
 ### Added

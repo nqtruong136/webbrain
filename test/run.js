@@ -1988,16 +1988,37 @@ test('sidepanel exposes scratchpad slash commands in both builds', () => {
     const locale = fs.readFileSync(path.join(ROOT, localeRel), 'utf8');
     assert.match(panel, /\/show-scratchpad\b/, `${label}: /show-scratchpad parser missing`);
     assert.match(panel, /\/edit-scratchpad\b/, `${label}: /edit-scratchpad parser missing`);
+    assert.match(panel, /\/clear-scratchpad\b/, `${label}: /clear-scratchpad parser missing`);
     assert.match(panel, /get_scratchpad/, `${label}: sidepanel should call background scratchpad reader`);
     assert.match(panel, /const msgEl = addMessage\('system', [\s\S]*?scratchpad-dump[\s\S]*?\);\s*addScratchpadCopyButton\(msgEl\);/, `${label}: /show-scratchpad should attach a scratchpad-only copy button`);
     assert.match(panel, /function addScratchpadCopyButton\(msgEl\) \{[\s\S]*?querySelector\('pre\.scratchpad-dump'\)[\s\S]*?scratchpad-copy-btn[\s\S]*?bindMessageCopyButton\(btn\);/, `${label}: scratchpad copy button should target the scratchpad pre`);
     assert.match(panel, /function getMessageCopyText\(btn\) \{[\s\S]*?classList\.contains\('scratchpad-copy-btn'\)[\s\S]*?querySelector\('pre\.scratchpad-dump'\)\?\.textContent/, `${label}: scratchpad copy should copy only pre textContent`);
     assert.match(panel, /write_scratchpad/, `${label}: sidepanel should call background scratchpad writer`);
+    assert.match(panel, /clear_scratchpad/, `${label}: sidepanel should call background scratchpad clearer`);
     assert.match(bg, /get_scratchpad/, `${label}: background scratchpad action missing`);
     assert.match(bg, /write_scratchpad/, `${label}: background scratchpad write action missing`);
+    assert.match(bg, /clear_scratchpad/, `${label}: background scratchpad clear action missing`);
     assert.match(agent, /async writeScratchpad\(tabId, text, options = \{\}\) \{[\s\S]*?this\.getConversation\(tabId, mode\);[\s\S]*?this\._scratchpadWrite\(tabId, \{ text, replace: !!options\?\.replace \}\);[\s\S]*?\}/, `${label}: agent should expose scratchpad append wrapper`);
+    assert.match(agent, /clearScratchpad\(tabId\) \{[\s\S]*?this\._findScratchpadIndex\(messages\)[\s\S]*?messages\.splice\(idx, 1\)[\s\S]*?scratchpad cleared[\s\S]*?\}/, `${label}: agent should expose synchronous scratchpad clear method`);
+    assert.doesNotMatch(agent, /async clearScratchpad\(tabId\)/, `${label}: scratchpad clear method should not be async`);
     assert.match(locale, /\/show-scratchpad/, `${label}: help should mention /show-scratchpad`);
     assert.match(locale, /\/edit-scratchpad/, `${label}: help should mention /edit-scratchpad`);
+    assert.match(locale, /\/clear-scratchpad/, `${label}: help should mention /clear-scratchpad`);
+  }
+});
+
+test('all locales translate the clear-scratchpad slash command', () => {
+  for (const [label, localeDir] of [
+    ['chrome', 'src/chrome/src/ui/locales'],
+    ['firefox', 'src/firefox/src/ui/locales'],
+  ]) {
+    for (const filename of fs.readdirSync(path.join(ROOT, localeDir)).filter((name) => name.endsWith('.js'))) {
+      const locale = fs.readFileSync(path.join(ROOT, localeDir, filename), 'utf8');
+      assert.match(locale, /['"]sp\.slash\.clear_scratchpad['"]:\s*['"][^'"]+['"]/, `${label}/${filename}: missing translated clear-scratchpad slash label`);
+      assert.match(locale, /['"]sp\.scratchpad\.cleared['"]:\s*['"][^'"]+['"]/, `${label}/${filename}: missing translated scratchpad cleared message`);
+      assert.match(locale, /\/clear-scratchpad\b/, `${label}/${filename}: help should mention /clear-scratchpad`);
+      assert.doesNotMatch(locale, /<br><br><code>\/clear-scratchpad/, `${label}/${filename}: help should not add an extra blank line before /clear-scratchpad`);
+    }
   }
 });
 
@@ -2975,6 +2996,20 @@ test('settings provider save and test status updates are DOM-safe', () => {
   }
 });
 
+test('settings exposes a Cloudflare account ID field before the base URL template', () => {
+  for (const [label, settingsRel] of [
+    ['chrome', 'src/chrome/src/ui/settings.js'],
+    ['firefox', 'src/firefox/src/ui/settings.js'],
+  ]) {
+    const settings = fs.readFileSync(path.join(ROOT, settingsRel), 'utf8');
+    assert.match(
+      settings,
+      /cloudflare:\s*\{[\s\S]*?\{\s*key: 'accountId', label: 'Cloudflare Account ID', type: 'text'[\s\S]*?\{\s*key: 'baseUrl'[\s\S]*?\{account_id\}/,
+      `${label}: Cloudflare settings should collect accountId before the baseUrl template`,
+    );
+  }
+});
+
 test('settings async test controls surface rejected background results', () => {
   for (const [label, settingsRel] of [
     ['chrome', 'src/chrome/src/ui/settings.js'],
@@ -3179,6 +3214,11 @@ test('sidepanel scopes async tab commands to the original tab', () => {
     assert.match(panel, /\/\/ \/show-scratchpad[\s\S]*?await showScratchpad\(tabId\);/, `${label}: /show-scratchpad should use the initiating tab id from the parser`);
     assert.match(panel, /async function editScratchpad\(note, tabId = currentTabId\) \{[\s\S]*?sendToBackground\('write_scratchpad', \{ tabId, text \}\);[\s\S]*?if \(currentTabId !== tabId\) return;[\s\S]*?catch \(e\) \{[\s\S]*?if \(currentTabId !== tabId\) return;[\s\S]*?sp\.scratchpad\.error/, `${label}: /edit-scratchpad should not render success or error results into a different tab`);
     assert.match(panel, /\/\/ \/edit-scratchpad[\s\S]*?await editScratchpad\(text\.slice\(mEditScratchpad\[0\]\.length\), tabId\);/, `${label}: /edit-scratchpad should use the initiating tab id from the parser`);
+    assert.match(panel, /function clearScratchpad\(tabId = currentTabId\) \{[\s\S]*?sendToBackground\('clear_scratchpad', \{ tabId \}\)[\s\S]*?if \(currentTabId !== tabId\) return;[\s\S]*?catch\(\(e\) => \{[\s\S]*?if \(currentTabId !== tabId\) return;[\s\S]*?sp\.scratchpad\.error/, `${label}: /clear-scratchpad should not render success or error results into a different tab`);
+    const clearScratchpadIdx = panel.indexOf('// /clear-scratchpad');
+    const clearScratchpadBody = panel.slice(clearScratchpadIdx, panel.indexOf('// /schedule', clearScratchpadIdx));
+    assert.match(clearScratchpadBody, /clearScratchpad\(tabId\);\s*return '';/, `${label}: /clear-scratchpad should use the initiating tab id from the parser`);
+    assert.doesNotMatch(clearScratchpadBody, /await clearScratchpad/, `${label}: /clear-scratchpad parser path should not await`);
 
     const screenshotIdx = panel.indexOf('// /screenshot');
     const screenshotEnd = panel.indexOf('// /record', screenshotIdx);
@@ -5425,9 +5465,11 @@ test('categoryFor: cloud family (openai / anthropic / gemini / mistral / deepsee
   }
 });
 
-test('categoryFor: openrouter is router', () => {
+test('categoryFor: hosted model gateways are router providers', () => {
   for (const PM of [ProviderManagerCh, ProviderManagerFx]) {
-    assert.equal(PM.categoryFor('openrouter', { type: 'openai' }), 'router');
+    for (const id of ['openrouter', 'cloudflare', 'nvidia', 'groq']) {
+      assert.equal(PM.categoryFor(id, { type: 'openai' }), 'router');
+    }
   }
 });
 
@@ -5458,11 +5500,12 @@ test('inferContextWindow: model-aware cloud/router defaults and local 16k fallba
     assert.equal(infer({ category: 'cloud', providerName: 'anthropic', model: 'claude-sonnet-4-6' }), 1000000);
     assert.equal(infer({ category: 'cloud', providerName: 'anthropic', model: 'claude-haiku-4-5' }), 200000);
     assert.equal(infer({ category: 'cloud', providerName: 'gemini', model: 'gemini-3.1-flash' }), 1000000);
+    assert.equal(infer({ category: 'router', providerName: 'cloudflare', model: '@cf/zai-org/glm-5.2' }), 262144);
     assert.equal(infer({ category: 'cloud', providerName: 'mistral', model: 'mistral-medium-3.5' }), 262144);
     assert.equal(infer({ category: 'cloud', providerName: 'deepseek', model: 'deepseek-v4-flash' }), 1000000);
     assert.equal(infer({ category: 'cloud', providerName: 'xai', model: 'grok-4.3' }), 1000000);
-    assert.equal(infer({ category: 'cloud', providerName: 'groq', model: 'openai/gpt-oss-120b' }), 131072);
-    assert.equal(infer({ category: 'cloud', providerName: 'nvidia', model: 'nvidia/llama-3.3-nemotron-super-49b' }), 131072);
+    assert.equal(infer({ category: 'router', providerName: 'groq', model: 'openai/gpt-oss-120b' }), 131072);
+    assert.equal(infer({ category: 'router', providerName: 'nvidia', model: 'nvidia/llama-3.3-nemotron-super-49b' }), 131072);
     assert.equal(infer({ category: 'router', providerName: 'openrouter', model: 'minimax/minimax-m3' }), 1000000);
     assert.equal(infer({ category: 'cloud', providerName: 'minimax', model: 'minimax-m2.7' }), 204800);
     assert.equal(infer({ category: 'router', providerName: 'openrouter', model: 'qwen/qwen3.7-max' }), 262144);
@@ -5589,6 +5632,28 @@ test('ProviderManager load ignores unsupported stored provider configs', async (
             apiKey: `${label}-kept-key`,
             model: `${label}-kept-model`,
           },
+          openrouter: {
+            type: 'openai',
+            category: 'cloud',
+            model: 'custom/router-model',
+            apiKey: `${label}-openrouter-key`,
+          },
+          cloudflare: {
+            type: 'openai',
+            category: 'cloud',
+            accountId: '0123456789abcdef0123456789abcdef',
+            apiKey: `${label}-cloudflare-key`,
+          },
+          nvidia: {
+            type: 'openai',
+            category: 'cloud',
+            apiKey: `${label}-nvidia-key`,
+          },
+          groq: {
+            type: 'openai',
+            category: 'cloud',
+            apiKey: `${label}-groq-key`,
+          },
           custom_proxy: {
             type: 'openai',
             category: 'router',
@@ -5632,6 +5697,12 @@ test('ProviderManager load ignores unsupported stored provider configs', async (
       assert.equal(mgr.providers.get('openai')?.config.type, 'openai', `${label}: built-in type should stay pinned`);
       assert.equal(mgr.providers.get('openai')?.config.apiKey, `${label}-kept-key`, `${label}: built-in overrides should survive`);
       assert.equal(mgr.providers.get('openai')?.config.model, `${label}-kept-model`, `${label}: built-in model should survive`);
+      for (const id of ['openrouter', 'cloudflare', 'nvidia', 'groq']) {
+        assert.equal(mgr.providers.get(id)?.config.category, 'router', `${label}: stored ${id} category should migrate to router`);
+      }
+      assert.equal(mgr.providers.get('cloudflare')?.config.accountId, '0123456789abcdef0123456789abcdef', `${label}: Cloudflare account ID should survive migration`);
+      assert.equal(mgr.providers.get('nvidia')?.config.apiKey, `${label}-nvidia-key`, `${label}: Nvidia API key should survive migration`);
+      assert.equal(mgr.providers.get('groq')?.config.apiKey, `${label}-groq-key`, `${label}: Groq API key should survive migration`);
       assert.equal(mgr.providers.get('custom_proxy')?.config.type, 'openai', `${label}: supported custom provider should load`);
       assert.equal(mgr.providers.get('custom_proxy')?.config.model, 'custom-model', `${label}: custom provider config should survive`);
     }
@@ -5724,6 +5795,26 @@ test('_defaultConfigs: new cloud providers present and disabled by default', () 
   }
 });
 
+test('_defaultConfigs: router providers present and disabled by default', () => {
+  for (const PM of [ProviderManagerCh, ProviderManagerFx]) {
+    const mgr = new PM();
+    const defaults = mgr._defaultConfigs();
+    for (const id of ['openrouter', 'cloudflare', 'nvidia', 'groq']) {
+      assert.ok(defaults[id], `${PM.name}: missing default config for ${id}`);
+      assert.equal(defaults[id].type, 'openai', `${PM.name}: ${id} should use OpenAI-compatible provider`);
+      assert.equal(defaults[id].category, 'router', `${PM.name}: ${id} should be router`);
+      assert.equal(defaults[id].enabled, false, `${PM.name}: ${id} should default to disabled`);
+      assert.ok(defaults[id].baseUrl, `${PM.name}: ${id} missing baseUrl`);
+      assert.ok(defaults[id].model, `${PM.name}: ${id} missing default model`);
+    }
+    assert.equal(defaults.cloudflare.model, '@cf/zai-org/glm-5.2');
+    assert.equal(defaults.cloudflare.baseUrl, 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1');
+    assert.equal(defaults.cloudflare.contextWindow, 262144);
+    assert.equal(defaults.cloudflare.supportsStreamUsageOptions, false);
+    assert.equal(defaults.cloudflare.accountId, '');
+  }
+});
+
 test('_defaultConfigs: new offline providers present and enabled by default', () => {
   for (const PM of [ProviderManagerCh, ProviderManagerFx]) {
     const mgr = new PM();
@@ -5797,6 +5888,7 @@ test('OpenAI-compatible streams request usage metadata only for supporting provi
 
     for (const config of [
       { category: 'cloud', providerName: 'mistral' },
+      { category: 'router', providerName: 'cloudflare' },
       { category: 'cloud', providerName: 'custom' },
       { category: 'router', providerName: 'custom-router' },
       { category: 'cloud', providerName: 'openai', supportsStreamUsageOptions: false },
@@ -5805,6 +5897,47 @@ test('OpenAI-compatible streams request usage metadata only for supporting provi
       const body = { stream: true };
       provider._addStreamUsageOptions(body);
       assert.equal(body.stream_options, undefined);
+    }
+  }
+});
+
+test('OpenAI-compatible Cloudflare base URL substitutes and validates account IDs', async () => {
+  const validAccountId = '0123456789abcdef0123456789abcdef';
+  const templateUrl = 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1';
+  for (const Provider of [OpenAIProviderCh, OpenAIProviderFx]) {
+    const provider = new Provider({
+      providerName: 'cloudflare',
+      baseUrl: templateUrl,
+      accountId: validAccountId,
+      model: '@cf/zai-org/glm-5.2',
+    });
+    assert.equal(
+      provider.baseUrl,
+      `https://api.cloudflare.com/client/v4/accounts/${validAccountId}/ai/v1`,
+      `${Provider.name}: Cloudflare base URL should replace the account placeholder`,
+    );
+    assert.doesNotMatch(provider.baseUrl, /\{account_id\}/, `${Provider.name}: Cloudflare base URL should not retain the literal placeholder`);
+
+    const explicitUrl = `https://api.cloudflare.com/client/v4/accounts/${validAccountId}/ai/v1`;
+    assert.equal(
+      new Provider({ providerName: 'cloudflare', baseUrl: explicitUrl, model: '@cf/zai-org/glm-5.2' }).baseUrl,
+      explicitUrl,
+      `${Provider.name}: manually expanded Cloudflare base URLs should keep working`,
+    );
+
+    for (const accountId of ['', 'abc/def', 'not-a-cloudflare-account-id']) {
+      const result = await new Provider({
+          providerName: 'cloudflare',
+          baseUrl: templateUrl,
+          accountId,
+          model: '@cf/zai-org/glm-5.2',
+        }).testConnection();
+      assert.equal(result.ok, false, `${Provider.name}: invalid Cloudflare account IDs should fail before fetch`);
+      assert.match(
+        result.error,
+        /Cloudflare Account ID is required and must be a 32-character hex string/,
+        `${Provider.name}: invalid Cloudflare account IDs should fail before fetch`,
+      );
     }
   }
 });
@@ -8391,6 +8524,14 @@ test('getScratchpad returns the current pinned scratchpad body (chrome & firefox
     const pad = await agent.getScratchpad(tabId);
     assert.equal(pad.exists, true, `${AgentClass.name}: scratchpad should exist`);
     assert.equal(pad.body, 'downloadId 42', `${AgentClass.name}: scratchpad body mismatch`);
+    const cleared = agent.clearScratchpad(tabId);
+    assert.equal(cleared.success, true, `${AgentClass.name}: scratchpad clear should succeed`);
+    assert.equal(cleared.existed, true, `${AgentClass.name}: scratchpad clear should report existing pad`);
+    assert.equal(agent._findScratchpadIndex(agent.conversations.get(tabId)), -1, `${AgentClass.name}: scratchpad message should be removed`);
+    assert.deepEqual(await agent.getScratchpad(tabId), { exists: false, body: '' }, `${AgentClass.name}: scratchpad should read empty after clear`);
+    const clearedAgain = agent.clearScratchpad(tabId);
+    assert.equal(clearedAgain.success, true, `${AgentClass.name}: repeated scratchpad clear should succeed`);
+    assert.equal(clearedAgain.existed, false, `${AgentClass.name}: repeated scratchpad clear should be a no-op`);
 
     const t = agent.persistTimers?.get?.(tabId);
     if (t) clearTimeout(t);

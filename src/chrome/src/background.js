@@ -708,6 +708,14 @@ async function handleMessage(msg, sender) {
       return { ok: !!result?.success, ...result };
     }
 
+    case 'clear_scratchpad': {
+      const tabId = msg.tabId || sender.tab?.id;
+      if (!tabId) return { ok: false, error: 'No tab ID' };
+      await agent.getScratchpad(tabId);
+      const result = agent.clearScratchpad(tabId);
+      return { ok: !!result?.success, ...result };
+    }
+
     case 'consume_context_menu_prompt': {
       const tabId = msg.tabId || sender.tab?.id;
       return await contextMenuStorage.consume(tabId);

@@ -34,6 +34,9 @@ export function inferContextWindow(config = {}) {
   // Google Gemini
   if (/gemini-(?:3|3\.|2\.5)/.test(model)) return M1;
 
+  // Cloudflare Workers AI
+  if (provider === 'cloudflare' && model.includes('@cf/zai-org/glm-5.2')) return K256;
+
   // Mistral
   if (/mistral-medium-(?:3\.5|2604)/.test(model)) return K256;
 

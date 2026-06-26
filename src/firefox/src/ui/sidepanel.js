@@ -325,6 +325,7 @@ const SLASH_COMMANDS = [
   { value: '/list-schedules', descriptionKey: 'sp.slash.list_schedules' },
   { value: '/show-scratchpad', descriptionKey: 'sp.slash.show_scratchpad' },
   { value: '/edit-scratchpad', descriptionKey: 'sp.slash.edit_scratchpad' },
+  { value: '/clear-scratchpad', descriptionKey: 'sp.slash.clear_scratchpad' },
   { value: '/allow-api', descriptionKey: 'sp.slash.allow_api' },
   { value: '/compact', descriptionKey: 'sp.slash.compact' },
   { value: '/verbose', descriptionKey: 'sp.slash.verbose' },
@@ -1183,6 +1184,22 @@ async function editScratchpad(note, tabId = currentTabId) {
   }
 }
 
+function clearScratchpad(tabId = currentTabId) {
+  sendToBackground('clear_scratchpad', { tabId })
+    .then((res) => {
+      if (currentTabId !== tabId) return;
+      if (!res?.ok && !res?.success) {
+        addMessage('system', tSystemHtml('sp.scratchpad.error', { msg: res?.error || 'unknown error' }));
+        return;
+      }
+      addMessage('system', t('sp.scratchpad.cleared'));
+    })
+    .catch((e) => {
+      if (currentTabId !== tabId) return;
+      addMessage('system', tSystemHtml('sp.scratchpad.error', { msg: e.message }));
+    });
+}
+
 
 // --- Initialization ---
 
@@ -1835,6 +1852,12 @@ async function parseSlashCommands(text, tabId = currentTabId) {
   const mEditScratchpad = text.match(/^\/edit-scratchpad\b\s*/i);
   if (mEditScratchpad) {
     await editScratchpad(text.slice(mEditScratchpad[0].length), tabId);
+    return '';
+  }
+
+  // /clear-scratchpad — clear the current tab's agent scratchpad
+  if (/^\/clear-scratchpad\b\s*/i.test(text)) {
+    clearScratchpad(tabId);
     return '';
   }
 
