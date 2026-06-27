@@ -4,6 +4,25 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / `manifest.json` version.
 
+## [18.0.0] - 2026-06-27
+
+### Added
+- Added `go_back` and `go_forward` tools for Chrome and Firefox so Act mode can use browser history directly instead of relying on CSP-sensitive page JavaScript.
+- Added Plan before Act as a default-on planning gate, including structured planner parsing, a side-panel plan review card, approved-plan scratchpad pinning, scheduled-run auto-approval, and planner trace/provider metadata.
+- Added a background API request observer for Chrome and Firefox that detects repeated click-triggered XHR/fetch requests and suggests the matching `fetch_url` method when the UI loop is stuck.
+
+### Changed
+- Kept API shortcut detection method-aware for GET, POST, PUT, PATCH, DELETE, and other observed methods while leaving mutating replay decisions to the existing `/allow-api` and UI-vs-API policy.
+- Updated release metadata, Settings subtitle versions, architecture docs, Chrome / Firefox manifests, and package versions for 18.0.0.
+
+### Fixed
+- Fixed Chrome history URL normalization so query-string and hash-only history transitions are treated as real back/forward navigation changes, matching Firefox.
+- Prevented API shortcut detection from counting one captured request across multiple overlapping click windows.
+- Removed unused planner helper/style code left behind during review cleanup.
+
+### Tests
+- Added regression coverage for history navigation tool exposure, permission mapping, URL normalization parity, planner parsing/review/scratchpad/scheduling/trace behavior, API shortcut matching, request-reuse prevention, and prompt-injection corpus parity.
+
 ## [17.8.0] - 2026-06-27
 
 ### Added
