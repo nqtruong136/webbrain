@@ -10,7 +10,14 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
   }
 
   get baseUrl() {
-    return this.config.baseUrl || 'https://api.openai.com/v1';
+    const baseUrl = this.config.baseUrl || 'https://api.openai.com/v1';
+    if ((this.config.providerName || '').toLowerCase() !== 'cloudflare') return baseUrl;
+    if (!baseUrl.includes('{account_id}')) return baseUrl;
+    const accountId = String(this.config.accountId || '').trim();
+    if (!/^[0-9a-f]{32}$/i.test(accountId)) {
+      throw new Error('Cloudflare Account ID is required and must be a 32-character hex string.');
+    }
+    return baseUrl.replace('{account_id}', accountId);
   }
 
   get model() {

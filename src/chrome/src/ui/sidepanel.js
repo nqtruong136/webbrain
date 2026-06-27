@@ -334,6 +334,8 @@ const SLASH_COMMANDS = [
   { value: '/schedule', descriptionKey: 'sp.slash.schedule' },
   { value: '/list-schedules', descriptionKey: 'sp.slash.list_schedules' },
   { value: '/show-scratchpad', descriptionKey: 'sp.slash.show_scratchpad' },
+  { value: '/edit-scratchpad', descriptionKey: 'sp.slash.edit_scratchpad' },
+  { value: '/clear-scratchpad', descriptionKey: 'sp.slash.clear_scratchpad' },
   { value: '/allow-api', descriptionKey: 'sp.slash.allow_api' },
   { value: '/compact', descriptionKey: 'sp.slash.compact' },
   { value: '/verbose', descriptionKey: 'sp.slash.verbose' },
@@ -346,7 +348,16 @@ const SLASH_COMMANDS = [
   { value: '/ask', descriptionKey: 'sp.slash.ask' },
   { value: '/plan', descriptionKey: 'sp.slash.plan' },
 ];
+const OUT_OF_BAND_SLASH_COMMANDS = new Set([
+  '/help',
+  '/show-scratchpad',
+  '/list-schedules',
+  '/screenshot',
+  '/export',
+  '/verbose',
+]);
 const SLASH_COMMAND_OPTION_ID_PREFIX = 'slash-command-option-';
+const BUSY_SLASH_NOTICE_COOLDOWN_MS = 3000;
 let placeholderRotationIndex = 0;
 let placeholderRotationTimer = null;
 // Tab Recorder (v7.4) — recording is started entirely via the agent's
@@ -360,6 +371,8 @@ const recordingStopBtn = document.getElementById('btn-recording-stop');
 let currentTabId = null;
 let renderedTabId = null;
 let pendingTabSwitch = null; // tab the user switched to while isProcessing was true
+let tabSwitchTransitionId = null;
+let queuedTabSwitchMessages = [];
 let isProcessing = false;
 let currentAssistantEl = null;
 let verboseMode = false;
@@ -371,6 +384,7 @@ let providerTestRequestId = 0;
 let recommendedActionsCollapsed = false;
 let slashCommandMatches = [];
 let slashCommandSelectedIndex = 0;
+let busySlashNoticeLastShownAt = 0;
 const {
   acceptContextMenuPrompt,
   drainQueuedContextMenuPrompts,
@@ -386,15 +400,21 @@ const {
   sendMessage,
   sendToBackground,
 });
-// Notification sound on task completion. Default on; togglable via Settings.
+// Completion notification + success celebration. Default on; togglable via Settings.
 let notifySoundEnabled = true;
+let completionConfettiEnabled = true;
 let notifyAudio = null;
-chrome.storage.local.get('notifySound').then((stored) => {
+let completionConfettiTimer = null;
+chrome.storage.local.get(['notifySound', 'completionConfetti']).then((stored) => {
   if (stored && stored.notifySound === false) notifySoundEnabled = false;
+  if (stored && stored.completionConfetti === false) completionConfettiEnabled = false;
 }).catch(() => {});
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.notifySound) {
     notifySoundEnabled = changes.notifySound.newValue !== false;
+  }
+  if (changes.completionConfetti) {
+    completionConfettiEnabled = changes.completionConfetti.newValue !== false;
   }
 });
 
@@ -438,6 +458,62 @@ function playCompletionSound() {
     const p = notifyAudio.play();
     if (p && typeof p.catch === 'function') p.catch(() => {});
   } catch { /* ignore */ }
+}
+
+function triggerCompletionConfetti() {
+  if (!completionConfettiEnabled) return;
+  if (globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
+  try {
+    document.querySelector('.completion-confetti')?.remove();
+    if (completionConfettiTimer) {
+      clearTimeout(completionConfettiTimer);
+      completionConfettiTimer = null;
+    }
+
+    const layer = document.createElement('div');
+    layer.className = 'completion-confetti';
+    layer.setAttribute('aria-hidden', 'true');
+    const colors = ['#4caf50', '#6c63ff', '#ffb703', '#ef476f', '#00b4d8', '#f77f00'];
+    for (let i = 0; i < 42; i += 1) {
+      const piece = document.createElement('span');
+      piece.className = 'confetti-piece';
+      piece.style.setProperty('--x', `${Math.random() * 100}%`);
+      piece.style.setProperty('--drift', `${Math.round((Math.random() - 0.5) * 160)}px`);
+      piece.style.setProperty('--delay', `${Math.random() * 0.28}s`);
+      piece.style.setProperty('--duration', `${1.15 + Math.random() * 0.75}s`);
+      piece.style.setProperty('--rotation', `${Math.round(240 + Math.random() * 600)}deg`);
+      const size = 5 + Math.random() * 5;
+      piece.style.setProperty('--size', `${size}px`);
+      piece.style.setProperty('--height', `${size * 1.7}px`);
+      piece.style.backgroundColor = colors[i % colors.length];
+      layer.appendChild(piece);
+    }
+    document.body.appendChild(layer);
+    completionConfettiTimer = setTimeout(() => {
+      layer.remove();
+      completionConfettiTimer = null;
+    }, 2300);
+  } catch { /* ignore */ }
+}
+
+function notifyCompletion({ success = false } = {}) {
+  playCompletionSound();
+  if (success) triggerCompletionConfetti();
+}
+
+function isSuccessfulDoneUpdate(update) {
+  const result = update?.data?.result;
+  return update?.type === 'tool_result' &&
+    update?.data?.name === 'done' &&
+    result?.done === true &&
+    result?.outcome === 'success' &&
+    result?.success !== false &&
+    !result?.error &&
+    !result?.blockedDone;
+}
+
+function updatesContainSuccessfulDone(updates) {
+  return Array.isArray(updates) && updates.some(isSuccessfulDoneUpdate);
 }
 
 // Per-tab chat history (stores innerHTML of messages container).
@@ -492,6 +568,17 @@ function persistTabChat(tabId, html) {
   });
 }
 
+async function flushRenderedTabChat() {
+  const tabId = renderedTabId;
+  if (tabId == null) return;
+  if (persistTimer && persistTimerTabId === tabId) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+    persistTimerTabId = null;
+  }
+  await persistTabChat(tabId, messagesEl.innerHTML);
+}
+
 function clearCachedTabChat(tabId) {
   if (tabId == null) return;
   if (persistTimer && persistTimerTabId === tabId) {
@@ -532,6 +619,7 @@ function restoreInputDraftForTab(tabId) {
   inputEl.value = draft;
   autoResizeInput();
   updateSlashCommandAutocomplete();
+  syncSendButtonState();
 }
 
 function renderClearedConversationForTab(tabId) {
@@ -543,6 +631,7 @@ function renderClearedConversationForTab(tabId) {
   messagesEl.innerHTML = '';
   inputEl.value = '';
   autoResizeInput();
+  syncSendButtonState();
   addMessage('system', t('sp.cleared_message'));
   refreshScheduledJobs({ tabId });
   refreshRecommendedActions();
@@ -865,7 +954,26 @@ async function drainQueuedContextMenuPromptsAfterPendingTabSwitch() {
   drainQueuedContextMenuPrompts();
 }
 
-function settleScheduledRun(event, job) {
+function queueAgentUpdateDuringTabSwitch(msg) {
+  const tabId = msg?.tabId;
+  if (tabSwitchTransitionId == null || tabId == null || tabId !== tabSwitchTransitionId) return false;
+  queuedTabSwitchMessages.push(msg);
+  return true;
+}
+
+function drainQueuedAgentUpdatesForTab(tabId) {
+  if (!queuedTabSwitchMessages.length) return;
+  const replay = [];
+  const remaining = [];
+  for (const msg of queuedTabSwitchMessages) {
+    if (msg?.tabId === tabId) replay.push(msg);
+    else remaining.push(msg);
+  }
+  queuedTabSwitchMessages = remaining;
+  replay.forEach((msg) => handleAgentUpdateMessage(msg));
+}
+
+async function settleScheduledRun(event, job) {
   if (job?.id) crossPanelScheduledJobIds.delete(String(job.id));
   const assistantEl = job?.id ? findScheduledAssistantMessageForJob(job.id) : currentAssistantEl;
   if (assistantEl) {
@@ -879,16 +987,17 @@ function settleScheduledRun(event, job) {
   const ownsActiveRun = !currentAssistantEl || currentAssistantEl === assistantEl;
   if (ownsActiveRun) {
     isProcessing = false;
-    sendBtn.disabled = false;
+    syncSendButtonState();
     hideActivity();
     if (currentAssistantEl === assistantEl) currentAssistantEl = null;
     abortRequested = false;
-    drainQueuedContextMenuPromptsAfterPendingTabSwitch();
+    if (renderedTabId != null) await flushRenderedTabChat();
+    await drainQueuedContextMenuPromptsAfterPendingTabSwitch();
   }
-  if (event === 'completed') playCompletionSound();
+  if (event === 'completed') notifyCompletion({ success: job?.lastOutcome === 'success' });
 }
 
-function handleScheduledJobEvent(data, tabId) {
+async function handleScheduledJobEvent(data, tabId) {
   refreshScheduledJobs({ tabId: currentTabId });
   const event = data?.event;
   const job = data?.job;
@@ -909,26 +1018,26 @@ function handleScheduledJobEvent(data, tabId) {
   } else if (event === 'running') {
     isProcessing = true;
     abortRequested = false;
-    sendBtn.disabled = true;
+    syncSendButtonState();
     currentAssistantEl = addMessage('assistant', '');
     if (jobId) currentAssistantEl.dataset.scheduledJobId = jobId;
     showActivity(t('sp.scheduled.running', { title }));
   } else if (event === 'completed') {
     ensureScheduledTerminalMessage(job);
-    settleScheduledRun(event, job);
+    await settleScheduledRun(event, job);
   } else if (event === 'failed') {
-    settleScheduledRun(event, job);
     addMessage('error', t('sp.scheduled.failed', { title, msg: job.lastError || t('sp.scheduled.unknown_error') }));
+    await settleScheduledRun(event, job);
   } else if (event === 'needs_user_input') {
     ensureScheduledClarifyCards([job]);
     hideActivity();
     abortRequested = false;
     if (currentAssistantEl) {
       isProcessing = true;
-      sendBtn.disabled = true;
+      syncSendButtonState();
     } else {
       isProcessing = false;
-      sendBtn.disabled = false;
+      syncSendButtonState();
       addMessage('system', tSystemHtml('sp.scheduled.needs_user_input', { title }));
       drainQueuedContextMenuPromptsAfterPendingTabSwitch();
     }
@@ -1274,11 +1383,49 @@ async function showScratchpad(tabId = currentTabId) {
       addMessage('system', t('sp.scratchpad.empty'));
       return;
     }
-    addMessage('system', `${t('sp.scratchpad.title_html')}<pre class="scratchpad-dump">${escapeHtml(body)}</pre>`);
+    const msgEl = addMessage('system', `${t('sp.scratchpad.title_html')}<pre class="scratchpad-dump">${escapeHtml(body)}</pre>`);
+    addScratchpadCopyButton(msgEl);
   } catch (e) {
     if (currentTabId !== tabId) return;
     addMessage('system', tSystemHtml('sp.scratchpad.error', { msg: e.message }));
   }
+}
+
+async function editScratchpad(note, tabId = currentTabId) {
+  const text = String(note || '').trim();
+  if (!text) {
+    if (currentTabId !== tabId) return;
+    addMessage('system', t('sp.scratchpad.edit_empty'));
+    return;
+  }
+  try {
+    const res = await sendToBackground('write_scratchpad', { tabId, text });
+    if (currentTabId !== tabId) return;
+    if (!res?.ok && !res?.success) {
+      addMessage('system', tSystemHtml('sp.scratchpad.error', { msg: res?.error || 'unknown error' }));
+      return;
+    }
+    addMessage('system', t('sp.scratchpad.updated'));
+  } catch (e) {
+    if (currentTabId !== tabId) return;
+    addMessage('system', tSystemHtml('sp.scratchpad.error', { msg: e.message }));
+  }
+}
+
+function clearScratchpad(tabId = currentTabId) {
+  sendToBackground('clear_scratchpad', { tabId })
+    .then((res) => {
+      if (currentTabId !== tabId) return;
+      if (!res?.ok && !res?.success) {
+        addMessage('system', tSystemHtml('sp.scratchpad.error', { msg: res?.error || 'unknown error' }));
+        return;
+      }
+      addMessage('system', t('sp.scratchpad.cleared'));
+    })
+    .catch((e) => {
+      if (currentTabId !== tabId) return;
+      addMessage('system', tSystemHtml('sp.scratchpad.error', { msg: e.message }));
+    });
 }
 
 
@@ -1405,33 +1552,43 @@ async function switchToTab(newTabId) {
     return;
   }
   pendingTabSwitch = null;
+  tabSwitchTransitionId = newTabId;
 
-  // Save the tab currently represented by the DOM. During an async restore,
-  // currentTabId may already point at the target while the DOM is still older.
-  if (renderedTabId != null) {
-    persistTabChat(renderedTabId, messagesEl.innerHTML);
-    captureInputDraftForTab(renderedTabId);
+  try {
+    // Save the tab currently represented by the DOM. During an async restore,
+    // currentTabId may already point at the target while the DOM is still older.
+    if (renderedTabId != null) {
+      await flushRenderedTabChat();
+      if (isProcessing) {
+        pendingTabSwitch = newTabId;
+        return;
+      }
+      captureInputDraftForTab(renderedTabId);
+    }
+
+    currentTabId = newTabId;
+    syncApiMutationsAllowedForCurrentTab();
+
+    // Restore new tab's chat from memory or storage.
+    const html = await loadTabChat(newTabId);
+    if (currentTabId !== newTabId) return;
+    renderedTabId = newTabId;
+    if (html) {
+      messagesEl.innerHTML = html;
+      messagesEl.querySelectorAll('[data-bound]').forEach(el => delete el.dataset.bound);
+      rebindRestoredMessageControls();
+    } else {
+      messagesEl.innerHTML = '';
+      addMessage('system', t('sp.help_message'));
+    }
+    restoreInputDraftForTab(newTabId);
+    scrollToBottom();
+    refreshScheduledJobs({ tabId: newTabId });
+    refreshRecommendedActions();
+  } finally {
+    if (tabSwitchTransitionId === newTabId) tabSwitchTransitionId = null;
   }
-
-  currentTabId = newTabId;
-  syncApiMutationsAllowedForCurrentTab();
-
-  // Restore new tab's chat from memory or storage.
-  const html = await loadTabChat(newTabId);
-  if (currentTabId !== newTabId) return;
-  renderedTabId = newTabId;
-  if (html) {
-    messagesEl.innerHTML = html;
-    messagesEl.querySelectorAll('[data-bound]').forEach(el => delete el.dataset.bound);
-    rebindRestoredMessageControls();
-  } else {
-    messagesEl.innerHTML = '';
-    addMessage('system', t('sp.help_message'));
-  }
-  restoreInputDraftForTab(newTabId);
-  scrollToBottom();
-  refreshScheduledJobs({ tabId: newTabId });
-  refreshRecommendedActions();
+  drainQueuedAgentUpdatesForTab(newTabId);
   consumePendingContextMenuPrompt().then(() => drainQueuedContextMenuPrompts()).catch(() => {});
 }
 
@@ -1529,19 +1686,7 @@ async function runRecommendedAction(action) {
 // since serialized HTML loses listeners.
 function rebindCopyButtons() {
   document.querySelectorAll('.msg-copy-btn').forEach(btn => {
-    if (btn.dataset.bound) return;
-    btn.dataset.bound = 'true';
-    btn.addEventListener('click', () => {
-      const content = btn.closest('.message-content');
-      const textEl = content?.querySelector('.message-text');
-      if (textEl) {
-        navigator.clipboard.writeText(textEl.innerText).then(() => {
-          btn.textContent = t('sp.copied');
-          btn.classList.add('copied');
-          setTimeout(() => { btn.textContent = t('sp.copy'); btn.classList.remove('copied'); }, 1500);
-        });
-      }
-    });
+    bindMessageCopyButton(btn);
   });
   document.querySelectorAll('.code-copy-btn').forEach(btn => {
     if (btn.dataset.bound) return;
@@ -1925,6 +2070,7 @@ function applySlashCommandCompletion(index = slashCommandSelectedIndex) {
   inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
   hideSlashCommandAutocomplete();
   autoResizeInput();
+  syncSendButtonState();
   inputEl.focus();
   return true;
 }
@@ -1968,6 +2114,7 @@ function handleSlashCommandKeydown(e) {
 function handleInput() {
   autoResizeInput();
   updateSlashCommandAutocomplete();
+  syncSendButtonState();
 }
 
 // --- Message Sending ---
@@ -1997,6 +2144,38 @@ function syncApiMutationsAllowedForCurrentTab() {
   updateApiBadge();
 }
 
+function getLeadingSlashCommand(value) {
+  const text = String(value || '').trimStart();
+  const lowerText = text.toLowerCase();
+  const command = SLASH_COMMANDS.find((candidate) => {
+    if (!lowerText.startsWith(candidate.value)) return false;
+    const next = text.charAt(candidate.value.length);
+    return !next || /\s/.test(next);
+  });
+  return command?.value || null;
+}
+
+function isOutOfBandSlashDraft(value) {
+  const command = getLeadingSlashCommand(value);
+  return !!command && OUT_OF_BAND_SLASH_COMMANDS.has(command);
+}
+
+function syncSendButtonState() {
+  if (!sendBtn) return;
+  if (!isProcessing) {
+    sendBtn.disabled = false;
+    return;
+  }
+  sendBtn.disabled = !isOutOfBandSlashDraft(inputEl?.value || '');
+}
+
+function showBusySlashCommandNotice() {
+  const now = Date.now();
+  if (now - busySlashNoticeLastShownAt < BUSY_SLASH_NOTICE_COOLDOWN_MS) return;
+  busySlashNoticeLastShownAt = now;
+  addMessage('system', t('sp.slash.busy_only_oob'));
+}
+
 /**
  * Parse leading slash commands out of the user's message.
  * Returns the cleaned text (empty string if fully consumed).
@@ -2022,6 +2201,19 @@ async function parseSlashCommands(text, tabId = currentTabId) {
   // /show-scratchpad — dump the current tab's agent scratchpad
   if (/^\/show-scratchpad\b\s*/i.test(text)) {
     await showScratchpad(tabId);
+    return '';
+  }
+
+  // /edit-scratchpad — append text after the command to the scratchpad
+  const mEditScratchpad = text.match(/^\/edit-scratchpad\b\s*/i);
+  if (mEditScratchpad) {
+    await editScratchpad(text.slice(mEditScratchpad[0].length), tabId);
+    return '';
+  }
+
+  // /clear-scratchpad — clear the current tab's agent scratchpad
+  if (/^\/clear-scratchpad\b\s*/i.test(text)) {
+    clearScratchpad(tabId);
     return '';
   }
 
@@ -2223,8 +2415,28 @@ function updateApiBadge() {
 
 async function sendMessage(extraChatParams) {
   let text = inputEl.value.trim();
-  if (!text || isProcessing) return;
+  if (!text) return;
   const tabId = currentTabId;
+  if (isProcessing) {
+    if (!isOutOfBandSlashDraft(text)) {
+      showBusySlashCommandNotice();
+      return false;
+    }
+    saveInputDraftForTab(tabId, '');
+    hideSlashCommandAutocomplete();
+    inputEl.value = '';
+    autoResizeInput();
+    syncSendButtonState();
+    await parseSlashCommands(text, tabId);
+    if (currentTabId === tabId) {
+      if (!inputEl.value.trim() || inputEl.value.trim() === text) {
+        inputEl.value = '';
+        autoResizeInput();
+      }
+      syncSendButtonState();
+    }
+    return true;
+  }
   const modeForSend = /^\/(?:ask|plan)\b/i.test(text) ? 'ask' : agentMode;
   const apiMutationsAllowedForSend = isApiMutationsAllowedForTab(tabId) || /^\/allow-api\b/i.test(text);
   saveInputDraftForTab(tabId, '');
@@ -2234,6 +2446,7 @@ async function sendMessage(extraChatParams) {
   if (text.startsWith('/')) {
     inputEl.value = '';
     autoResizeInput();
+    syncSendButtonState();
   }
 
   // Parse any leading slash command. parseSlashCommands may strip the
@@ -2249,6 +2462,7 @@ async function sendMessage(extraChatParams) {
   if (!text) {
     inputEl.value = '';
     autoResizeInput();
+    syncSendButtonState();
     return;
   }
 
@@ -2256,9 +2470,9 @@ async function sendMessage(extraChatParams) {
   if (renderToCurrentTab) {
     isProcessing = true;
     abortRequested = false;
-    sendBtn.disabled = true;
     inputEl.value = '';
     autoResizeInput();
+    syncSendButtonState();
     hideRecommendedActions();
     addMessage('user', text);
     showActivity(t('sp.activity.thinking'));
@@ -2267,6 +2481,7 @@ async function sendMessage(extraChatParams) {
   }
 
   let accepted = false;
+  let completedSuccessfully = false;
   try {
     const res = await sendToBackground('chat', {
       tabId,
@@ -2276,6 +2491,7 @@ async function sendMessage(extraChatParams) {
       ...extraChatParams,
     });
     accepted = true;
+    completedSuccessfully = updatesContainSuccessfulDone(res?.updates);
 
     if (renderToCurrentTab && currentTabId === tabId && abortRequested) {
       // Agent was stopped — show what we got so far
@@ -2307,12 +2523,13 @@ async function sendMessage(extraChatParams) {
     if (renderToCurrentTab) {
       isProcessing = false;
       abortRequested = false;
-      sendBtn.disabled = false;
+      syncSendButtonState();
       hideActivity();
     }
     if (currentAssistantEl === assistantEl) currentAssistantEl = null;
     if (renderToCurrentTab && currentTabId === tabId) scrollToBottom();
-    if (renderToCurrentTab && !wasAborted) playCompletionSound();
+    if (renderToCurrentTab && renderedTabId === tabId) await flushRenderedTabChat();
+    if (renderToCurrentTab && !wasAborted) notifyCompletion({ success: currentTabId === tabId && completedSuccessfully });
     if (renderToCurrentTab && currentTabId === tabId) refreshRecommendedActions();
     await drainQueuedContextMenuPromptsAfterPendingTabSwitch();
   }
@@ -2518,11 +2735,11 @@ function summarizeLastTranscript() {
   if (sendBtn) sendBtn.click();
 }
 
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.target !== 'sidepanel' || msg.action !== 'agent_update') return;
-
+function handleAgentUpdateMessage(msg) {
   if (msg.type === 'scheduled_job') {
-    handleScheduledJobEvent(msg.data, msg.tabId);
+    handleScheduledJobEvent(msg.data, msg.tabId).catch((err) => {
+      console.warn('[WebBrain] failed to handle scheduled job event:', err);
+    });
     return;
   }
 
@@ -2679,6 +2896,12 @@ chrome.runtime.onMessage.addListener((msg) => {
       renderPlanReviewCard(data);
       break;
   }
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.target !== 'sidepanel' || msg.action !== 'agent_update') return;
+  if (queueAgentUpdateDuringTabSwitch(msg)) return;
+  handleAgentUpdateMessage(msg);
 });
 
 /**
@@ -2964,14 +3187,14 @@ function submitClarify(card, tabId, clarifyId, answer, source) {
       currentAssistantEl = msgEl;
     }
     isProcessing = true;
-    sendBtn.disabled = true;
+    syncSendButtonState();
     showActivity(t('sp.activity.thinking'));
   }
   sendToBackground('clarify_response', { tabId, clarifyId, answer, source })
     .catch(() => {
       if (isScheduledClarify) {
         isProcessing = false;
-        sendBtn.disabled = false;
+        syncSendButtonState();
         hideActivity();
         drainQueuedContextMenuPromptsAfterPendingTabSwitch();
       }
@@ -3301,7 +3524,7 @@ async function continueAgent() {
 
   isProcessing = true;
   abortRequested = false;
-  sendBtn.disabled = true;
+  syncSendButtonState();
 
   const assistantEl = addMessage('assistant', '');
   currentAssistantEl = assistantEl;
@@ -3330,10 +3553,11 @@ async function continueAgent() {
     if (currentTabId === tabId) finalizeSteps(assistantEl);
     isProcessing = false;
     abortRequested = false;
-    sendBtn.disabled = false;
+    syncSendButtonState();
     hideActivity();
     if (currentAssistantEl === assistantEl) currentAssistantEl = null;
     if (currentTabId === tabId) scrollToBottom();
+    if (currentTabId === tabId && renderedTabId === tabId) await flushRenderedTabChat();
     await drainQueuedContextMenuPromptsAfterPendingTabSwitch();
   }
 }
@@ -3519,17 +3743,44 @@ function addMessageCopyButton(msgEl) {
   btn.className = 'msg-copy-btn';
   btn.textContent = t('sp.copy');
   btn.title = t('sp.copy.code.title');
-  btn.addEventListener('click', () => {
-    const textEl = content.querySelector('.message-text');
-    if (textEl) {
-      navigator.clipboard.writeText(textEl.innerText).then(() => {
-        btn.textContent = t('sp.copied');
-        btn.classList.add('copied');
-        setTimeout(() => { btn.textContent = t('sp.copy'); btn.classList.remove('copied'); }, 1500);
-      });
-    }
-  });
+  bindMessageCopyButton(btn);
   content.appendChild(btn);
+}
+
+function addScratchpadCopyButton(msgEl) {
+  if (!msgEl) return;
+  const content = msgEl.querySelector('.message-content');
+  const pre = content?.querySelector('pre.scratchpad-dump');
+  if (!content || !pre) return;
+  const btn = document.createElement('button');
+  btn.className = 'msg-copy-btn scratchpad-copy-btn';
+  btn.textContent = t('sp.copy');
+  btn.title = t('sp.copy.code.title');
+  bindMessageCopyButton(btn);
+  content.appendChild(btn);
+}
+
+function getMessageCopyText(btn) {
+  const content = btn?.closest('.message-content');
+  if (!content) return null;
+  if (btn.classList.contains('scratchpad-copy-btn')) {
+    return content.querySelector('pre.scratchpad-dump')?.textContent || '';
+  }
+  return content.querySelector('.message-text')?.innerText || null;
+}
+
+function bindMessageCopyButton(btn) {
+  if (!btn || btn.__wbCopyBound) return;
+  btn.__wbCopyBound = true;
+  btn.addEventListener('click', () => {
+    const text = getMessageCopyText(btn);
+    if (text == null) return;
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = t('sp.copied');
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = t('sp.copy'); btn.classList.remove('copied'); }, 1500);
+    });
+  });
 }
 
 function escapeHtml(str) {
@@ -3716,10 +3967,11 @@ async function abortRun() {
         }
       }
       isProcessing = false;
-      sendBtn.disabled = false;
+      syncSendButtonState();
       hideActivity();
       currentAssistantEl = null;
       abortRequested = false;
+      await flushRenderedTabChat();
       await drainQueuedContextMenuPromptsAfterPendingTabSwitch();
     }
   }, 3000); // safety timeout if background takes too long

@@ -35,6 +35,7 @@ const BUILD_DIR = __dirname;                          // web/build/
 const LOCALES_DIR = path.join(BUILD_DIR, 'locales');
 const TEMPLATE_PATH = path.join(BUILD_DIR, 'template.html');
 const SITE_ORIGIN = 'https://webbrain.one';
+const SOCIAL_IMAGE_URL = `${SITE_ORIGIN}/og-image.png`;
 
 // Locale config. The default locale (en) renders to web/index.html;
 // the others render to web/<code>/index.html.
@@ -58,11 +59,13 @@ const LOCALES = [
 const FAQ_KEYS = [
   // Order matters — this is the rendered order in-page AND in JSON-LD.
   'faq.alt_claude',
+  'faq.cloud_subscription',
   'faq.vs_frameworks',
   'faq.offline',
   'faq.models_supported',
   'faq.recommended_model',
   'faq.cors',
+  'faq.ollama_origins',
   'faq.firefox',
   'faq.firefox_sidebar_move',
   'faq.safe',
@@ -160,7 +163,7 @@ function buildSoftwareJsonLd(dict, locale) {
     author: { '@type': 'Person', name: 'Emre Sokullu', url: 'https://emresokullu.com' },
     license: 'https://opensource.org/licenses/MIT',
     isAccessibleForFree: true,
-    screenshot: `${SITE_ORIGIN}/og-image.svg`,
+    screenshot: SOCIAL_IMAGE_URL,
   };
   return JSON.stringify(payload, null, 2);
 }

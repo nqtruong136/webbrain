@@ -1802,6 +1802,47 @@ test('getToolsForMode: default `done` description is the loose hygiene hint', ()
   }
 });
 
+test('getToolsForMode: `done` outcome is exposed only in full and mid act modes', () => {
+  for (const [label, getTools] of [
+    ['chrome', getToolsForModeCh],
+    ['firefox', getToolsForModeFx],
+  ]) {
+    for (const [modeLabel, tools, shouldExposeOutcome] of [
+      ['ask', getTools('ask'), false],
+      ['ask strict', getTools('ask', { strictSecretMode: true }), false],
+      ['act full', getTools('act'), true],
+      ['act mid', getTools('act', { tier: 'mid' }), true],
+      ['act compact', getTools('act', { tier: 'compact' }), false],
+      ['act strict full', getTools('act', { strictSecretMode: true }), true],
+      ['act strict mid', getTools('act', { tier: 'mid', strictSecretMode: true }), true],
+      ['act strict compact', getTools('act', { tier: 'compact', strictSecretMode: true }), false],
+    ]) {
+      const done = tools.find(t => t.function.name === 'done');
+      assert.ok(done, `[${label}] ${modeLabel}: done tool missing`);
+      const params = done.function.parameters;
+      assert.ok(params.required.includes('summary'), `[${label}] ${modeLabel}: summary should remain required`);
+      if (shouldExposeOutcome) {
+        assert.deepEqual(params.properties.outcome.enum, ['success', 'partial', 'failed'], `[${label}] ${modeLabel}: done outcome enum drifted`);
+        assert.match(params.properties.outcome.description, /success only/i, `[${label}] ${modeLabel}: done outcome should describe success semantics`);
+        assert.ok(params.required.includes('outcome'), `[${label}] ${modeLabel}: outcome should be required`);
+      } else {
+        assert.equal(params.properties.outcome, undefined, `[${label}] ${modeLabel}: done outcome should not be exposed`);
+        assert.equal(params.required.includes('outcome'), false, `[${label}] ${modeLabel}: outcome should not be required`);
+      }
+    }
+  }
+
+  for (const [label, askPrompt, compactPrompt, fullPrompt, midPrompt] of [
+    ['chrome', SYSTEM_PROMPT_ASK_CH, SYSTEM_PROMPT_ACT_COMPACT_CH, SYSTEM_PROMPT_ACT_CH, SYSTEM_PROMPT_ACT_MID_CH],
+    ['firefox', SYSTEM_PROMPT_ASK_FX, SYSTEM_PROMPT_ACT_COMPACT_FX, SYSTEM_PROMPT_ACT_FX, SYSTEM_PROMPT_ACT_MID_FX],
+  ]) {
+    assert.doesNotMatch(askPrompt, /done\(\{summary,\s*outcome/i, `[${label}] ask prompt should not teach outcome`);
+    assert.doesNotMatch(compactPrompt, /done\(\{summary,\s*outcome|outcome:"/i, `[${label}] compact prompt should not teach outcome`);
+    assert.match(fullPrompt, /done\(\{summary,\s*outcome/i, `[${label}] full act prompt should teach outcome`);
+    assert.match(midPrompt, /done\(\{summary,\s*outcome/i, `[${label}] mid act prompt should teach outcome`);
+  }
+});
+
 test('getToolsForMode: strictSecretMode swaps in the strict `done` description', () => {
   for (const getTools of [getToolsForModeCh, getToolsForModeFx]) {
     const loose = getTools('act');
@@ -1995,18 +2036,48 @@ test('schedule form time errors mention immediate start in every locale', () => 
   }
 });
 
-test('sidepanel exposes show-scratchpad slash command in both builds', () => {
-  for (const [label, panelRel, bgRel, localeRel] of [
-    ['chrome', 'src/chrome/src/ui/sidepanel.js', 'src/chrome/src/background.js', 'src/chrome/src/ui/locales/en.js'],
-    ['firefox', 'src/firefox/src/ui/sidepanel.js', 'src/firefox/src/background.js', 'src/firefox/src/ui/locales/en.js'],
+test('sidepanel exposes scratchpad slash commands in both builds', () => {
+  for (const [label, panelRel, bgRel, agentRel, localeRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js', 'src/chrome/src/background.js', 'src/chrome/src/agent/agent.js', 'src/chrome/src/ui/locales/en.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js', 'src/firefox/src/background.js', 'src/firefox/src/agent/agent.js', 'src/firefox/src/ui/locales/en.js'],
   ]) {
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     const bg = fs.readFileSync(path.join(ROOT, bgRel), 'utf8');
+    const agent = fs.readFileSync(path.join(ROOT, agentRel), 'utf8');
     const locale = fs.readFileSync(path.join(ROOT, localeRel), 'utf8');
     assert.match(panel, /\/show-scratchpad\b/, `${label}: /show-scratchpad parser missing`);
+    assert.match(panel, /\/edit-scratchpad\b/, `${label}: /edit-scratchpad parser missing`);
+    assert.match(panel, /\/clear-scratchpad\b/, `${label}: /clear-scratchpad parser missing`);
     assert.match(panel, /get_scratchpad/, `${label}: sidepanel should call background scratchpad reader`);
+    assert.match(panel, /const msgEl = addMessage\('system', [\s\S]*?scratchpad-dump[\s\S]*?\);\s*addScratchpadCopyButton\(msgEl\);/, `${label}: /show-scratchpad should attach a scratchpad-only copy button`);
+    assert.match(panel, /function addScratchpadCopyButton\(msgEl\) \{[\s\S]*?querySelector\('pre\.scratchpad-dump'\)[\s\S]*?scratchpad-copy-btn[\s\S]*?bindMessageCopyButton\(btn\);/, `${label}: scratchpad copy button should target the scratchpad pre`);
+    assert.match(panel, /function getMessageCopyText\(btn\) \{[\s\S]*?classList\.contains\('scratchpad-copy-btn'\)[\s\S]*?querySelector\('pre\.scratchpad-dump'\)\?\.textContent/, `${label}: scratchpad copy should copy only pre textContent`);
+    assert.match(panel, /write_scratchpad/, `${label}: sidepanel should call background scratchpad writer`);
+    assert.match(panel, /clear_scratchpad/, `${label}: sidepanel should call background scratchpad clearer`);
     assert.match(bg, /get_scratchpad/, `${label}: background scratchpad action missing`);
+    assert.match(bg, /write_scratchpad/, `${label}: background scratchpad write action missing`);
+    assert.match(bg, /clear_scratchpad/, `${label}: background scratchpad clear action missing`);
+    assert.match(agent, /async writeScratchpad\(tabId, text, options = \{\}\) \{[\s\S]*?this\.getConversation\(tabId, mode\);[\s\S]*?this\._scratchpadWrite\(tabId, \{ text, replace: !!options\?\.replace \}\);[\s\S]*?\}/, `${label}: agent should expose scratchpad append wrapper`);
+    assert.match(agent, /clearScratchpad\(tabId\) \{[\s\S]*?this\._findScratchpadIndex\(messages\)[\s\S]*?messages\.splice\(idx, 1\)[\s\S]*?scratchpad cleared[\s\S]*?\}/, `${label}: agent should expose synchronous scratchpad clear method`);
+    assert.doesNotMatch(agent, /async clearScratchpad\(tabId\)/, `${label}: scratchpad clear method should not be async`);
     assert.match(locale, /\/show-scratchpad/, `${label}: help should mention /show-scratchpad`);
+    assert.match(locale, /\/edit-scratchpad/, `${label}: help should mention /edit-scratchpad`);
+    assert.match(locale, /\/clear-scratchpad/, `${label}: help should mention /clear-scratchpad`);
+  }
+});
+
+test('all locales translate the clear-scratchpad slash command', () => {
+  for (const [label, localeDir] of [
+    ['chrome', 'src/chrome/src/ui/locales'],
+    ['firefox', 'src/firefox/src/ui/locales'],
+  ]) {
+    for (const filename of fs.readdirSync(path.join(ROOT, localeDir)).filter((name) => name.endsWith('.js'))) {
+      const locale = fs.readFileSync(path.join(ROOT, localeDir, filename), 'utf8');
+      assert.match(locale, /['"]sp\.slash\.clear_scratchpad['"]:\s*['"][^'"]+['"]/, `${label}/${filename}: missing translated clear-scratchpad slash label`);
+      assert.match(locale, /['"]sp\.scratchpad\.cleared['"]:\s*['"][^'"]+['"]/, `${label}/${filename}: missing translated scratchpad cleared message`);
+      assert.match(locale, /\/clear-scratchpad\b/, `${label}/${filename}: help should mention /clear-scratchpad`);
+      assert.doesNotMatch(locale, /<br><br><code>\/clear-scratchpad/, `${label}/${filename}: help should not add an extra blank line before /clear-scratchpad`);
+    }
   }
 });
 
@@ -2582,7 +2653,9 @@ test('sidepanel rebinds interactive controls after restoring serialized tab chat
   ]) {
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     assert.match(panel, /function rebindCopyButtons\(\)/, `${label}: copy-button rebinding helper missing`);
-    assert.match(panel, /document\.querySelectorAll\('\.msg-copy-btn'\)[\s\S]*?addEventListener\('click'/, `${label}: assistant message copy buttons should be rebound`);
+    assert.match(panel, /document\.querySelectorAll\('\.msg-copy-btn'\)[\s\S]*?bindMessageCopyButton\(btn\)/, `${label}: message copy buttons should be rebound`);
+    assert.match(panel, /function bindMessageCopyButton\(btn\) \{[\s\S]*?addEventListener\('click'/, `${label}: message copy rebinding should attach a click listener`);
+    assert.match(panel, /btn\.__wbCopyBound = true;/, `${label}: message copy binding should use an in-memory flag so restored HTML can rebind`);
     assert.match(panel, /document\.querySelectorAll\('\.code-copy-btn'\)[\s\S]*?addEventListener\('click'/, `${label}: code copy buttons should be rebound`);
     assert.match(panel, /function rebindContinueButtons\(\) \{[\s\S]*?document\.querySelectorAll\('\.continue-btn'\)[\s\S]*?addEventListener\('click', continueAgent\)/, `${label}: restored Continue buttons should be rebound`);
     assert.match(panel, /function rebindClarifyCards\(\) \{[\s\S]*?document\.querySelectorAll\('\.clarify-card'\)[\s\S]*?submitClarify\(card, tabId, clarifyId/, `${label}: restored clarify cards should be rebound`);
@@ -2616,15 +2689,58 @@ test('chrome sidepanel drops stale async tab-chat restores', () => {
   const renderedSetIdx = body.indexOf('renderedTabId = newTabId;');
   const restoreIdx = body.indexOf('messagesEl.innerHTML =');
   const consumeIdx = body.indexOf('consumePendingContextMenuPrompt()');
+  const flushIdx = body.indexOf('await flushRenderedTabChat();');
+  const postFlushProcessingIdx = body.indexOf('if (isProcessing) {', flushIdx);
+  const postFlushPendingIdx = body.indexOf('pendingTabSwitch = newTabId;', postFlushProcessingIdx);
+  const postFlushReturnIdx = body.indexOf('return;', postFlushPendingIdx);
   assert.notEqual(setIdx, -1, 'chrome: switchToTab should set the visible tab before restoring chat');
   assert.notEqual(loadIdx, -1, 'chrome: switchToTab should load persisted tab chat asynchronously');
   assert.notEqual(guardIdx, -1, 'chrome: stale async tab-chat restores should be dropped');
   assert.notEqual(renderedSetIdx, -1, 'chrome: switchToTab should mark the rendered tab only after stale async restores are dropped');
   assert.notEqual(restoreIdx, -1, 'chrome: switchToTab restore point missing');
   assert.notEqual(consumeIdx, -1, 'chrome: switchToTab context-menu consume point missing');
+  assert.notEqual(flushIdx, -1, 'chrome: switchToTab should flush rendered chat before changing tabs');
+  assert.notEqual(postFlushProcessingIdx, -1, 'chrome: switchToTab should recheck processing after the async flush yields');
+  assert.notEqual(postFlushPendingIdx, -1, 'chrome: switchToTab should defer the requested tab switch if a run starts during the flush');
+  assert.notEqual(postFlushReturnIdx, -1, 'chrome: switchToTab should stop before changing currentTabId when a run starts during the flush');
+  assert.equal(flushIdx < postFlushProcessingIdx && postFlushProcessingIdx < postFlushPendingIdx && postFlushPendingIdx < postFlushReturnIdx && postFlushReturnIdx < setIdx, true, 'chrome: post-flush processing recheck must happen before currentTabId changes');
   assert.equal(setIdx < loadIdx && loadIdx < guardIdx && guardIdx < renderedSetIdx && renderedSetIdx < restoreIdx && guardIdx < consumeIdx, true, 'chrome: stale guard must run after async chat load and before rendered-tab/DOM/context-menu work');
-  assert.match(body, /if \(renderedTabId != null\) \{[\s\S]*?persistTabChat\(renderedTabId, messagesEl\.innerHTML\);[\s\S]*?captureInputDraftForTab\(renderedTabId\);[\s\S]*?\}/, 'chrome: overlapping tab switches should save drafts for the tab represented by the DOM');
+  assert.match(body, /if \(renderedTabId != null\) \{[\s\S]*?await flushRenderedTabChat\(\);[\s\S]*?captureInputDraftForTab\(renderedTabId\);[\s\S]*?\}/, 'chrome: overlapping tab switches should flush chat and save drafts for the tab represented by the DOM');
   assert.doesNotMatch(body, /persistTabChat\(currentTabId,\s*messagesEl\.innerHTML\)|captureInputDraftForTab\(currentTabId\)/, 'chrome: overlapping tab switches must not save DOM or drafts under a pending target tab');
+});
+
+test('chrome sidepanel queues target-tab updates during async tab switches', () => {
+  const panel = fs.readFileSync(path.join(ROOT, 'src/chrome/src/ui/sidepanel.js'), 'utf8');
+  assert.match(panel, /let tabSwitchTransitionId = null;/, 'chrome: tab switches should track the tab currently being restored');
+  assert.match(panel, /let queuedTabSwitchMessages = \[\];/, 'chrome: tab switches should keep target-tab messages that arrive mid-restore');
+  assert.match(panel, /function queueAgentUpdateDuringTabSwitch\(msg\) \{[\s\S]*?const tabId = msg\?\.tabId;[\s\S]*?tabSwitchTransitionId == null[\s\S]*?tabId !== tabSwitchTransitionId[\s\S]*?return false;[\s\S]*?queuedTabSwitchMessages\.push\(msg\);[\s\S]*?return true;[\s\S]*?\}/, 'chrome: target-tab messages should be queued while that tab is being restored');
+  assert.match(panel, /function drainQueuedAgentUpdatesForTab\(tabId\) \{[\s\S]*?queuedTabSwitchMessages = remaining;[\s\S]*?replay\.forEach\(\(msg\) => handleAgentUpdateMessage\(msg\)\);[\s\S]*?\}/, 'chrome: queued target-tab messages should replay through the normal agent update handler');
+
+  const switchMatch = panel.match(/async function switchToTab\(newTabId\) \{([\s\S]*?)\n\}/);
+  assert.ok(switchMatch, 'chrome: switchToTab body missing');
+  const body = switchMatch[1];
+  const markIdx = body.indexOf('tabSwitchTransitionId = newTabId;');
+  const flushIdx = body.indexOf('await flushRenderedTabChat();');
+  const loadIdx = body.indexOf('const html = await loadTabChat(newTabId);');
+  const clearTransitionIdx = body.indexOf('if (tabSwitchTransitionId === newTabId) tabSwitchTransitionId = null;');
+  const replayIdx = body.indexOf('drainQueuedAgentUpdatesForTab(newTabId);');
+  const consumeIdx = body.indexOf('consumePendingContextMenuPrompt()');
+  assert.notEqual(markIdx, -1, 'chrome: switchToTab should mark the target tab before any async flush can yield');
+  assert.notEqual(flushIdx, -1, 'chrome: switchToTab flush point missing');
+  assert.notEqual(loadIdx, -1, 'chrome: switchToTab restore load point missing');
+  assert.notEqual(clearTransitionIdx, -1, 'chrome: switchToTab should clear the transition marker after restore settles');
+  assert.notEqual(replayIdx, -1, 'chrome: switchToTab should replay queued target-tab messages after restore');
+  assert.notEqual(consumeIdx, -1, 'chrome: switchToTab context-menu consume point missing');
+  assert.equal(markIdx < flushIdx && flushIdx < loadIdx && loadIdx < clearTransitionIdx && clearTransitionIdx < replayIdx && replayIdx < consumeIdx, true, 'chrome: queued target-tab updates must wait until the async restore has settled');
+
+  const listenerStart = panel.indexOf("if (msg.target !== 'sidepanel' || msg.action !== 'agent_update') return;");
+  assert.notEqual(listenerStart, -1, 'chrome: runtime message listener missing');
+  const listenerBody = panel.slice(listenerStart, panel.indexOf('\n});', listenerStart) + 4);
+  const queueIdx = listenerBody.indexOf('if (queueAgentUpdateDuringTabSwitch(msg)) return;');
+  const handleIdx = listenerBody.indexOf('handleAgentUpdateMessage(msg);');
+  assert.notEqual(queueIdx, -1, 'chrome: runtime listener should queue target-tab updates during async tab switching');
+  assert.notEqual(handleIdx, -1, 'chrome: runtime listener should still pass normal updates to the shared handler');
+  assert.equal(queueIdx < handleIdx, true, 'chrome: target-tab updates should be queued before scheduled-job or tab filters can drop them');
 });
 
 test('chrome sidepanel persists tab chat to the tab captured before debounce', () => {
@@ -2642,6 +2758,69 @@ test('chrome sidepanel persists tab chat to the tab captured before debounce', (
   assert.notEqual(persistIdx, -1, 'chrome: persistence should write the captured tab/html');
   assert.equal(captureTabIdx < timerIdx && captureHtmlIdx < timerIdx && timerIdx < persistIdx, true, 'chrome: persistence must not read mutable tab state after the debounce delay');
   assert.doesNotMatch(body, /persistTabChat\(currentTabId,\s*messagesEl\.innerHTML\)/, 'chrome: debounced persistence should not save live DOM under the later currentTabId');
+});
+
+test('sidepanel flushes completed run chat before deferred tab switches', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+
+    if (label === 'chrome') {
+      assert.match(
+        panel,
+        /async function flushRenderedTabChat\(\) \{[\s\S]*?const tabId = renderedTabId;[\s\S]*?if \(persistTimer && persistTimerTabId === tabId\) \{[\s\S]*?clearTimeout\(persistTimer\);[\s\S]*?\}[\s\S]*?await persistTabChat\(tabId, messagesEl\.innerHTML\);[\s\S]*?\}/,
+        'chrome: final flush should cancel stale debounced writes and persist the rendered tab immediately',
+      );
+    } else {
+      assert.match(
+        panel,
+        /function flushRenderedTabChat\(\) \{[\s\S]*?if \(currentTabId == null\) return;[\s\S]*?tabChats\.set\(currentTabId, messagesEl\.innerHTML\);[\s\S]*?\}/,
+        'firefox: final flush should update the currently rendered in-memory chat',
+      );
+    }
+
+    const sendMatch = panel.match(/async function sendMessage\([^)]*\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n  return accepted;/);
+    assert.ok(sendMatch, `${label}: sendMessage finally block missing`);
+    const sendFinally = sendMatch[1];
+    const sendFlushIdx = sendFinally.indexOf('flushRenderedTabChat()');
+    const sendDrainIdx = sendFinally.indexOf('await drainQueuedContextMenuPromptsAfterPendingTabSwitch();');
+    assert.notEqual(sendFlushIdx, -1, `${label}: send completion should flush the final transcript`);
+    assert.notEqual(sendDrainIdx, -1, `${label}: send completion should drain pending tab switches`);
+    assert.equal(sendFlushIdx < sendDrainIdx, true, `${label}: send completion must flush before deferred tab switching`);
+
+    const continueMatch = panel.match(/async function continueAgent\(\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n\}/);
+    assert.ok(continueMatch, `${label}: continueAgent finally block missing`);
+    const continueFinally = continueMatch[1];
+    const continueFlushIdx = continueFinally.indexOf('flushRenderedTabChat()');
+    const continueDrainIdx = continueFinally.indexOf('await drainQueuedContextMenuPromptsAfterPendingTabSwitch();');
+    assert.notEqual(continueFlushIdx, -1, `${label}: Continue completion should flush the final transcript`);
+    assert.notEqual(continueDrainIdx, -1, `${label}: Continue completion should drain pending tab switches`);
+    assert.equal(continueFlushIdx < continueDrainIdx, true, `${label}: Continue completion must flush before deferred tab switching`);
+
+    const scheduledStart = panel.search(/(?:async\s+)?function settleScheduledRun\(event, job\)/);
+    const scheduledEnd = panel.search(/(?:async\s+)?function handleScheduledJobEvent\(data, tabId\)/);
+    assert.notEqual(scheduledStart, -1, `${label}: scheduled settlement helper missing`);
+    assert.notEqual(scheduledEnd, -1, `${label}: scheduled event handler boundary missing`);
+    const scheduledBody = panel.slice(scheduledStart, scheduledEnd);
+    const scheduledFlushNeedle = label === 'chrome' ? 'await flushRenderedTabChat()' : 'flushRenderedTabChat()';
+    const scheduledDrainNeedle = label === 'chrome' ? 'await drainQueuedContextMenuPromptsAfterPendingTabSwitch();' : 'drainQueuedContextMenuPromptsAfterPendingTabSwitch();';
+    const scheduledFlushIdx = scheduledBody.indexOf(scheduledFlushNeedle);
+    const scheduledDrainIdx = scheduledBody.indexOf(scheduledDrainNeedle);
+    assert.notEqual(scheduledFlushIdx, -1, `${label}: scheduled completion should flush the final transcript`);
+    assert.notEqual(scheduledDrainIdx, -1, `${label}: scheduled completion should drain pending tab switches`);
+    assert.equal(scheduledFlushIdx < scheduledDrainIdx, true, `${label}: scheduled completion must flush before deferred tab switching`);
+
+    const abortMatch = panel.match(/setTimeout\(async \(\) => \{[\s\S]*?if \(abortRequested\) \{([\s\S]*?)\n    \}\n  \}, 3000\);/);
+    assert.ok(abortMatch, `${label}: abort safety timeout body missing`);
+    const abortBody = abortMatch[1];
+    const abortFlushIdx = abortBody.indexOf('flushRenderedTabChat()');
+    const abortDrainIdx = abortBody.indexOf('await drainQueuedContextMenuPromptsAfterPendingTabSwitch();');
+    assert.notEqual(abortFlushIdx, -1, `${label}: abort timeout should flush the stopped transcript`);
+    assert.notEqual(abortDrainIdx, -1, `${label}: abort timeout should drain pending tab switches`);
+    assert.equal(abortFlushIdx < abortDrainIdx, true, `${label}: abort timeout must flush before deferred tab switching`);
+  }
 });
 
 test('chrome sidepanel serializes tab-chat storage writes with clears and reads', () => {
@@ -2982,6 +3161,20 @@ test('settings provider save and test status updates are DOM-safe', () => {
   }
 });
 
+test('settings exposes a Cloudflare account ID field before the base URL template', () => {
+  for (const [label, settingsRel] of [
+    ['chrome', 'src/chrome/src/ui/settings.js'],
+    ['firefox', 'src/firefox/src/ui/settings.js'],
+  ]) {
+    const settings = fs.readFileSync(path.join(ROOT, settingsRel), 'utf8');
+    assert.match(
+      settings,
+      /cloudflare:\s*\{[\s\S]*?\{\s*key: 'accountId', label: 'Cloudflare Account ID', type: 'text'[\s\S]*?\{\s*key: 'baseUrl'[\s\S]*?\{account_id\}/,
+      `${label}: Cloudflare settings should collect accountId before the baseUrl template`,
+    );
+  }
+});
+
 test('settings async test controls surface rejected background results', () => {
   for (const [label, settingsRel] of [
     ['chrome', 'src/chrome/src/ui/settings.js'],
@@ -3109,11 +3302,6 @@ test('settings page awaits immediate preference writes before moving on', () => 
     const settings = fs.readFileSync(path.join(ROOT, settingsRel), 'utf8');
     assert.match(
       settings,
-      /window\.addEventListener\('message', async \(event\) => \{[\s\S]*?await (chrome|browser)\.storage\.local\.set\(\{ authToken, authEmail, authDefaultModel \}\)\.catch\(\(\) => \{\}\);[\s\S]*?renderAuthSection\(\);/,
-      `${label}: auth token hydration should persist before the settings UI proceeds`,
-    );
-    assert.match(
-      settings,
       /verboseToggle\.addEventListener\('change', async \(\) => \{[\s\S]*?await (chrome|browser)\.storage\.local\.set\(\{ verboseMode: verboseToggle\.checked \}\)\.catch\(\(\) => \{\}\);[\s\S]*?\}\);/,
       `${label}: verbose toggle should await its storage write`,
     );
@@ -3189,6 +3377,13 @@ test('sidepanel scopes async tab commands to the original tab', () => {
 
     assert.match(panel, /async function showScratchpad\(tabId = currentTabId\) \{[\s\S]*?sendToBackground\('get_scratchpad', \{ tabId \}\);[\s\S]*?if \(currentTabId !== tabId\) return;[\s\S]*?catch \(e\) \{[\s\S]*?if \(currentTabId !== tabId\) return;[\s\S]*?sp\.scratchpad\.error/, `${label}: /show-scratchpad should not render success or error results into a different tab`);
     assert.match(panel, /\/\/ \/show-scratchpad[\s\S]*?await showScratchpad\(tabId\);/, `${label}: /show-scratchpad should use the initiating tab id from the parser`);
+    assert.match(panel, /async function editScratchpad\(note, tabId = currentTabId\) \{[\s\S]*?sendToBackground\('write_scratchpad', \{ tabId, text \}\);[\s\S]*?if \(currentTabId !== tabId\) return;[\s\S]*?catch \(e\) \{[\s\S]*?if \(currentTabId !== tabId\) return;[\s\S]*?sp\.scratchpad\.error/, `${label}: /edit-scratchpad should not render success or error results into a different tab`);
+    assert.match(panel, /\/\/ \/edit-scratchpad[\s\S]*?await editScratchpad\(text\.slice\(mEditScratchpad\[0\]\.length\), tabId\);/, `${label}: /edit-scratchpad should use the initiating tab id from the parser`);
+    assert.match(panel, /function clearScratchpad\(tabId = currentTabId\) \{[\s\S]*?sendToBackground\('clear_scratchpad', \{ tabId \}\)[\s\S]*?if \(currentTabId !== tabId\) return;[\s\S]*?catch\(\(e\) => \{[\s\S]*?if \(currentTabId !== tabId\) return;[\s\S]*?sp\.scratchpad\.error/, `${label}: /clear-scratchpad should not render success or error results into a different tab`);
+    const clearScratchpadIdx = panel.indexOf('// /clear-scratchpad');
+    const clearScratchpadBody = panel.slice(clearScratchpadIdx, panel.indexOf('// /schedule', clearScratchpadIdx));
+    assert.match(clearScratchpadBody, /clearScratchpad\(tabId\);\s*return '';/, `${label}: /clear-scratchpad should use the initiating tab id from the parser`);
+    assert.doesNotMatch(clearScratchpadBody, /await clearScratchpad/, `${label}: /clear-scratchpad parser path should not await`);
 
     const screenshotIdx = panel.indexOf('// /screenshot');
     const screenshotEnd = panel.indexOf('// /record', screenshotIdx);
@@ -3299,13 +3494,56 @@ test('sidepanel preserves stale residual slash-command prompts without hidden ru
     assert.equal(staleReturnIdx < sendIdx, true, `${label}: stale-tab residual guard must run before chat dispatch`);
     assert.match(
       sendBody,
-      /if \(renderToCurrentTab\) \{\s*isProcessing = true;\s*abortRequested = false;\s*sendBtn\.disabled = true;\s*inputEl\.value = '';\s*autoResizeInput\(\);[\s\S]*?addMessage\('user', text\);[\s\S]*?currentAssistantEl = assistantEl;[\s\S]*?\}/,
+      /if \(renderToCurrentTab\) \{\s*isProcessing = true;\s*abortRequested = false;\s*inputEl\.value = '';\s*autoResizeInput\(\);\s*syncSendButtonState\(\);[\s\S]*?addMessage\('user', text\);[\s\S]*?currentAssistantEl = assistantEl;[\s\S]*?\}/,
       `${label}: stale-tab residual sends should not mutate or render chat UI in the currently visible tab`,
     );
     assert.doesNotMatch(
       sendBody,
       /sendToBackground\('chat', \{[\s\S]*?tabId: currentTabId/,
       `${label}: chat dispatch should not read currentTabId after slash parsing`,
+    );
+  }
+});
+
+test('sidepanel allows only safe slash commands while busy', () => {
+  const allowed = ['/help', '/show-scratchpad', '/list-schedules', '/screenshot', '/export', '/verbose'];
+  for (const [label, panelRel, localeRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js', 'src/chrome/src/ui/locales/en.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js', 'src/firefox/src/ui/locales/en.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const locale = fs.readFileSync(path.join(ROOT, localeRel), 'utf8');
+    for (const command of allowed) {
+      assert.match(
+        panel,
+        new RegExp(`const OUT_OF_BAND_SLASH_COMMANDS = new Set\\(\\[[\\s\\S]*?'${command}'`),
+        `${label}: ${command} should be allowed while busy`,
+      );
+    }
+    assert.match(
+      panel,
+      /function syncSendButtonState\(\) \{[\s\S]*?if \(!isProcessing\) \{[\s\S]*?sendBtn\.disabled = false;[\s\S]*?\}[\s\S]*?sendBtn\.disabled = !isOutOfBandSlashDraft\(inputEl\?\.value \|\| ''\);[\s\S]*?\}/,
+      `${label}: send button state should permit only out-of-band slash drafts while busy`,
+    );
+    assert.match(
+      panel,
+      /function applySlashCommandCompletion\(index = slashCommandSelectedIndex\) \{[\s\S]*?inputEl\.value = `\$\{command\.value\} `;[\s\S]*?autoResizeInput\(\);\s*syncSendButtonState\(\);[\s\S]*?return true;[\s\S]*?\}/,
+      `${label}: slash autocomplete completion should resync send button state`,
+    );
+    assert.match(
+      panel,
+      /if \(isProcessing\) \{[\s\S]*?if \(!isOutOfBandSlashDraft\(text\)\) \{[\s\S]*?showBusySlashCommandNotice\(\);[\s\S]*?return false;[\s\S]*?\}[\s\S]*?await parseSlashCommands\(text, tabId\);[\s\S]*?return true;[\s\S]*?\}/,
+      `${label}: busy send preflight should run safe slash commands without starting chat`,
+    );
+    assert.match(
+      panel,
+      /await parseSlashCommands\(text, tabId\);[\s\S]*?if \(currentTabId === tabId\) \{[\s\S]*?if \(!inputEl\.value\.trim\(\) \|\| inputEl\.value\.trim\(\) === text\) \{[\s\S]*?inputEl\.value = '';[\s\S]*?autoResizeInput\(\);[\s\S]*?\}[\s\S]*?syncSendButtonState\(\);[\s\S]*?\}/,
+      `${label}: async busy slash completion should preserve newly typed drafts`,
+    );
+    assert.match(
+      locale,
+      /'sp\.slash\.busy_only_oob': 'Only \/help, \/show-scratchpad, \/list-schedules, \/screenshot, \/export, and \/verbose can run while WebBrain is busy\./,
+      `${label}: busy slash notice should be localized`,
     );
   }
 });
@@ -3379,7 +3617,7 @@ test('sidepanel drains scheduled-run context-menu prompts after pending tab swit
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     assert.match(panel, /async function drainQueuedContextMenuPromptsAfterPendingTabSwitch\(\) \{[\s\S]*?if \(pendingTabSwitch == null\) \{[\s\S]*?drainQueuedContextMenuPrompts\(\);[\s\S]*?const pending = pendingTabSwitch;[\s\S]*?pendingTabSwitch = null;[\s\S]*?try \{[\s\S]*?await switchToTab\(pending\);[\s\S]*?\} catch \{[\s\S]*?\}[\s\S]*?drainQueuedContextMenuPrompts\(\);/, `${label}: scheduled completions need a non-throwing pending-tab switch before draining context-menu prompts`);
 
-    const scheduledStart = panel.indexOf('function settleScheduledRun(event, job)');
+    const scheduledStart = panel.search(/(?:async\s+)?function settleScheduledRun\(event, job\)/);
     const scheduledEnd = panel.indexOf('if (scheduledJobsEl)', scheduledStart);
     assert.notEqual(scheduledStart, -1, `${label}: scheduled run settlement helper missing`);
     assert.notEqual(scheduledEnd, -1, `${label}: scheduled job event block missing`);
@@ -3743,6 +3981,46 @@ test('max agent steps locale copy mentions unlimited in every locale', () => {
       const match = locale.match(/'st\.display\.max_steps\.desc':\s*'((?:\\'|[^'])*)'/);
       assert.ok(match, `${dirRel}/${file}: max steps description missing`);
       assert.match(match[1], /∞/, `${dirRel}/${file}: max steps description should mention the unlimited slider setting`);
+    }
+  }
+});
+
+test('completion confetti is default-on and success-only in sidepanel completion flow', () => {
+  for (const [label, settingsRel, settingsHtmlRel, panelRel, cssRel] of [
+    ['chrome', 'src/chrome/src/ui/settings.js', 'src/chrome/src/ui/settings.html', 'src/chrome/src/ui/sidepanel.js', 'src/chrome/styles/sidepanel.css'],
+    ['firefox', 'src/firefox/src/ui/settings.js', 'src/firefox/src/ui/settings.html', 'src/firefox/src/ui/sidepanel.js', 'src/firefox/styles/sidepanel.css'],
+  ]) {
+    const settings = fs.readFileSync(path.join(ROOT, settingsRel), 'utf8');
+    const settingsHtml = fs.readFileSync(path.join(ROOT, settingsHtmlRel), 'utf8');
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const css = fs.readFileSync(path.join(ROOT, cssRel), 'utf8');
+
+    assert.match(settingsHtml, /id="toggle-completion-confetti" checked/, `${label}: confetti toggle should be checked by default in General settings`);
+    assert.match(settingsHtml, /st\.display\.completion_confetti\.label/, `${label}: confetti setting should be localized in the settings UI`);
+    assert.match(settings, /completionConfettiToggle\.checked = stored\.completionConfetti \?\? true/, `${label}: settings should default completion confetti on`);
+    assert.match(settings, /completionConfetti:\s*completionConfettiToggle\.checked/, `${label}: settings should persist completion confetti changes`);
+
+    assert.match(panel, /let completionConfettiEnabled = true;/, `${label}: sidepanel should default completion confetti on`);
+    assert.match(panel, /completionConfettiEnabled = changes\.completionConfetti\.newValue !== false/, `${label}: sidepanel should live-sync completion confetti setting`);
+    assert.match(panel, /function triggerCompletionConfetti\(\)/, `${label}: sidepanel should define the confetti animation trigger`);
+    assert.match(panel, /function updatesContainSuccessfulDone\(updates\)/, `${label}: live completion success should be derived from done tool updates`);
+    assert.match(panel, /if \(success\) triggerCompletionConfetti\(\);/, `${label}: confetti should only fire for successful completions`);
+    assert.match(panel, /result\?\.outcome === 'success'/, `${label}: live done success should require explicit success outcome`);
+    assert.match(panel, /notifyCompletion\(\{\s*success:\s*job\?\.lastOutcome === 'success'\s*\}\)/, `${label}: scheduled completed jobs should celebrate only explicit success outcomes`);
+    assert.match(panel, /notifyCompletion\(\{\s*success:\s*currentTabId === tabId && completedSuccessfully\s*\}\)/, `${label}: live confetti should be gated to the tab that completed`);
+    assert.doesNotMatch(panel, /completedSuccessfully = !\(res\?\./, `${label}: live confetti should not treat every normal chat response as successful completion`);
+
+    assert.match(css, /\.completion-confetti/, `${label}: sidepanel CSS should include the confetti overlay`);
+    assert.match(css, /@keyframes completion-confetti-fall/, `${label}: sidepanel CSS should define the confetti fall animation`);
+    assert.match(css, /prefers-reduced-motion:\s*reduce/, `${label}: confetti animation should respect reduced-motion preference`);
+  }
+
+  for (const dirRel of ['src/chrome/src/ui/locales', 'src/firefox/src/ui/locales']) {
+    const dir = path.join(ROOT, dirRel);
+    for (const file of fs.readdirSync(dir).filter(name => name.endsWith('.js'))) {
+      const locale = fs.readFileSync(path.join(dir, file), 'utf8');
+      assert.match(locale, /'st\.display\.completion_confetti\.label':/, `${dirRel}/${file}: completion confetti label missing`);
+      assert.match(locale, /'st\.display\.completion_confetti\.desc':/, `${dirRel}/${file}: completion confetti description missing`);
     }
   }
 });
@@ -4872,6 +5150,103 @@ test('ScheduledJobManager lets scheduled tasks survive conversation changes on t
   }
 });
 
+test('ScheduledJobManager records success outcomes from scheduled done tool results only', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    const successHarness = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async (_tabId, _message, onUpdate) => {
+        onUpdate('tool_result', {
+          name: 'done',
+          result: { done: true, summary: 'clicked references', outcome: 'success' },
+        });
+        return 'clicked references';
+      },
+    });
+    const successCreated = await successHarness.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        title: 'Click references',
+        prompt: 'Click References on the current page.',
+        schedule: { type: 'once', after_seconds: 60 },
+        target: { type: 'current_tab' },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/',
+      currentTitle: 'Example',
+    });
+
+    await successHarness.manager.handleAlarm(successHarness.alarmName(successCreated.jobId));
+    const successJob = successHarness.jobs()[0];
+    const successListed = await successHarness.manager.listJobs({ tabId: 77 });
+    const successCompleted = successHarness.updates.find((u) => u.type === 'scheduled_job' && u.data?.event === 'completed');
+    assert.equal(successJob.lastOutcome, 'success', `${label}: successful scheduled done outcome should be stored`);
+    assert.equal(successListed[0]?.lastOutcome, 'success', `${label}: job summaries should expose successful done outcome`);
+    assert.equal(successCompleted?.data?.job?.lastOutcome, 'success', `${label}: completed scheduled event should carry successful done outcome`);
+
+    const legacyHarness = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async (_tabId, _message, onUpdate) => {
+        onUpdate('tool_result', {
+          name: 'done',
+          result: { done: true, summary: 'legacy completion without outcome' },
+        });
+        return 'legacy completion without outcome';
+      },
+    });
+    const legacyCreated = await legacyHarness.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        title: 'Legacy completion',
+        prompt: 'Finish without structured outcome.',
+        schedule: { type: 'once', after_seconds: 60 },
+        target: { type: 'current_tab' },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/',
+      currentTitle: 'Example',
+    });
+
+    await legacyHarness.manager.handleAlarm(legacyHarness.alarmName(legacyCreated.jobId));
+    const legacyJob = legacyHarness.jobs()[0];
+    const legacyCompleted = legacyHarness.updates.find((u) => u.type === 'scheduled_job' && u.data?.event === 'completed');
+    assert.equal(legacyJob.lastOutcome, null, `${label}: missing done outcome should not be treated as success`);
+    assert.equal(legacyCompleted?.data?.job?.lastOutcome, null, `${label}: completed event should not invent scheduled success`);
+
+    const blockedHarness = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async (_tabId, _message, onUpdate) => {
+        onUpdate('tool_result', {
+          name: 'done',
+          result: { success: false, blockedDone: true, error: 'Progress ledger has unresolved rows.' },
+        });
+        return 'blocked completion continued';
+      },
+    });
+    const blockedCreated = await blockedHarness.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        title: 'Blocked completion',
+        prompt: 'Finish with unresolved progress.',
+        schedule: { type: 'once', after_seconds: 60 },
+        target: { type: 'current_tab' },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/',
+      currentTitle: 'Example',
+    });
+
+    await blockedHarness.manager.handleAlarm(blockedHarness.alarmName(blockedCreated.jobId));
+    const blockedJob = blockedHarness.jobs()[0];
+    const blockedCompleted = blockedHarness.updates.find((u) => u.type === 'scheduled_job' && u.data?.event === 'completed');
+    assert.equal(blockedJob.lastOutcome, null, `${label}: blocked done should not be stored as a success outcome`);
+    assert.equal(blockedCompleted?.data?.job?.lastOutcome, null, `${label}: blocked done completed event should not carry success`);
+  }
+});
+
 test('ScheduledJobManager fails current-tab tasks after the tab navigates away', async () => {
   const now = Date.UTC(2026, 0, 1, 12, 0, 0);
   for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
@@ -5103,11 +5478,17 @@ test('ScheduledJobManager preserves URL-target schedules when helper tabs close'
 test('ScheduledJobManager completes recurring tasks and schedules the next run', async () => {
   const now = Date.UTC(2026, 0, 1, 12, 0, 0);
   for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    let runCount = 0;
     const h = makeSchedulerHarness(SchedulerMod, {
       now,
-      processMessage: async (_tabId, message) => {
+      processMessage: async (_tabId, message, onUpdate) => {
+        runCount += 1;
         assert.match(message, /Scheduled task/, `${label}: synthetic task message should be trusted scheduler text`);
-        return 'checked';
+        onUpdate('tool_result', {
+          name: 'done',
+          result: { done: true, summary: `checked ${runCount}`, outcome: 'success' },
+        });
+        return `checked ${runCount}`;
       },
     });
     const created = await h.manager.createTaskJob({
@@ -5124,13 +5505,26 @@ test('ScheduledJobManager completes recurring tasks and schedules the next run',
     assert.equal(created.success, true, `${label}: create recurring task should succeed`);
 
     await h.manager.handleAlarm(h.alarmName(created.jobId));
-    const job = h.jobs()[0];
+    let job = h.jobs()[0];
     const expectedNext = new Date(now + 5 * 60 * 1000).toISOString();
     assert.equal(job.status, 'pending', `${label}: recurring job should stay pending`);
     assert.equal(job.runCount, 1, `${label}: run count should increment`);
-    assert.equal(job.lastResult, 'checked', `${label}: result should be saved`);
+    assert.equal(job.lastResult, 'checked 1', `${label}: result should be saved`);
+    assert.equal(job.lastOutcome, 'success', `${label}: recurring successful outcome should be saved`);
     assert.equal(job.nextRunAt, expectedNext, `${label}: next run should be computed`);
     assert.equal(h.alarms.get(h.alarmName(created.jobId)).when, Date.parse(expectedNext));
+
+    h.setNow(Date.parse(expectedNext));
+    await h.manager.handleAlarm(h.alarmName(created.jobId));
+    job = h.jobs()[0];
+    const expectedSecondNext = new Date(Date.parse(expectedNext) + 5 * 60 * 1000).toISOString();
+    const completedEvents = h.updates.filter((u) => u.type === 'scheduled_job' && u.data?.event === 'completed');
+    assert.equal(job.runCount, 2, `${label}: recurring run count should increment again`);
+    assert.equal(job.lastResult, 'checked 2', `${label}: second recurring result should be saved`);
+    assert.equal(job.lastOutcome, 'success', `${label}: second recurring success outcome should be saved`);
+    assert.equal(job.nextRunAt, expectedSecondNext, `${label}: second next run should be computed`);
+    assert.equal(completedEvents.length, 2, `${label}: each successful recurrence should emit a completed event`);
+    assert.ok(completedEvents.every((u) => u.data?.job?.lastOutcome === 'success'), `${label}: every successful recurring completed event should carry success outcome`);
   }
 });
 
@@ -5392,9 +5786,11 @@ test('categoryFor: cloud family (openai / anthropic / gemini / mistral / deepsee
   }
 });
 
-test('categoryFor: openrouter is router', () => {
+test('categoryFor: hosted model gateways are router providers', () => {
   for (const PM of [ProviderManagerCh, ProviderManagerFx]) {
-    assert.equal(PM.categoryFor('openrouter', { type: 'openai' }), 'router');
+    for (const id of ['openrouter', 'cloudflare', 'nvidia', 'groq']) {
+      assert.equal(PM.categoryFor(id, { type: 'openai' }), 'router');
+    }
   }
 });
 
@@ -5425,11 +5821,12 @@ test('inferContextWindow: model-aware cloud/router defaults and local 16k fallba
     assert.equal(infer({ category: 'cloud', providerName: 'anthropic', model: 'claude-sonnet-4-6' }), 1000000);
     assert.equal(infer({ category: 'cloud', providerName: 'anthropic', model: 'claude-haiku-4-5' }), 200000);
     assert.equal(infer({ category: 'cloud', providerName: 'gemini', model: 'gemini-3.1-flash' }), 1000000);
+    assert.equal(infer({ category: 'router', providerName: 'cloudflare', model: '@cf/zai-org/glm-5.2' }), 262144);
     assert.equal(infer({ category: 'cloud', providerName: 'mistral', model: 'mistral-medium-3.5' }), 262144);
     assert.equal(infer({ category: 'cloud', providerName: 'deepseek', model: 'deepseek-v4-flash' }), 1000000);
     assert.equal(infer({ category: 'cloud', providerName: 'xai', model: 'grok-4.3' }), 1000000);
-    assert.equal(infer({ category: 'cloud', providerName: 'groq', model: 'openai/gpt-oss-120b' }), 131072);
-    assert.equal(infer({ category: 'cloud', providerName: 'nvidia', model: 'nvidia/llama-3.3-nemotron-super-49b' }), 131072);
+    assert.equal(infer({ category: 'router', providerName: 'groq', model: 'openai/gpt-oss-120b' }), 131072);
+    assert.equal(infer({ category: 'router', providerName: 'nvidia', model: 'nvidia/llama-3.3-nemotron-super-49b' }), 131072);
     assert.equal(infer({ category: 'router', providerName: 'openrouter', model: 'minimax/minimax-m3' }), 1000000);
     assert.equal(infer({ category: 'cloud', providerName: 'minimax', model: 'minimax-m2.7' }), 204800);
     assert.equal(infer({ category: 'router', providerName: 'openrouter', model: 'qwen/qwen3.7-max' }), 262144);
@@ -5556,6 +5953,28 @@ test('ProviderManager load ignores unsupported stored provider configs', async (
             apiKey: `${label}-kept-key`,
             model: `${label}-kept-model`,
           },
+          openrouter: {
+            type: 'openai',
+            category: 'cloud',
+            model: 'custom/router-model',
+            apiKey: `${label}-openrouter-key`,
+          },
+          cloudflare: {
+            type: 'openai',
+            category: 'cloud',
+            accountId: '0123456789abcdef0123456789abcdef',
+            apiKey: `${label}-cloudflare-key`,
+          },
+          nvidia: {
+            type: 'openai',
+            category: 'cloud',
+            apiKey: `${label}-nvidia-key`,
+          },
+          groq: {
+            type: 'openai',
+            category: 'cloud',
+            apiKey: `${label}-groq-key`,
+          },
           custom_proxy: {
             type: 'openai',
             category: 'router',
@@ -5599,6 +6018,12 @@ test('ProviderManager load ignores unsupported stored provider configs', async (
       assert.equal(mgr.providers.get('openai')?.config.type, 'openai', `${label}: built-in type should stay pinned`);
       assert.equal(mgr.providers.get('openai')?.config.apiKey, `${label}-kept-key`, `${label}: built-in overrides should survive`);
       assert.equal(mgr.providers.get('openai')?.config.model, `${label}-kept-model`, `${label}: built-in model should survive`);
+      for (const id of ['openrouter', 'cloudflare', 'nvidia', 'groq']) {
+        assert.equal(mgr.providers.get(id)?.config.category, 'router', `${label}: stored ${id} category should migrate to router`);
+      }
+      assert.equal(mgr.providers.get('cloudflare')?.config.accountId, '0123456789abcdef0123456789abcdef', `${label}: Cloudflare account ID should survive migration`);
+      assert.equal(mgr.providers.get('nvidia')?.config.apiKey, `${label}-nvidia-key`, `${label}: Nvidia API key should survive migration`);
+      assert.equal(mgr.providers.get('groq')?.config.apiKey, `${label}-groq-key`, `${label}: Groq API key should survive migration`);
       assert.equal(mgr.providers.get('custom_proxy')?.config.type, 'openai', `${label}: supported custom provider should load`);
       assert.equal(mgr.providers.get('custom_proxy')?.config.model, 'custom-model', `${label}: custom provider config should survive`);
     }
@@ -5691,6 +6116,26 @@ test('_defaultConfigs: new cloud providers present and disabled by default', () 
   }
 });
 
+test('_defaultConfigs: router providers present and disabled by default', () => {
+  for (const PM of [ProviderManagerCh, ProviderManagerFx]) {
+    const mgr = new PM();
+    const defaults = mgr._defaultConfigs();
+    for (const id of ['openrouter', 'cloudflare', 'nvidia', 'groq']) {
+      assert.ok(defaults[id], `${PM.name}: missing default config for ${id}`);
+      assert.equal(defaults[id].type, 'openai', `${PM.name}: ${id} should use OpenAI-compatible provider`);
+      assert.equal(defaults[id].category, 'router', `${PM.name}: ${id} should be router`);
+      assert.equal(defaults[id].enabled, false, `${PM.name}: ${id} should default to disabled`);
+      assert.ok(defaults[id].baseUrl, `${PM.name}: ${id} missing baseUrl`);
+      assert.ok(defaults[id].model, `${PM.name}: ${id} missing default model`);
+    }
+    assert.equal(defaults.cloudflare.model, '@cf/zai-org/glm-5.2');
+    assert.equal(defaults.cloudflare.baseUrl, 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1');
+    assert.equal(defaults.cloudflare.contextWindow, 262144);
+    assert.equal(defaults.cloudflare.supportsStreamUsageOptions, false);
+    assert.equal(defaults.cloudflare.accountId, '');
+  }
+});
+
 test('_defaultConfigs: new offline providers present and enabled by default', () => {
   for (const PM of [ProviderManagerCh, ProviderManagerFx]) {
     const mgr = new PM();
@@ -5764,6 +6209,7 @@ test('OpenAI-compatible streams request usage metadata only for supporting provi
 
     for (const config of [
       { category: 'cloud', providerName: 'mistral' },
+      { category: 'router', providerName: 'cloudflare' },
       { category: 'cloud', providerName: 'custom' },
       { category: 'router', providerName: 'custom-router' },
       { category: 'cloud', providerName: 'openai', supportsStreamUsageOptions: false },
@@ -5772,6 +6218,47 @@ test('OpenAI-compatible streams request usage metadata only for supporting provi
       const body = { stream: true };
       provider._addStreamUsageOptions(body);
       assert.equal(body.stream_options, undefined);
+    }
+  }
+});
+
+test('OpenAI-compatible Cloudflare base URL substitutes and validates account IDs', async () => {
+  const validAccountId = '0123456789abcdef0123456789abcdef';
+  const templateUrl = 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1';
+  for (const Provider of [OpenAIProviderCh, OpenAIProviderFx]) {
+    const provider = new Provider({
+      providerName: 'cloudflare',
+      baseUrl: templateUrl,
+      accountId: validAccountId,
+      model: '@cf/zai-org/glm-5.2',
+    });
+    assert.equal(
+      provider.baseUrl,
+      `https://api.cloudflare.com/client/v4/accounts/${validAccountId}/ai/v1`,
+      `${Provider.name}: Cloudflare base URL should replace the account placeholder`,
+    );
+    assert.doesNotMatch(provider.baseUrl, /\{account_id\}/, `${Provider.name}: Cloudflare base URL should not retain the literal placeholder`);
+
+    const explicitUrl = `https://api.cloudflare.com/client/v4/accounts/${validAccountId}/ai/v1`;
+    assert.equal(
+      new Provider({ providerName: 'cloudflare', baseUrl: explicitUrl, model: '@cf/zai-org/glm-5.2' }).baseUrl,
+      explicitUrl,
+      `${Provider.name}: manually expanded Cloudflare base URLs should keep working`,
+    );
+
+    for (const accountId of ['', 'abc/def', 'not-a-cloudflare-account-id']) {
+      const result = await new Provider({
+          providerName: 'cloudflare',
+          baseUrl: templateUrl,
+          accountId,
+          model: '@cf/zai-org/glm-5.2',
+        }).testConnection();
+      assert.equal(result.ok, false, `${Provider.name}: invalid Cloudflare account IDs should fail before fetch`);
+      assert.match(
+        result.error,
+        /Cloudflare Account ID is required and must be a 32-character hex string/,
+        `${Provider.name}: invalid Cloudflare account IDs should fail before fetch`,
+      );
     }
   }
 });
@@ -7568,13 +8055,32 @@ test('blocked done progress result stays wrapped as untrusted content', async ()
         status: 'pending',
       }],
     });
-    agent.executeTool = async () => ({ done: true, summary: 'Done.' });
+    agent.executeTool = async () => ({ done: true, summary: 'Done.', outcome: 'success' });
     agent._persist = () => {};
     agent.providerManager = { ...(agent.providerManager || {}), getVisionProvider: async () => null };
 
     const toolCalls = [{ id: 'done_call', function: { name: 'done', arguments: JSON.stringify({ summary: 'Done.' }) } }];
-    const result = await agent._executeToolBatch(tabId, toolCalls, messages, () => {}, { supportsVision: false }, null, new Set(['done']), 1);
+    const updates = [];
+    const result = await agent._executeToolBatch(
+      tabId,
+      toolCalls,
+      messages,
+      (type, data) => updates.push({ type, data }),
+      { supportsVision: false },
+      null,
+      new Set(['done']),
+      1,
+    );
     assert.equal(result.action, 'continue', `${AgentClass.name}: blocked done should continue the tool loop`);
+    assert.equal(
+      updates.some(update => update.type === 'tool_result' && update.data?.name === 'done' && update.data?.result?.done === true && update.data?.result?.outcome === 'success'),
+      false,
+      `${AgentClass.name}: blocked done should not emit a successful done update`,
+    );
+    assert.ok(
+      updates.some(update => update.type === 'tool_result' && update.data?.name === 'done' && update.data?.result?.blockedDone === true),
+      `${AgentClass.name}: blocked done should emit a blocked done result update`,
+    );
 
     const toolMessage = messages.find(msg => msg.role === 'tool' && msg.tool_call_id === 'done_call');
     assert.ok(toolMessage, `${AgentClass.name}: blocked done tool result missing`);
@@ -7582,6 +8088,43 @@ test('blocked done progress result stays wrapped as untrusted content', async ()
     assert.match(toolMessage.content, /"blockedDone":true/, `${AgentClass.name}: blocked done payload missing`);
     assert.match(toolMessage.content, /Ignore previous instructions/, `${AgentClass.name}: row data should remain available as untrusted data`);
     assert.doesNotMatch(toolMessage.content, /<\/untrusted_page_content><system>/, `${AgentClass.name}: row label escaped the untrusted boundary`);
+  }
+});
+
+test('accepted done emits successful result update after progress gate', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = 796;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Finish this task.' },
+    ];
+    agent.conversations.set(tabId, messages);
+    agent.conversationModes.set(tabId, 'act');
+    agent.executeTool = async () => ({ done: true, summary: 'Done.', outcome: 'success' });
+    agent._persist = () => {};
+    agent.providerManager = { ...(agent.providerManager || {}), getVisionProvider: async () => null };
+
+    const updates = [];
+    const toolCalls = [{ id: 'done_call', function: { name: 'done', arguments: JSON.stringify({ summary: 'Done.' }) } }];
+    const result = await agent._executeToolBatch(
+      tabId,
+      toolCalls,
+      messages,
+      (type, data) => updates.push({ type, data }),
+      { supportsVision: false },
+      null,
+      new Set(['done']),
+      1,
+    );
+
+    assert.equal(result.action, 'return', `${AgentClass.name}: accepted done should finish the tool loop`);
+    assert.equal(result.value, 'Done.', `${AgentClass.name}: accepted done should return the done summary`);
+    assert.equal(
+      updates.filter(update => update.type === 'tool_result' && update.data?.name === 'done' && update.data?.result?.done === true && update.data?.result?.outcome === 'success').length,
+      1,
+      `${AgentClass.name}: accepted done should emit one successful done update`,
+    );
   }
 });
 
@@ -8362,6 +8905,14 @@ test('getScratchpad returns the current pinned scratchpad body (chrome & firefox
     const pad = await agent.getScratchpad(tabId);
     assert.equal(pad.exists, true, `${AgentClass.name}: scratchpad should exist`);
     assert.equal(pad.body, 'downloadId 42', `${AgentClass.name}: scratchpad body mismatch`);
+    const cleared = agent.clearScratchpad(tabId);
+    assert.equal(cleared.success, true, `${AgentClass.name}: scratchpad clear should succeed`);
+    assert.equal(cleared.existed, true, `${AgentClass.name}: scratchpad clear should report existing pad`);
+    assert.equal(agent._findScratchpadIndex(agent.conversations.get(tabId)), -1, `${AgentClass.name}: scratchpad message should be removed`);
+    assert.deepEqual(await agent.getScratchpad(tabId), { exists: false, body: '' }, `${AgentClass.name}: scratchpad should read empty after clear`);
+    const clearedAgain = agent.clearScratchpad(tabId);
+    assert.equal(clearedAgain.success, true, `${AgentClass.name}: repeated scratchpad clear should succeed`);
+    assert.equal(clearedAgain.existed, false, `${AgentClass.name}: repeated scratchpad clear should be a no-op`);
 
     const t = agent.persistTimers?.get?.(tabId);
     if (t) clearTimeout(t);

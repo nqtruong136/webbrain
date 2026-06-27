@@ -49,6 +49,12 @@ const COST_EPSILON = 1e-9;
 const TOKENS_PER_MILLION = 1_000_000;
 const DEFAULT_INPUT_COST_PER_MILLION_USD = 3;
 const DEFAULT_OUTPUT_COST_PER_MILLION_USD = 15;
+const DONE_OUTCOMES = new Set(['success', 'partial', 'failed']);
+
+function normalizeDoneOutcome(value) {
+  const outcome = String(value || '').trim().toLowerCase();
+  return DONE_OUTCOMES.has(outcome) ? outcome : null;
+}
 
 /**
  * The WebBrain Agent — orchestrates multi-step LLM + tool-use loops.
@@ -254,6 +260,27 @@ export class Agent {
       exists: true,
       body: this._extractScratchpadBody(messages[idx].content),
     };
+  }
+
+  async writeScratchpad(tabId, text, options = {}) {
+    await this._hydrate(tabId);
+    const mode = options?.mode || this.conversationModes.get(tabId) || 'ask';
+    this.getConversation(tabId, mode);
+    return this._scratchpadWrite(tabId, { text, replace: !!options?.replace });
+  }
+
+  clearScratchpad(tabId) {
+    const messages = this.conversations.get(tabId);
+    if (!messages) {
+      return { success: true, existed: false, note: 'scratchpad already empty' };
+    }
+    const idx = this._findScratchpadIndex(messages);
+    if (idx < 0) {
+      return { success: true, existed: false, note: 'scratchpad already empty' };
+    }
+    messages.splice(idx, 1);
+    if (typeof this._persist === 'function') this._persist(tabId);
+    return { success: true, existed: true, note: 'scratchpad cleared' };
   }
 
   setScheduledRunPolicy(tabId, policy) {
@@ -1225,7 +1252,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       const _toolStart = Date.now();
       const toolResult = await this.executeTool(tabId, fnName, fnArgs, onUpdate);
       const _toolLatency = Date.now() - _toolStart;
-      onUpdate('tool_result', { name: fnName, result: toolResult });
+      if (!toolResult?.done) {
+        onUpdate('tool_result', { name: fnName, result: toolResult });
+      }
       const _runIdForTool = this.currentRunId.get(tabId);
       if (_runIdForTool) {
         trace.recordToolCall(_runIdForTool, step, {
@@ -1284,6 +1313,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             counts: progressBlock.counts,
             unresolved: progressBlock.unresolved,
           };
+          onUpdate('tool_result', { name: fnName, result: blockedResult });
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
@@ -1293,6 +1323,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           this._persist(tabId);
           continue;
         }
+        onUpdate('tool_result', { name: fnName, result: toolResult });
         const finalResponse = this._appendProgressLedgerToFinal(tabId, toolResult.summary || partialAssistantText || 'Task completed.');
         messages.push({
           role: 'tool',
@@ -5431,6 +5462,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
 
     if (name === 'done') {
+      const outcome = normalizeDoneOutcome(args?.outcome);
       // In act mode, require a verification screenshot + page info before completing.
       const mode = this.conversationModes.get(tabId) || 'ask';
       if (mode === 'act') {
@@ -5552,6 +5584,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           return {
             done: true,
             summary: args.summary,
+            outcome,
             verification: {
               pageUrl: probe?.url || '',
               pageTitle: probe?.title || '',
@@ -5567,10 +5600,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           };
         } catch (_) {
           // Screenshot failed — still allow done but note it
-          return { done: true, summary: args.summary, verification: null };
+          return { done: true, summary: args.summary, outcome, verification: null };
         }
       }
-      return { done: true, summary: args.summary };
+      return { done: true, summary: args.summary, outcome };
     }
 
     // ─── Network & download tools ─────────────────────────────────────

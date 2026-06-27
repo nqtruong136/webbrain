@@ -394,6 +394,7 @@
       flex-shrink: 0;
     }
     .btn-sign-in:hover { background: var(--accent2); }
+    .btn-sign-in:disabled { opacity: 0.55; cursor: default; transform: none; }
     .btn-sign-out {
       background: var(--bg3);
       color: var(--text);
@@ -422,10 +423,9 @@
   <h1 data-i18n="st.title"></h1>
   <p class="subtitle" id="subtitle"></p>
 
-  <!-- Account section stays outside the tabs — it's a zero-height placeholder
-       until auth finishes, at which point settings.js populates it. -->
-  <h2 style="display:none;" data-i18n="st.tab.account"></h2>
-  <div id="account-section" style="display:none;"></div>
+  <!-- WebBrain Cloud billing is device-bound and managed by Stripe. -->
+  <h2 data-i18n="st.tab.account"></h2>
+  <div id="account-section"></div>
 
   <nav class="tabs" role="tablist">
     <button class="tab-btn" type="button" role="tab" data-tab="display" data-i18n="st.tab.display"></button>
@@ -592,6 +592,16 @@
         </div>
         <label class="toggle">
           <input type="checkbox" id="toggle-notify-sound" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label" data-i18n="st.display.completion_confetti.label"></div>
+          <div class="setting-desc" data-i18n="st.display.completion_confetti.desc"></div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-completion-confetti" checked>
           <span class="toggle-slider"></span>
         </label>
       </div>

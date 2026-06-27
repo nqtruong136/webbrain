@@ -4,6 +4,93 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / `manifest.json` version.
 
+## [17.8.0] - 2026-06-27
+
+### Added
+- Added completion confetti for successful Chrome and Firefox tasks, with a Settings toggle and localized labels so users can turn off the celebratory finish.
+
+### Changed
+- Updated release metadata, Settings subtitle versions, architecture docs, Chrome / Firefox manifests, and package versions for 17.8.0.
+
+### Fixed
+- Fixed side-panel tab race issues by queueing tab-switch updates during restore and preventing stale flushes from writing to the wrong tab conversation.
+- Scoped accepted completion and success-confetti updates to the active tab so finished tasks do not trigger stale success UI in another tab.
+
+### Tests
+- Added regression coverage for completion confetti settings and rendering, accepted completion gating, and tab-switch restore / flush races.
+
+## [17.7.0] - 2026-06-26
+
+### Added
+- Added `/clear-scratchpad` in the Chrome and Firefox side panels so users can clear the current conversation scratchpad from slash-command autocomplete and help.
+- Added Cloudflare Workers AI to the provider list with the OpenAI-compatible Workers AI endpoint, default model `@cf/zai-org/glm-5.2`, and a 262k-token context window.
+
+### Changed
+- Translated the `/clear-scratchpad` label, help text, and cleared-state message across all supported locales.
+- Classified OpenRouter, Cloudflare Workers AI, Nvidia NIM, and Groq under the Router provider bucket in Chrome and Firefox settings.
+- Added a dedicated Cloudflare account ID field and URL validation so the Workers AI provider substitutes the account into the API base URL before testing or chatting.
+- Updated release metadata, Settings subtitle versions, architecture docs, Chrome / Firefox manifests, and package versions for 17.7.0.
+
+### Fixed
+- Migrated saved OpenRouter, Cloudflare Workers AI, Nvidia NIM, and Groq provider categories to Router so upgraded installs do not keep older Cloud filter state.
+
+### Tests
+- Added regression coverage for the synchronous scratchpad clear path, locale coverage for `/clear-scratchpad`, Cloudflare defaults, context-window inference, and the Router provider bucket.
+
+## [17.6.0] - 2026-06-26
+
+### Added
+- Added a copy button to `/show-scratchpad` output in the Chrome and Firefox side panels so users can copy just the scratchpad contents.
+- Added WebBrain blog coverage and benchmark result files for raw LFM 2.5 230M and 350M on the frozen 100-case browser-agent planner harness.
+
+### Changed
+- Updated the tiny LFM benchmark conclusion and refreshed release metadata, Settings subtitle versions, architecture docs, Chrome / Firefox manifests, and package versions for 17.6.0.
+
+## [17.5.0] - 2026-06-26
+
+### Added
+- Added async out-of-band slash-command handling in the Chrome and Firefox side panels, allowing `/help`, `/show-scratchpad`, `/list-schedules`, `/screenshot`, `/export`, and `/verbose` to run while WebBrain is busy.
+
+### Changed
+- Updated release metadata, Settings subtitle versions, architecture docs, Chrome / Firefox manifests, and package versions for 17.5.0.
+
+### Fixed
+- Preserved drafts and autocomplete/send-button state when users try slash commands during active runs, with a localized busy notice for commands that need to wait.
+
+## [17.4.0] - 2026-06-25
+
+### Added
+- Added `/edit-scratchpad <text>` in the Chrome and Firefox side panels so users can append notes to the current conversation scratchpad from slash-command autocomplete and help.
+
+### Changed
+- Updated release metadata, Settings subtitle versions, architecture docs, Chrome / Firefox manifests, and package versions for 17.4.0.
+
+## [17.3.0] - 2026-06-24
+
+### Fixed
+- Replaced the Firefox extension toolbar/sidebar icon PNGs with the Chrome brain artwork and refreshed the packaged Firefox archive so Firefox no longer shows the old purple round icon.
+
+## [17.2.0] - 2026-06-24
+
+### Added
+- Added XML-style raw tool-call parsing for Chrome and Firefox so local/chat-template models that emit `<tool_call><function=...><parameter=...>` output can execute tools instead of returning raw markup.
+- Added a WebBrain Cloud billing panel in Chrome and Firefox settings with device-bound Stripe account links, localized account copy, and expanded WebBrain Cloud provider notes for subscription, billing, and privacy links.
+- Added Polish UI locale support for the Chrome and Firefox settings/payment flows.
+
+### Changed
+- Updated WebBrain Cloud `/subscribe` URLs and 402 allowance messages to include the device GUID as Stripe `client_reference_id`, and made the subscribe page require a device-bound link before redirecting to checkout.
+- Reworded the subscribe fallback page to tell users with outdated extension links to update the browser plugin.
+- Documented the newer slash commands in the English, French, and Chinese README files.
+- Updated release metadata, Settings subtitle versions, architecture docs, Chrome / Firefox manifests, and package versions for 17.2.0.
+
+### Fixed
+- Purged legacy `auth.webbrain.one` token, email, and default-model storage during settings startup now that WebBrain Cloud billing is device-GUID based.
+- Firefox side-panel message bubbles now expose copy buttons on user messages, with styling that remains legible on accent-colored bubbles.
+- Suppressed streamed raw tool-call text before rendered tool steps, so fallback tool calls do not linger as assistant text.
+
+### Tests
+- Added regression coverage for XML-style tool-call parsing/execution and raw tool-call stream suppression in Chrome and Firefox.
+
 ## [17.1.0] - 2026-06-24
 
 ### Added
