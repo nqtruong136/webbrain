@@ -3115,21 +3115,19 @@ function submitPlanReview(card, tabId, planId, action, editedText) {
   if (card.classList.contains('plan-reviewed')) return;
   const activeAssistantEl = action === 'approve' ? reattachPlanReviewActiveRun(card) : null;
   card.classList.add('plan-reviewed');
+  if (action !== 'approve') {
+    card.remove();
+    scrollToBottom();
+    sendToBackground('plan_response', { tabId, planId, decision: action, editedText }).catch(() => {});
+    return;
+  }
   for (const el of card.querySelectorAll('button, textarea')) {
     el.disabled = true;
   }
   const note = document.createElement('div');
   note.className = 'plan-review-note';
   const approvedText = () => (typeof t === 'function' ? t('sp.plan.approved') : 'Plan approved — running…');
-  const cancelledText = () => (typeof t === 'function' ? t('sp.plan.cancelled') : 'Plan cancelled.');
   const expiredText = () => (typeof t === 'function' ? t('sp.plan.expired') : 'This plan is no longer awaiting review — the run was cancelled.');
-  // Cancellation is local and always valid. For approval, wait for the
-  // background to confirm a pending plan actually matched: if the agent-side
-  // gate already resolved (timeout/abort/cleared) nothing will run, so claiming
-  // "running…" would be a lie — show the expired notice instead.
-  if (action !== 'approve') {
-    note.textContent = cancelledText();
-  }
   card.appendChild(note);
   scrollToBottom();
 
