@@ -1784,6 +1784,47 @@ test('getToolsForMode: default `done` description is the loose hygiene hint', ()
   }
 });
 
+test('getToolsForMode: `done` outcome is exposed only in full and mid act modes', () => {
+  for (const [label, getTools] of [
+    ['chrome', getToolsForModeCh],
+    ['firefox', getToolsForModeFx],
+  ]) {
+    for (const [modeLabel, tools, shouldExposeOutcome] of [
+      ['ask', getTools('ask'), false],
+      ['ask strict', getTools('ask', { strictSecretMode: true }), false],
+      ['act full', getTools('act'), true],
+      ['act mid', getTools('act', { tier: 'mid' }), true],
+      ['act compact', getTools('act', { tier: 'compact' }), false],
+      ['act strict full', getTools('act', { strictSecretMode: true }), true],
+      ['act strict mid', getTools('act', { tier: 'mid', strictSecretMode: true }), true],
+      ['act strict compact', getTools('act', { tier: 'compact', strictSecretMode: true }), false],
+    ]) {
+      const done = tools.find(t => t.function.name === 'done');
+      assert.ok(done, `[${label}] ${modeLabel}: done tool missing`);
+      const params = done.function.parameters;
+      assert.ok(params.required.includes('summary'), `[${label}] ${modeLabel}: summary should remain required`);
+      if (shouldExposeOutcome) {
+        assert.deepEqual(params.properties.outcome.enum, ['success', 'partial', 'failed'], `[${label}] ${modeLabel}: done outcome enum drifted`);
+        assert.match(params.properties.outcome.description, /success only/i, `[${label}] ${modeLabel}: done outcome should describe success semantics`);
+        assert.ok(params.required.includes('outcome'), `[${label}] ${modeLabel}: outcome should be required`);
+      } else {
+        assert.equal(params.properties.outcome, undefined, `[${label}] ${modeLabel}: done outcome should not be exposed`);
+        assert.equal(params.required.includes('outcome'), false, `[${label}] ${modeLabel}: outcome should not be required`);
+      }
+    }
+  }
+
+  for (const [label, askPrompt, compactPrompt, fullPrompt, midPrompt] of [
+    ['chrome', SYSTEM_PROMPT_ASK_CH, SYSTEM_PROMPT_ACT_COMPACT_CH, SYSTEM_PROMPT_ACT_CH, SYSTEM_PROMPT_ACT_MID_CH],
+    ['firefox', SYSTEM_PROMPT_ASK_FX, SYSTEM_PROMPT_ACT_COMPACT_FX, SYSTEM_PROMPT_ACT_FX, SYSTEM_PROMPT_ACT_MID_FX],
+  ]) {
+    assert.doesNotMatch(askPrompt, /done\(\{summary,\s*outcome/i, `[${label}] ask prompt should not teach outcome`);
+    assert.doesNotMatch(compactPrompt, /done\(\{summary,\s*outcome|outcome:"/i, `[${label}] compact prompt should not teach outcome`);
+    assert.match(fullPrompt, /done\(\{summary,\s*outcome/i, `[${label}] full act prompt should teach outcome`);
+    assert.match(midPrompt, /done\(\{summary,\s*outcome/i, `[${label}] mid act prompt should teach outcome`);
+  }
+});
+
 test('getToolsForMode: strictSecretMode swaps in the strict `done` description', () => {
   for (const getTools of [getToolsForModeCh, getToolsForModeFx]) {
     const loose = getTools('act');
@@ -2630,15 +2671,58 @@ test('chrome sidepanel drops stale async tab-chat restores', () => {
   const renderedSetIdx = body.indexOf('renderedTabId = newTabId;');
   const restoreIdx = body.indexOf('messagesEl.innerHTML =');
   const consumeIdx = body.indexOf('consumePendingContextMenuPrompt()');
+  const flushIdx = body.indexOf('await flushRenderedTabChat();');
+  const postFlushProcessingIdx = body.indexOf('if (isProcessing) {', flushIdx);
+  const postFlushPendingIdx = body.indexOf('pendingTabSwitch = newTabId;', postFlushProcessingIdx);
+  const postFlushReturnIdx = body.indexOf('return;', postFlushPendingIdx);
   assert.notEqual(setIdx, -1, 'chrome: switchToTab should set the visible tab before restoring chat');
   assert.notEqual(loadIdx, -1, 'chrome: switchToTab should load persisted tab chat asynchronously');
   assert.notEqual(guardIdx, -1, 'chrome: stale async tab-chat restores should be dropped');
   assert.notEqual(renderedSetIdx, -1, 'chrome: switchToTab should mark the rendered tab only after stale async restores are dropped');
   assert.notEqual(restoreIdx, -1, 'chrome: switchToTab restore point missing');
   assert.notEqual(consumeIdx, -1, 'chrome: switchToTab context-menu consume point missing');
+  assert.notEqual(flushIdx, -1, 'chrome: switchToTab should flush rendered chat before changing tabs');
+  assert.notEqual(postFlushProcessingIdx, -1, 'chrome: switchToTab should recheck processing after the async flush yields');
+  assert.notEqual(postFlushPendingIdx, -1, 'chrome: switchToTab should defer the requested tab switch if a run starts during the flush');
+  assert.notEqual(postFlushReturnIdx, -1, 'chrome: switchToTab should stop before changing currentTabId when a run starts during the flush');
+  assert.equal(flushIdx < postFlushProcessingIdx && postFlushProcessingIdx < postFlushPendingIdx && postFlushPendingIdx < postFlushReturnIdx && postFlushReturnIdx < setIdx, true, 'chrome: post-flush processing recheck must happen before currentTabId changes');
   assert.equal(setIdx < loadIdx && loadIdx < guardIdx && guardIdx < renderedSetIdx && renderedSetIdx < restoreIdx && guardIdx < consumeIdx, true, 'chrome: stale guard must run after async chat load and before rendered-tab/DOM/context-menu work');
-  assert.match(body, /if \(renderedTabId != null\) \{[\s\S]*?persistTabChat\(renderedTabId, messagesEl\.innerHTML\);[\s\S]*?captureInputDraftForTab\(renderedTabId\);[\s\S]*?\}/, 'chrome: overlapping tab switches should save drafts for the tab represented by the DOM');
+  assert.match(body, /if \(renderedTabId != null\) \{[\s\S]*?await flushRenderedTabChat\(\);[\s\S]*?captureInputDraftForTab\(renderedTabId\);[\s\S]*?\}/, 'chrome: overlapping tab switches should flush chat and save drafts for the tab represented by the DOM');
   assert.doesNotMatch(body, /persistTabChat\(currentTabId,\s*messagesEl\.innerHTML\)|captureInputDraftForTab\(currentTabId\)/, 'chrome: overlapping tab switches must not save DOM or drafts under a pending target tab');
+});
+
+test('chrome sidepanel queues target-tab updates during async tab switches', () => {
+  const panel = fs.readFileSync(path.join(ROOT, 'src/chrome/src/ui/sidepanel.js'), 'utf8');
+  assert.match(panel, /let tabSwitchTransitionId = null;/, 'chrome: tab switches should track the tab currently being restored');
+  assert.match(panel, /let queuedTabSwitchMessages = \[\];/, 'chrome: tab switches should keep target-tab messages that arrive mid-restore');
+  assert.match(panel, /function queueAgentUpdateDuringTabSwitch\(msg\) \{[\s\S]*?const tabId = msg\?\.tabId;[\s\S]*?tabSwitchTransitionId == null[\s\S]*?tabId !== tabSwitchTransitionId[\s\S]*?return false;[\s\S]*?queuedTabSwitchMessages\.push\(msg\);[\s\S]*?return true;[\s\S]*?\}/, 'chrome: target-tab messages should be queued while that tab is being restored');
+  assert.match(panel, /function drainQueuedAgentUpdatesForTab\(tabId\) \{[\s\S]*?queuedTabSwitchMessages = remaining;[\s\S]*?replay\.forEach\(\(msg\) => handleAgentUpdateMessage\(msg\)\);[\s\S]*?\}/, 'chrome: queued target-tab messages should replay through the normal agent update handler');
+
+  const switchMatch = panel.match(/async function switchToTab\(newTabId\) \{([\s\S]*?)\n\}/);
+  assert.ok(switchMatch, 'chrome: switchToTab body missing');
+  const body = switchMatch[1];
+  const markIdx = body.indexOf('tabSwitchTransitionId = newTabId;');
+  const flushIdx = body.indexOf('await flushRenderedTabChat();');
+  const loadIdx = body.indexOf('const html = await loadTabChat(newTabId);');
+  const clearTransitionIdx = body.indexOf('if (tabSwitchTransitionId === newTabId) tabSwitchTransitionId = null;');
+  const replayIdx = body.indexOf('drainQueuedAgentUpdatesForTab(newTabId);');
+  const consumeIdx = body.indexOf('consumePendingContextMenuPrompt()');
+  assert.notEqual(markIdx, -1, 'chrome: switchToTab should mark the target tab before any async flush can yield');
+  assert.notEqual(flushIdx, -1, 'chrome: switchToTab flush point missing');
+  assert.notEqual(loadIdx, -1, 'chrome: switchToTab restore load point missing');
+  assert.notEqual(clearTransitionIdx, -1, 'chrome: switchToTab should clear the transition marker after restore settles');
+  assert.notEqual(replayIdx, -1, 'chrome: switchToTab should replay queued target-tab messages after restore');
+  assert.notEqual(consumeIdx, -1, 'chrome: switchToTab context-menu consume point missing');
+  assert.equal(markIdx < flushIdx && flushIdx < loadIdx && loadIdx < clearTransitionIdx && clearTransitionIdx < replayIdx && replayIdx < consumeIdx, true, 'chrome: queued target-tab updates must wait until the async restore has settled');
+
+  const listenerStart = panel.indexOf("if (msg.target !== 'sidepanel' || msg.action !== 'agent_update') return;");
+  assert.notEqual(listenerStart, -1, 'chrome: runtime message listener missing');
+  const listenerBody = panel.slice(listenerStart, panel.indexOf('\n});', listenerStart) + 4);
+  const queueIdx = listenerBody.indexOf('if (queueAgentUpdateDuringTabSwitch(msg)) return;');
+  const handleIdx = listenerBody.indexOf('handleAgentUpdateMessage(msg);');
+  assert.notEqual(queueIdx, -1, 'chrome: runtime listener should queue target-tab updates during async tab switching');
+  assert.notEqual(handleIdx, -1, 'chrome: runtime listener should still pass normal updates to the shared handler');
+  assert.equal(queueIdx < handleIdx, true, 'chrome: target-tab updates should be queued before scheduled-job or tab filters can drop them');
 });
 
 test('chrome sidepanel persists tab chat to the tab captured before debounce', () => {
@@ -2656,6 +2740,69 @@ test('chrome sidepanel persists tab chat to the tab captured before debounce', (
   assert.notEqual(persistIdx, -1, 'chrome: persistence should write the captured tab/html');
   assert.equal(captureTabIdx < timerIdx && captureHtmlIdx < timerIdx && timerIdx < persistIdx, true, 'chrome: persistence must not read mutable tab state after the debounce delay');
   assert.doesNotMatch(body, /persistTabChat\(currentTabId,\s*messagesEl\.innerHTML\)/, 'chrome: debounced persistence should not save live DOM under the later currentTabId');
+});
+
+test('sidepanel flushes completed run chat before deferred tab switches', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+
+    if (label === 'chrome') {
+      assert.match(
+        panel,
+        /async function flushRenderedTabChat\(\) \{[\s\S]*?const tabId = renderedTabId;[\s\S]*?if \(persistTimer && persistTimerTabId === tabId\) \{[\s\S]*?clearTimeout\(persistTimer\);[\s\S]*?\}[\s\S]*?await persistTabChat\(tabId, messagesEl\.innerHTML\);[\s\S]*?\}/,
+        'chrome: final flush should cancel stale debounced writes and persist the rendered tab immediately',
+      );
+    } else {
+      assert.match(
+        panel,
+        /function flushRenderedTabChat\(\) \{[\s\S]*?if \(currentTabId == null\) return;[\s\S]*?tabChats\.set\(currentTabId, messagesEl\.innerHTML\);[\s\S]*?\}/,
+        'firefox: final flush should update the currently rendered in-memory chat',
+      );
+    }
+
+    const sendMatch = panel.match(/async function sendMessage\([^)]*\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n  return accepted;/);
+    assert.ok(sendMatch, `${label}: sendMessage finally block missing`);
+    const sendFinally = sendMatch[1];
+    const sendFlushIdx = sendFinally.indexOf('flushRenderedTabChat()');
+    const sendDrainIdx = sendFinally.indexOf('await drainQueuedContextMenuPromptsAfterPendingTabSwitch();');
+    assert.notEqual(sendFlushIdx, -1, `${label}: send completion should flush the final transcript`);
+    assert.notEqual(sendDrainIdx, -1, `${label}: send completion should drain pending tab switches`);
+    assert.equal(sendFlushIdx < sendDrainIdx, true, `${label}: send completion must flush before deferred tab switching`);
+
+    const continueMatch = panel.match(/async function continueAgent\(\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n\}/);
+    assert.ok(continueMatch, `${label}: continueAgent finally block missing`);
+    const continueFinally = continueMatch[1];
+    const continueFlushIdx = continueFinally.indexOf('flushRenderedTabChat()');
+    const continueDrainIdx = continueFinally.indexOf('await drainQueuedContextMenuPromptsAfterPendingTabSwitch();');
+    assert.notEqual(continueFlushIdx, -1, `${label}: Continue completion should flush the final transcript`);
+    assert.notEqual(continueDrainIdx, -1, `${label}: Continue completion should drain pending tab switches`);
+    assert.equal(continueFlushIdx < continueDrainIdx, true, `${label}: Continue completion must flush before deferred tab switching`);
+
+    const scheduledStart = panel.search(/(?:async\s+)?function settleScheduledRun\(event, job\)/);
+    const scheduledEnd = panel.search(/(?:async\s+)?function handleScheduledJobEvent\(data, tabId\)/);
+    assert.notEqual(scheduledStart, -1, `${label}: scheduled settlement helper missing`);
+    assert.notEqual(scheduledEnd, -1, `${label}: scheduled event handler boundary missing`);
+    const scheduledBody = panel.slice(scheduledStart, scheduledEnd);
+    const scheduledFlushNeedle = label === 'chrome' ? 'await flushRenderedTabChat()' : 'flushRenderedTabChat()';
+    const scheduledDrainNeedle = label === 'chrome' ? 'await drainQueuedContextMenuPromptsAfterPendingTabSwitch();' : 'drainQueuedContextMenuPromptsAfterPendingTabSwitch();';
+    const scheduledFlushIdx = scheduledBody.indexOf(scheduledFlushNeedle);
+    const scheduledDrainIdx = scheduledBody.indexOf(scheduledDrainNeedle);
+    assert.notEqual(scheduledFlushIdx, -1, `${label}: scheduled completion should flush the final transcript`);
+    assert.notEqual(scheduledDrainIdx, -1, `${label}: scheduled completion should drain pending tab switches`);
+    assert.equal(scheduledFlushIdx < scheduledDrainIdx, true, `${label}: scheduled completion must flush before deferred tab switching`);
+
+    const abortMatch = panel.match(/setTimeout\(async \(\) => \{[\s\S]*?if \(abortRequested\) \{([\s\S]*?)\n    \}\n  \}, 3000\);/);
+    assert.ok(abortMatch, `${label}: abort safety timeout body missing`);
+    const abortBody = abortMatch[1];
+    const abortFlushIdx = abortBody.indexOf('flushRenderedTabChat()');
+    const abortDrainIdx = abortBody.indexOf('await drainQueuedContextMenuPromptsAfterPendingTabSwitch();');
+    assert.notEqual(abortFlushIdx, -1, `${label}: abort timeout should flush the stopped transcript`);
+    assert.notEqual(abortDrainIdx, -1, `${label}: abort timeout should drain pending tab switches`);
+    assert.equal(abortFlushIdx < abortDrainIdx, true, `${label}: abort timeout must flush before deferred tab switching`);
+  }
 });
 
 test('chrome sidepanel serializes tab-chat storage writes with clears and reads', () => {
@@ -3452,7 +3599,7 @@ test('sidepanel drains scheduled-run context-menu prompts after pending tab swit
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     assert.match(panel, /async function drainQueuedContextMenuPromptsAfterPendingTabSwitch\(\) \{[\s\S]*?if \(pendingTabSwitch == null\) \{[\s\S]*?drainQueuedContextMenuPrompts\(\);[\s\S]*?const pending = pendingTabSwitch;[\s\S]*?pendingTabSwitch = null;[\s\S]*?try \{[\s\S]*?await switchToTab\(pending\);[\s\S]*?\} catch \{[\s\S]*?\}[\s\S]*?drainQueuedContextMenuPrompts\(\);/, `${label}: scheduled completions need a non-throwing pending-tab switch before draining context-menu prompts`);
 
-    const scheduledStart = panel.indexOf('function settleScheduledRun(event, job)');
+    const scheduledStart = panel.search(/(?:async\s+)?function settleScheduledRun\(event, job\)/);
     const scheduledEnd = panel.indexOf('if (scheduledJobsEl)', scheduledStart);
     assert.notEqual(scheduledStart, -1, `${label}: scheduled run settlement helper missing`);
     assert.notEqual(scheduledEnd, -1, `${label}: scheduled job event block missing`);
@@ -3816,6 +3963,46 @@ test('max agent steps locale copy mentions unlimited in every locale', () => {
       const match = locale.match(/'st\.display\.max_steps\.desc':\s*'((?:\\'|[^'])*)'/);
       assert.ok(match, `${dirRel}/${file}: max steps description missing`);
       assert.match(match[1], /∞/, `${dirRel}/${file}: max steps description should mention the unlimited slider setting`);
+    }
+  }
+});
+
+test('completion confetti is default-on and success-only in sidepanel completion flow', () => {
+  for (const [label, settingsRel, settingsHtmlRel, panelRel, cssRel] of [
+    ['chrome', 'src/chrome/src/ui/settings.js', 'src/chrome/src/ui/settings.html', 'src/chrome/src/ui/sidepanel.js', 'src/chrome/styles/sidepanel.css'],
+    ['firefox', 'src/firefox/src/ui/settings.js', 'src/firefox/src/ui/settings.html', 'src/firefox/src/ui/sidepanel.js', 'src/firefox/styles/sidepanel.css'],
+  ]) {
+    const settings = fs.readFileSync(path.join(ROOT, settingsRel), 'utf8');
+    const settingsHtml = fs.readFileSync(path.join(ROOT, settingsHtmlRel), 'utf8');
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const css = fs.readFileSync(path.join(ROOT, cssRel), 'utf8');
+
+    assert.match(settingsHtml, /id="toggle-completion-confetti" checked/, `${label}: confetti toggle should be checked by default in General settings`);
+    assert.match(settingsHtml, /st\.display\.completion_confetti\.label/, `${label}: confetti setting should be localized in the settings UI`);
+    assert.match(settings, /completionConfettiToggle\.checked = stored\.completionConfetti \?\? true/, `${label}: settings should default completion confetti on`);
+    assert.match(settings, /completionConfetti:\s*completionConfettiToggle\.checked/, `${label}: settings should persist completion confetti changes`);
+
+    assert.match(panel, /let completionConfettiEnabled = true;/, `${label}: sidepanel should default completion confetti on`);
+    assert.match(panel, /completionConfettiEnabled = changes\.completionConfetti\.newValue !== false/, `${label}: sidepanel should live-sync completion confetti setting`);
+    assert.match(panel, /function triggerCompletionConfetti\(\)/, `${label}: sidepanel should define the confetti animation trigger`);
+    assert.match(panel, /function updatesContainSuccessfulDone\(updates\)/, `${label}: live completion success should be derived from done tool updates`);
+    assert.match(panel, /if \(success\) triggerCompletionConfetti\(\);/, `${label}: confetti should only fire for successful completions`);
+    assert.match(panel, /result\?\.outcome === 'success'/, `${label}: live done success should require explicit success outcome`);
+    assert.match(panel, /notifyCompletion\(\{\s*success:\s*job\?\.lastOutcome === 'success'\s*\}\)/, `${label}: scheduled completed jobs should celebrate only explicit success outcomes`);
+    assert.match(panel, /notifyCompletion\(\{\s*success:\s*currentTabId === tabId && completedSuccessfully\s*\}\)/, `${label}: live confetti should be gated to the tab that completed`);
+    assert.doesNotMatch(panel, /completedSuccessfully = !\(res\?\./, `${label}: live confetti should not treat every normal chat response as successful completion`);
+
+    assert.match(css, /\.completion-confetti/, `${label}: sidepanel CSS should include the confetti overlay`);
+    assert.match(css, /@keyframes completion-confetti-fall/, `${label}: sidepanel CSS should define the confetti fall animation`);
+    assert.match(css, /prefers-reduced-motion:\s*reduce/, `${label}: confetti animation should respect reduced-motion preference`);
+  }
+
+  for (const dirRel of ['src/chrome/src/ui/locales', 'src/firefox/src/ui/locales']) {
+    const dir = path.join(ROOT, dirRel);
+    for (const file of fs.readdirSync(dir).filter(name => name.endsWith('.js'))) {
+      const locale = fs.readFileSync(path.join(dir, file), 'utf8');
+      assert.match(locale, /'st\.display\.completion_confetti\.label':/, `${dirRel}/${file}: completion confetti label missing`);
+      assert.match(locale, /'st\.display\.completion_confetti\.desc':/, `${dirRel}/${file}: completion confetti description missing`);
     }
   }
 });
@@ -4945,6 +5132,103 @@ test('ScheduledJobManager lets scheduled tasks survive conversation changes on t
   }
 });
 
+test('ScheduledJobManager records success outcomes from scheduled done tool results only', async () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    const successHarness = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async (_tabId, _message, onUpdate) => {
+        onUpdate('tool_result', {
+          name: 'done',
+          result: { done: true, summary: 'clicked references', outcome: 'success' },
+        });
+        return 'clicked references';
+      },
+    });
+    const successCreated = await successHarness.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        title: 'Click references',
+        prompt: 'Click References on the current page.',
+        schedule: { type: 'once', after_seconds: 60 },
+        target: { type: 'current_tab' },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/',
+      currentTitle: 'Example',
+    });
+
+    await successHarness.manager.handleAlarm(successHarness.alarmName(successCreated.jobId));
+    const successJob = successHarness.jobs()[0];
+    const successListed = await successHarness.manager.listJobs({ tabId: 77 });
+    const successCompleted = successHarness.updates.find((u) => u.type === 'scheduled_job' && u.data?.event === 'completed');
+    assert.equal(successJob.lastOutcome, 'success', `${label}: successful scheduled done outcome should be stored`);
+    assert.equal(successListed[0]?.lastOutcome, 'success', `${label}: job summaries should expose successful done outcome`);
+    assert.equal(successCompleted?.data?.job?.lastOutcome, 'success', `${label}: completed scheduled event should carry successful done outcome`);
+
+    const legacyHarness = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async (_tabId, _message, onUpdate) => {
+        onUpdate('tool_result', {
+          name: 'done',
+          result: { done: true, summary: 'legacy completion without outcome' },
+        });
+        return 'legacy completion without outcome';
+      },
+    });
+    const legacyCreated = await legacyHarness.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        title: 'Legacy completion',
+        prompt: 'Finish without structured outcome.',
+        schedule: { type: 'once', after_seconds: 60 },
+        target: { type: 'current_tab' },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/',
+      currentTitle: 'Example',
+    });
+
+    await legacyHarness.manager.handleAlarm(legacyHarness.alarmName(legacyCreated.jobId));
+    const legacyJob = legacyHarness.jobs()[0];
+    const legacyCompleted = legacyHarness.updates.find((u) => u.type === 'scheduled_job' && u.data?.event === 'completed');
+    assert.equal(legacyJob.lastOutcome, null, `${label}: missing done outcome should not be treated as success`);
+    assert.equal(legacyCompleted?.data?.job?.lastOutcome, null, `${label}: completed event should not invent scheduled success`);
+
+    const blockedHarness = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async (_tabId, _message, onUpdate) => {
+        onUpdate('tool_result', {
+          name: 'done',
+          result: { success: false, blockedDone: true, error: 'Progress ledger has unresolved rows.' },
+        });
+        return 'blocked completion continued';
+      },
+    });
+    const blockedCreated = await blockedHarness.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        title: 'Blocked completion',
+        prompt: 'Finish with unresolved progress.',
+        schedule: { type: 'once', after_seconds: 60 },
+        target: { type: 'current_tab' },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/',
+      currentTitle: 'Example',
+    });
+
+    await blockedHarness.manager.handleAlarm(blockedHarness.alarmName(blockedCreated.jobId));
+    const blockedJob = blockedHarness.jobs()[0];
+    const blockedCompleted = blockedHarness.updates.find((u) => u.type === 'scheduled_job' && u.data?.event === 'completed');
+    assert.equal(blockedJob.lastOutcome, null, `${label}: blocked done should not be stored as a success outcome`);
+    assert.equal(blockedCompleted?.data?.job?.lastOutcome, null, `${label}: blocked done completed event should not carry success`);
+  }
+});
+
 test('ScheduledJobManager fails current-tab tasks after the tab navigates away', async () => {
   const now = Date.UTC(2026, 0, 1, 12, 0, 0);
   for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
@@ -5176,11 +5460,17 @@ test('ScheduledJobManager preserves URL-target schedules when helper tabs close'
 test('ScheduledJobManager completes recurring tasks and schedules the next run', async () => {
   const now = Date.UTC(2026, 0, 1, 12, 0, 0);
   for (const [label, SchedulerMod] of [['chrome', SchedulerCh], ['firefox', SchedulerFx]]) {
+    let runCount = 0;
     const h = makeSchedulerHarness(SchedulerMod, {
       now,
-      processMessage: async (_tabId, message) => {
+      processMessage: async (_tabId, message, onUpdate) => {
+        runCount += 1;
         assert.match(message, /Scheduled task/, `${label}: synthetic task message should be trusted scheduler text`);
-        return 'checked';
+        onUpdate('tool_result', {
+          name: 'done',
+          result: { done: true, summary: `checked ${runCount}`, outcome: 'success' },
+        });
+        return `checked ${runCount}`;
       },
     });
     const created = await h.manager.createTaskJob({
@@ -5197,13 +5487,26 @@ test('ScheduledJobManager completes recurring tasks and schedules the next run',
     assert.equal(created.success, true, `${label}: create recurring task should succeed`);
 
     await h.manager.handleAlarm(h.alarmName(created.jobId));
-    const job = h.jobs()[0];
+    let job = h.jobs()[0];
     const expectedNext = new Date(now + 5 * 60 * 1000).toISOString();
     assert.equal(job.status, 'pending', `${label}: recurring job should stay pending`);
     assert.equal(job.runCount, 1, `${label}: run count should increment`);
-    assert.equal(job.lastResult, 'checked', `${label}: result should be saved`);
+    assert.equal(job.lastResult, 'checked 1', `${label}: result should be saved`);
+    assert.equal(job.lastOutcome, 'success', `${label}: recurring successful outcome should be saved`);
     assert.equal(job.nextRunAt, expectedNext, `${label}: next run should be computed`);
     assert.equal(h.alarms.get(h.alarmName(created.jobId)).when, Date.parse(expectedNext));
+
+    h.setNow(Date.parse(expectedNext));
+    await h.manager.handleAlarm(h.alarmName(created.jobId));
+    job = h.jobs()[0];
+    const expectedSecondNext = new Date(Date.parse(expectedNext) + 5 * 60 * 1000).toISOString();
+    const completedEvents = h.updates.filter((u) => u.type === 'scheduled_job' && u.data?.event === 'completed');
+    assert.equal(job.runCount, 2, `${label}: recurring run count should increment again`);
+    assert.equal(job.lastResult, 'checked 2', `${label}: second recurring result should be saved`);
+    assert.equal(job.lastOutcome, 'success', `${label}: second recurring success outcome should be saved`);
+    assert.equal(job.nextRunAt, expectedSecondNext, `${label}: second next run should be computed`);
+    assert.equal(completedEvents.length, 2, `${label}: each successful recurrence should emit a completed event`);
+    assert.ok(completedEvents.every((u) => u.data?.job?.lastOutcome === 'success'), `${label}: every successful recurring completed event should carry success outcome`);
   }
 });
 
@@ -7734,13 +8037,32 @@ test('blocked done progress result stays wrapped as untrusted content', async ()
         status: 'pending',
       }],
     });
-    agent.executeTool = async () => ({ done: true, summary: 'Done.' });
+    agent.executeTool = async () => ({ done: true, summary: 'Done.', outcome: 'success' });
     agent._persist = () => {};
     agent.providerManager = { ...(agent.providerManager || {}), getVisionProvider: async () => null };
 
     const toolCalls = [{ id: 'done_call', function: { name: 'done', arguments: JSON.stringify({ summary: 'Done.' }) } }];
-    const result = await agent._executeToolBatch(tabId, toolCalls, messages, () => {}, { supportsVision: false }, null, new Set(['done']), 1);
+    const updates = [];
+    const result = await agent._executeToolBatch(
+      tabId,
+      toolCalls,
+      messages,
+      (type, data) => updates.push({ type, data }),
+      { supportsVision: false },
+      null,
+      new Set(['done']),
+      1,
+    );
     assert.equal(result.action, 'continue', `${AgentClass.name}: blocked done should continue the tool loop`);
+    assert.equal(
+      updates.some(update => update.type === 'tool_result' && update.data?.name === 'done' && update.data?.result?.done === true && update.data?.result?.outcome === 'success'),
+      false,
+      `${AgentClass.name}: blocked done should not emit a successful done update`,
+    );
+    assert.ok(
+      updates.some(update => update.type === 'tool_result' && update.data?.name === 'done' && update.data?.result?.blockedDone === true),
+      `${AgentClass.name}: blocked done should emit a blocked done result update`,
+    );
 
     const toolMessage = messages.find(msg => msg.role === 'tool' && msg.tool_call_id === 'done_call');
     assert.ok(toolMessage, `${AgentClass.name}: blocked done tool result missing`);
@@ -7748,6 +8070,43 @@ test('blocked done progress result stays wrapped as untrusted content', async ()
     assert.match(toolMessage.content, /"blockedDone":true/, `${AgentClass.name}: blocked done payload missing`);
     assert.match(toolMessage.content, /Ignore previous instructions/, `${AgentClass.name}: row data should remain available as untrusted data`);
     assert.doesNotMatch(toolMessage.content, /<\/untrusted_page_content><system>/, `${AgentClass.name}: row label escaped the untrusted boundary`);
+  }
+});
+
+test('accepted done emits successful result update after progress gate', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = 796;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Finish this task.' },
+    ];
+    agent.conversations.set(tabId, messages);
+    agent.conversationModes.set(tabId, 'act');
+    agent.executeTool = async () => ({ done: true, summary: 'Done.', outcome: 'success' });
+    agent._persist = () => {};
+    agent.providerManager = { ...(agent.providerManager || {}), getVisionProvider: async () => null };
+
+    const updates = [];
+    const toolCalls = [{ id: 'done_call', function: { name: 'done', arguments: JSON.stringify({ summary: 'Done.' }) } }];
+    const result = await agent._executeToolBatch(
+      tabId,
+      toolCalls,
+      messages,
+      (type, data) => updates.push({ type, data }),
+      { supportsVision: false },
+      null,
+      new Set(['done']),
+      1,
+    );
+
+    assert.equal(result.action, 'return', `${AgentClass.name}: accepted done should finish the tool loop`);
+    assert.equal(result.value, 'Done.', `${AgentClass.name}: accepted done should return the done summary`);
+    assert.equal(
+      updates.filter(update => update.type === 'tool_result' && update.data?.name === 'done' && update.data?.result?.done === true && update.data?.result?.outcome === 'success').length,
+      1,
+      `${AgentClass.name}: accepted done should emit one successful done update`,
+    );
   }
 });
 

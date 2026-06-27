@@ -371,6 +371,8 @@ const recordingStopBtn = document.getElementById('btn-recording-stop');
 let currentTabId = null;
 let renderedTabId = null;
 let pendingTabSwitch = null; // tab the user switched to while isProcessing was true
+let tabSwitchTransitionId = null;
+let queuedTabSwitchMessages = [];
 let isProcessing = false;
 let currentAssistantEl = null;
 let verboseMode = false;
@@ -398,15 +400,21 @@ const {
   sendMessage,
   sendToBackground,
 });
-// Notification sound on task completion. Default on; togglable via Settings.
+// Completion notification + success celebration. Default on; togglable via Settings.
 let notifySoundEnabled = true;
+let completionConfettiEnabled = true;
 let notifyAudio = null;
-chrome.storage.local.get('notifySound').then((stored) => {
+let completionConfettiTimer = null;
+chrome.storage.local.get(['notifySound', 'completionConfetti']).then((stored) => {
   if (stored && stored.notifySound === false) notifySoundEnabled = false;
+  if (stored && stored.completionConfetti === false) completionConfettiEnabled = false;
 }).catch(() => {});
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.notifySound) {
     notifySoundEnabled = changes.notifySound.newValue !== false;
+  }
+  if (changes.completionConfetti) {
+    completionConfettiEnabled = changes.completionConfetti.newValue !== false;
   }
 });
 
@@ -450,6 +458,62 @@ function playCompletionSound() {
     const p = notifyAudio.play();
     if (p && typeof p.catch === 'function') p.catch(() => {});
   } catch { /* ignore */ }
+}
+
+function triggerCompletionConfetti() {
+  if (!completionConfettiEnabled) return;
+  if (globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
+  try {
+    document.querySelector('.completion-confetti')?.remove();
+    if (completionConfettiTimer) {
+      clearTimeout(completionConfettiTimer);
+      completionConfettiTimer = null;
+    }
+
+    const layer = document.createElement('div');
+    layer.className = 'completion-confetti';
+    layer.setAttribute('aria-hidden', 'true');
+    const colors = ['#4caf50', '#6c63ff', '#ffb703', '#ef476f', '#00b4d8', '#f77f00'];
+    for (let i = 0; i < 42; i += 1) {
+      const piece = document.createElement('span');
+      piece.className = 'confetti-piece';
+      piece.style.setProperty('--x', `${Math.random() * 100}%`);
+      piece.style.setProperty('--drift', `${Math.round((Math.random() - 0.5) * 160)}px`);
+      piece.style.setProperty('--delay', `${Math.random() * 0.28}s`);
+      piece.style.setProperty('--duration', `${1.15 + Math.random() * 0.75}s`);
+      piece.style.setProperty('--rotation', `${Math.round(240 + Math.random() * 600)}deg`);
+      const size = 5 + Math.random() * 5;
+      piece.style.setProperty('--size', `${size}px`);
+      piece.style.setProperty('--height', `${size * 1.7}px`);
+      piece.style.backgroundColor = colors[i % colors.length];
+      layer.appendChild(piece);
+    }
+    document.body.appendChild(layer);
+    completionConfettiTimer = setTimeout(() => {
+      layer.remove();
+      completionConfettiTimer = null;
+    }, 2300);
+  } catch { /* ignore */ }
+}
+
+function notifyCompletion({ success = false } = {}) {
+  playCompletionSound();
+  if (success) triggerCompletionConfetti();
+}
+
+function isSuccessfulDoneUpdate(update) {
+  const result = update?.data?.result;
+  return update?.type === 'tool_result' &&
+    update?.data?.name === 'done' &&
+    result?.done === true &&
+    result?.outcome === 'success' &&
+    result?.success !== false &&
+    !result?.error &&
+    !result?.blockedDone;
+}
+
+function updatesContainSuccessfulDone(updates) {
+  return Array.isArray(updates) && updates.some(isSuccessfulDoneUpdate);
 }
 
 // Per-tab chat history (stores innerHTML of messages container).
@@ -502,6 +566,17 @@ function persistTabChat(tabId, html) {
     } catch (e) { /* ignore */ }
     return { ok: true };
   });
+}
+
+async function flushRenderedTabChat() {
+  const tabId = renderedTabId;
+  if (tabId == null) return;
+  if (persistTimer && persistTimerTabId === tabId) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+    persistTimerTabId = null;
+  }
+  await persistTabChat(tabId, messagesEl.innerHTML);
 }
 
 function clearCachedTabChat(tabId) {
@@ -879,7 +954,26 @@ async function drainQueuedContextMenuPromptsAfterPendingTabSwitch() {
   drainQueuedContextMenuPrompts();
 }
 
-function settleScheduledRun(event, job) {
+function queueAgentUpdateDuringTabSwitch(msg) {
+  const tabId = msg?.tabId;
+  if (tabSwitchTransitionId == null || tabId == null || tabId !== tabSwitchTransitionId) return false;
+  queuedTabSwitchMessages.push(msg);
+  return true;
+}
+
+function drainQueuedAgentUpdatesForTab(tabId) {
+  if (!queuedTabSwitchMessages.length) return;
+  const replay = [];
+  const remaining = [];
+  for (const msg of queuedTabSwitchMessages) {
+    if (msg?.tabId === tabId) replay.push(msg);
+    else remaining.push(msg);
+  }
+  queuedTabSwitchMessages = remaining;
+  replay.forEach((msg) => handleAgentUpdateMessage(msg));
+}
+
+async function settleScheduledRun(event, job) {
   if (job?.id) crossPanelScheduledJobIds.delete(String(job.id));
   const assistantEl = job?.id ? findScheduledAssistantMessageForJob(job.id) : currentAssistantEl;
   if (assistantEl) {
@@ -897,12 +991,13 @@ function settleScheduledRun(event, job) {
     hideActivity();
     if (currentAssistantEl === assistantEl) currentAssistantEl = null;
     abortRequested = false;
-    drainQueuedContextMenuPromptsAfterPendingTabSwitch();
+    if (renderedTabId != null) await flushRenderedTabChat();
+    await drainQueuedContextMenuPromptsAfterPendingTabSwitch();
   }
-  if (event === 'completed') playCompletionSound();
+  if (event === 'completed') notifyCompletion({ success: job?.lastOutcome === 'success' });
 }
 
-function handleScheduledJobEvent(data, tabId) {
+async function handleScheduledJobEvent(data, tabId) {
   refreshScheduledJobs({ tabId: currentTabId });
   const event = data?.event;
   const job = data?.job;
@@ -929,10 +1024,10 @@ function handleScheduledJobEvent(data, tabId) {
     showActivity(t('sp.scheduled.running', { title }));
   } else if (event === 'completed') {
     ensureScheduledTerminalMessage(job);
-    settleScheduledRun(event, job);
+    await settleScheduledRun(event, job);
   } else if (event === 'failed') {
-    settleScheduledRun(event, job);
     addMessage('error', t('sp.scheduled.failed', { title, msg: job.lastError || t('sp.scheduled.unknown_error') }));
+    await settleScheduledRun(event, job);
   } else if (event === 'needs_user_input') {
     ensureScheduledClarifyCards([job]);
     hideActivity();
@@ -1457,33 +1552,43 @@ async function switchToTab(newTabId) {
     return;
   }
   pendingTabSwitch = null;
+  tabSwitchTransitionId = newTabId;
 
-  // Save the tab currently represented by the DOM. During an async restore,
-  // currentTabId may already point at the target while the DOM is still older.
-  if (renderedTabId != null) {
-    persistTabChat(renderedTabId, messagesEl.innerHTML);
-    captureInputDraftForTab(renderedTabId);
+  try {
+    // Save the tab currently represented by the DOM. During an async restore,
+    // currentTabId may already point at the target while the DOM is still older.
+    if (renderedTabId != null) {
+      await flushRenderedTabChat();
+      if (isProcessing) {
+        pendingTabSwitch = newTabId;
+        return;
+      }
+      captureInputDraftForTab(renderedTabId);
+    }
+
+    currentTabId = newTabId;
+    syncApiMutationsAllowedForCurrentTab();
+
+    // Restore new tab's chat from memory or storage.
+    const html = await loadTabChat(newTabId);
+    if (currentTabId !== newTabId) return;
+    renderedTabId = newTabId;
+    if (html) {
+      messagesEl.innerHTML = html;
+      messagesEl.querySelectorAll('[data-bound]').forEach(el => delete el.dataset.bound);
+      rebindRestoredMessageControls();
+    } else {
+      messagesEl.innerHTML = '';
+      addMessage('system', t('sp.help_message'));
+    }
+    restoreInputDraftForTab(newTabId);
+    scrollToBottom();
+    refreshScheduledJobs({ tabId: newTabId });
+    refreshRecommendedActions();
+  } finally {
+    if (tabSwitchTransitionId === newTabId) tabSwitchTransitionId = null;
   }
-
-  currentTabId = newTabId;
-  syncApiMutationsAllowedForCurrentTab();
-
-  // Restore new tab's chat from memory or storage.
-  const html = await loadTabChat(newTabId);
-  if (currentTabId !== newTabId) return;
-  renderedTabId = newTabId;
-  if (html) {
-    messagesEl.innerHTML = html;
-    messagesEl.querySelectorAll('[data-bound]').forEach(el => delete el.dataset.bound);
-    rebindRestoredMessageControls();
-  } else {
-    messagesEl.innerHTML = '';
-    addMessage('system', t('sp.help_message'));
-  }
-  restoreInputDraftForTab(newTabId);
-  scrollToBottom();
-  refreshScheduledJobs({ tabId: newTabId });
-  refreshRecommendedActions();
+  drainQueuedAgentUpdatesForTab(newTabId);
   consumePendingContextMenuPrompt().then(() => drainQueuedContextMenuPrompts()).catch(() => {});
 }
 
@@ -2297,6 +2402,7 @@ async function sendMessage(extraChatParams) {
   }
 
   let accepted = false;
+  let completedSuccessfully = false;
   try {
     const res = await sendToBackground('chat', {
       tabId,
@@ -2306,6 +2412,7 @@ async function sendMessage(extraChatParams) {
       ...extraChatParams,
     });
     accepted = true;
+    completedSuccessfully = updatesContainSuccessfulDone(res?.updates);
 
     if (renderToCurrentTab && currentTabId === tabId && abortRequested) {
       // Agent was stopped — show what we got so far
@@ -2342,7 +2449,8 @@ async function sendMessage(extraChatParams) {
     }
     if (currentAssistantEl === assistantEl) currentAssistantEl = null;
     if (renderToCurrentTab && currentTabId === tabId) scrollToBottom();
-    if (renderToCurrentTab && !wasAborted) playCompletionSound();
+    if (renderToCurrentTab && renderedTabId === tabId) await flushRenderedTabChat();
+    if (renderToCurrentTab && !wasAborted) notifyCompletion({ success: currentTabId === tabId && completedSuccessfully });
     if (renderToCurrentTab && currentTabId === tabId) refreshRecommendedActions();
     await drainQueuedContextMenuPromptsAfterPendingTabSwitch();
   }
@@ -2548,11 +2656,11 @@ function summarizeLastTranscript() {
   if (sendBtn) sendBtn.click();
 }
 
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.target !== 'sidepanel' || msg.action !== 'agent_update') return;
-
+function handleAgentUpdateMessage(msg) {
   if (msg.type === 'scheduled_job') {
-    handleScheduledJobEvent(msg.data, msg.tabId);
+    handleScheduledJobEvent(msg.data, msg.tabId).catch((err) => {
+      console.warn('[WebBrain] failed to handle scheduled job event:', err);
+    });
     return;
   }
 
@@ -2681,6 +2789,12 @@ chrome.runtime.onMessage.addListener((msg) => {
       renderClarifyCard(data);
       break;
   }
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.target !== 'sidepanel' || msg.action !== 'agent_update') return;
+  if (queueAgentUpdateDuringTabSwitch(msg)) return;
+  handleAgentUpdateMessage(msg);
 });
 
 /**
@@ -3229,6 +3343,7 @@ async function continueAgent() {
     hideActivity();
     if (currentAssistantEl === assistantEl) currentAssistantEl = null;
     if (currentTabId === tabId) scrollToBottom();
+    if (currentTabId === tabId && renderedTabId === tabId) await flushRenderedTabChat();
     await drainQueuedContextMenuPromptsAfterPendingTabSwitch();
   }
 }
@@ -3642,6 +3757,7 @@ async function abortRun() {
       hideActivity();
       currentAssistantEl = null;
       abortRequested = false;
+      await flushRenderedTabChat();
       await drainQueuedContextMenuPromptsAfterPendingTabSwitch();
     }
   }, 3000); // safety timeout if background takes too long

@@ -33,6 +33,12 @@ const COST_EPSILON = 1e-9;
 const TOKENS_PER_MILLION = 1_000_000;
 const DEFAULT_INPUT_COST_PER_MILLION_USD = 3;
 const DEFAULT_OUTPUT_COST_PER_MILLION_USD = 15;
+const DONE_OUTCOMES = new Set(['success', 'partial', 'failed']);
+
+function normalizeDoneOutcome(value) {
+  const outcome = String(value || '').trim().toLowerCase();
+  return DONE_OUTCOMES.has(outcome) ? outcome : null;
+}
 
 /**
  * The WebBrain Agent — orchestrates multi-step LLM + tool-use loops.
@@ -849,7 +855,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           });
         }
       } catch {}
-      onUpdate('tool_result', { name: fnName, result: toolResult });
+      if (!toolResult?.done) {
+        onUpdate('tool_result', { name: fnName, result: toolResult });
+      }
 
       // Pin any durable download handle this tool produced, so a later
       // read survives context compaction even if the model never calls
@@ -894,6 +902,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             counts: progressBlock.counts,
             unresolved: progressBlock.unresolved,
           };
+          onUpdate('tool_result', { name: fnName, result: blockedResult });
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
@@ -902,6 +911,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           onUpdate('warning', { message: 'Progress ledger has unresolved rows; continuing.' });
           continue;
         }
+        onUpdate('tool_result', { name: fnName, result: toolResult });
         const finalResponse = this._appendProgressLedgerToFinal(tabId, toolResult.summary || partialAssistantText || 'Task completed.');
         messages.push({
           role: 'tool',
@@ -4177,6 +4187,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
 
     if (name === 'done') {
+      const outcome = normalizeDoneOutcome(args?.outcome);
       // In act mode, require a verification screenshot + page info before completing.
       const mode = this.conversationModes.get(tabId) || 'ask';
       if (mode === 'act') {
@@ -4278,6 +4289,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             return {
               done: true,
               summary: args.summary,
+              outcome,
               verification: {
                 pageUrl: pageState.url || '',
                 pageTitle: pageState.title || '',
@@ -4294,7 +4306,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           // Screenshot failed — still allow done but note it
         }
       }
-      return { done: true, summary: args.summary };
+      return { done: true, summary: args.summary, outcome };
     }
 
     // Network & download tools (background context). fetchUrl/readDownloadedFile
