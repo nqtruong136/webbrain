@@ -4,6 +4,16 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / `manifest.json` version.
 
+## [18.0.3] - 2026-06-27
+
+### Changed
+- Replaced the Plan before Act checkbox with Planner modes: Try planning by default, Strict planning for fail-closed approval, and Off.
+- Made Try planning continue into Act mode without a pinned plan when the planner cannot produce valid structured JSON, so the default planner path no longer cancels the task on planner-format failure.
+- Preserved legacy planner storage by mapping unset storage to Try planning, legacy `false` to Off, and legacy `true` to Strict planning.
+
+### Tests
+- Added Chrome and Firefox regression coverage for planner mode defaults, legacy migration behavior, try-mode fallback, and strict-mode fail-closed cancellation.
+
 ## [18.0.2] - 2026-06-27
 
 ### Added

@@ -9788,9 +9788,19 @@ function plannerFixtureJson() {
   });
 }
 
-test('plan before act: disabled by default unless explicitly enabled', () => {
-  assert.equal(new AgentCh({}).planBeforeAct, false, 'chrome agent default');
-  assert.equal(new AgentFx({}).planBeforeAct, false, 'firefox agent default');
+test('plan before act: try mode is default with strict/off migration', () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({});
+    assert.equal(agent.planBeforeActMode, 'try', `${label} default mode`);
+    assert.equal(agent.planBeforeAct, true, `${label} legacy mirror default`);
+    assert.equal(agent._plannerMode(), 'try', `${label} effective default mode`);
+    agent.setPlanBeforeActMode('strict');
+    assert.equal(agent.planBeforeAct, true, `${label} strict enables legacy mirror`);
+    assert.equal(agent._plannerMode(), 'strict', `${label} strict mode`);
+    agent.setPlanBeforeActMode('off');
+    assert.equal(agent.planBeforeAct, false, `${label} off disables legacy mirror`);
+    assert.equal(agent._plannerMode(), 'off', `${label} off mode`);
+  }
   for (const file of [
     'src/chrome/src/background.js',
     'src/firefox/src/background.js',
@@ -9798,7 +9808,9 @@ test('plan before act: disabled by default unless explicitly enabled', () => {
     'src/firefox/src/ui/settings.js',
   ]) {
     const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
-    assert.match(source, /planBeforeAct === true/, `${file} should treat unset storage as disabled`);
+    assert.match(source, /planBeforeActMode/, `${file} should use the planner mode setting`);
+    assert.match(source, /return 'try'/, `${file} should treat unset storage as try planning`);
+    assert.match(source, /return 'off'/, `${file} should preserve legacy disabled storage`);
   }
 });
 
@@ -9828,11 +9840,35 @@ test('planner gate: abort during planner call stops before review card', async (
   });
 });
 
-test('planner gate: fail closed when plan JSON cannot be parsed', async () => {
+test('planner gate: try mode continues when plan JSON cannot be parsed', async () => {
   await withPlannerBrowserGlobals(async () => {
     for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
       const tabId = label === 'chrome' ? 9151 : 9152;
       const agent = new AgentClass({ getActive: () => ({}) });
+      agent.conversations.set(tabId, [{ role: 'system', content: 'system' }]);
+      agent._chatWithCostAllowance = async () => ({ content: 'Here is my plan: not valid json at all' });
+      let warning = '';
+
+      const gate = await agent._runPlannerGate(
+        tabId,
+        { role: 'user', content: 'do something risky' },
+        (type, data) => { if (type === 'warning') warning = data?.message || ''; },
+        null,
+      );
+
+      assert.equal(gate.proceed, true, `${label} should continue without a pinned plan`);
+      assert.match(warning, /continuing without a pinned plan/i, `${label} warning`);
+      assert.doesNotMatch(warning, /Task cancelled/i, `${label} should not cancel in try mode`);
+    }
+  });
+});
+
+test('planner gate: strict mode fails closed when plan JSON cannot be parsed', async () => {
+  await withPlannerBrowserGlobals(async () => {
+    for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+      const tabId = label === 'chrome' ? 9161 : 9162;
+      const agent = new AgentClass({ getActive: () => ({}) });
+      agent.setPlanBeforeActMode('strict');
       agent.conversations.set(tabId, [{ role: 'system', content: 'system' }]);
       agent._chatWithCostAllowance = async () => ({ content: 'Here is my plan: not valid json at all' });
 
@@ -9844,6 +9880,7 @@ test('planner gate: fail closed when plan JSON cannot be parsed', async () => {
       );
 
       assert.equal(gate.proceed, false, `${label} should fail closed`);
+      assert.match(gate.message || '', /Strict Planning is enabled/i, `${label} message`);
       assert.match(gate.message || '', /could not produce a valid structured plan/i, `${label} message`);
     }
   });

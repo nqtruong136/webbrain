@@ -136,13 +136,31 @@ async function loadCaptchaSolver() {
 }
 loadCaptchaSolver();
 
+function normalizePlanBeforeActMode(stored = {}) {
+  if (stored.planBeforeActMode === 'try' || stored.planBeforeActMode === 'strict' || stored.planBeforeActMode === 'off') {
+    return stored.planBeforeActMode;
+  }
+  if (stored.planBeforeAct === true) return 'strict';
+  if (stored.planBeforeAct === false) return 'off';
+  return 'try';
+}
+
+function applyPlanBeforeActMode(mode) {
+  if (typeof agent.setPlanBeforeActMode === 'function') {
+    agent.setPlanBeforeActMode(mode);
+    return;
+  }
+  agent.planBeforeActMode = mode;
+  agent.planBeforeAct = mode !== 'off';
+}
+
 async function loadPlanBeforeAct() {
-  const stored = await browser.storage.local.get('planBeforeAct');
-  agent.planBeforeAct = stored.planBeforeAct === true;
+  const stored = await browser.storage.local.get(['planBeforeActMode', 'planBeforeAct']);
+  applyPlanBeforeActMode(normalizePlanBeforeActMode(stored));
 }
 // Hydrate once at SW boot. handleMessage awaits this promise so the first chat
 // can't race ahead of hydration, but it does NOT re-read storage per message —
-// the storage.onChanged listener below keeps agent.planBeforeAct in sync. (#5)
+// the storage.onChanged listener below keeps the planner mode in sync. (#5)
 const planBeforeActReady = loadPlanBeforeAct();
 
 // Initialize on install
@@ -188,8 +206,11 @@ browser.storage.onChanged.addListener((changes) => {
     agent.captchaSolverEnabled = !!changes.captchaSolverEnabled.newValue;
     refreshPrompts = true;
   }
-  if (changes.planBeforeAct) {
-    agent.planBeforeAct = changes.planBeforeAct.newValue === true;
+  if (changes.planBeforeActMode || changes.planBeforeAct) {
+    applyPlanBeforeActMode(normalizePlanBeforeActMode({
+      planBeforeActMode: changes.planBeforeActMode?.newValue,
+      planBeforeAct: changes.planBeforeAct?.newValue,
+    }));
   }
   if (refreshPrompts) agent._refreshSystemPrompts();
 });

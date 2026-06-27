@@ -108,7 +108,12 @@ export class Agent {
     // model to try `solve_captcha` once before falling back to asking
     // the user. The API key is read at call time from browser.storage.
     this.captchaSolverEnabled = false;
-    this.planBeforeAct = false;
+    // Pre-execution planner (Settings → Plan before Act). In default "try"
+    // mode, Act-mode attempts a read-only planning LLM call but continues
+    // without a pinned plan if planning itself fails. "strict" preserves the
+    // older fail-closed behavior; "off" skips planning entirely.
+    this.planBeforeActMode = 'try';
+    this.planBeforeAct = true; // legacy boolean mirror for older call sites/tests
     this._pendingPlans = new Map();
     // Strict secret-handling mode — see chrome/agent.js for rationale.
     // Default off; user opts in via Settings → "Strict secret handling".
@@ -2505,8 +2510,30 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return digest.length > maxChars ? `…${digest.slice(digest.length - maxChars)}` : digest;
   }
 
+  _normalizePlanBeforeActMode(mode) {
+    return mode === 'strict' || mode === 'off' || mode === 'try' ? mode : 'try';
+  }
+
+  setPlanBeforeActMode(mode) {
+    const normalized = this._normalizePlanBeforeActMode(mode);
+    this.planBeforeActMode = normalized;
+    this.planBeforeAct = normalized !== 'off';
+    return normalized;
+  }
+
+  _plannerMode() {
+    const mode = this._normalizePlanBeforeActMode(this.planBeforeActMode);
+    if (mode === 'off' || this.planBeforeAct === false) return 'off';
+    return mode;
+  }
+
+  _plannerIsEnabled() {
+    return this._plannerMode() !== 'off';
+  }
+
   async _maybeRunPlannerGate(tabId, messages, enriched, onUpdate, mode, costState, runId, tabInfo = null) {
-    const runPlanner = mode === 'act' && this.planBeforeAct;
+    const plannerMode = mode === 'act' ? this._plannerMode() : 'off';
+    const runPlanner = plannerMode !== 'off';
 
     // Snapshot prior turns for the planner digest BEFORE appending, then always
     // record the user's turn first so a planner failure (or a throw while
@@ -2517,7 +2544,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (!runPlanner) return { proceed: true };
 
     const historyDigest = this._buildPlannerHistoryDigest(priorMessages);
-    const gate = await this._runPlannerGate(tabId, enriched, onUpdate, costState, runId, historyDigest, tabInfo);
+    const gate = await this._runPlannerGate(tabId, enriched, onUpdate, costState, runId, historyDigest, tabInfo, plannerMode);
     if (!gate.proceed) {
       messages.push({ role: 'assistant', content: gate.message || 'Task cancelled.' });
       return { proceed: false, message: gate.message || 'Task cancelled.' };
@@ -2576,8 +2603,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     ];
   }
 
-  async _runPlannerGate(tabId, enriched, onUpdate, costState, runId = null, historyDigest = '', tabInfo = null) {
+  async _runPlannerGate(tabId, enriched, onUpdate, costState, runId = null, historyDigest = '', tabInfo = null, plannerMode = this._plannerMode()) {
     const { tabUrl, tabTitle } = tabInfo || await this._getTabUrlTitle(tabId);
+    const strictPlanner = this._normalizePlanBeforeActMode(plannerMode) === 'strict';
 
     onUpdate('thinking', { step: 0, note: 'Planning…' });
 
@@ -2643,7 +2671,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         return { proceed: false, message: '[Stopped by user]' };
       }
       if (!plan) {
-        const msg = 'Plan before Act is enabled but the planner could not produce a valid structured plan. Task cancelled — no actions were taken.';
+        if (!strictPlanner) {
+          onUpdate('warning', { message: 'Planner could not produce a valid structured plan; continuing without a pinned plan.' });
+          return { proceed: true };
+        }
+        const msg = 'Strict Planning is enabled but the planner could not produce a valid structured plan. Task cancelled — no actions were taken.';
         onUpdate('warning', { message: msg });
         return { proceed: false, message: msg };
       }
@@ -2670,7 +2702,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       if (this._isCostAllowanceError(e)) {
         return { proceed: false, message: e.message };
       }
-      const msg = `Plan before Act is enabled but planning failed (${e.message || 'unknown error'}). Task cancelled — no actions were taken.`;
+      if (!strictPlanner) {
+        onUpdate('warning', { message: `Planning failed (${e.message || 'unknown error'}); continuing without a pinned plan.` });
+        return { proceed: true };
+      }
+      const msg = `Strict Planning is enabled but planning failed (${e.message || 'unknown error'}). Task cancelled — no actions were taken.`;
       onUpdate('warning', { message: msg });
       return { proceed: false, message: msg };
     }
@@ -5823,7 +5859,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // loop. _startTraceRun is the single source of truth (no duplicate tab
     // fetch / startRun payload). (#6)
     let plannerTabInfo = null;
-    if (mode === 'act' && this.planBeforeAct) {
+    if (mode === 'act' && this._plannerIsEnabled()) {
       // Fetch the tab url/title once and reuse it for both the trace start and
       // the planner gate, instead of fetching the same tab twice.
       plannerTabInfo = await this._getTabUrlTitle(tabId);
@@ -6114,7 +6150,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // clears currentRunId, even on an early throw during setup. (#2)
     try {
     let plannerTabInfo = null;
-    if (mode === 'act' && this.planBeforeAct) {
+    if (mode === 'act' && this._plannerIsEnabled()) {
       // Fetch the tab url/title once and reuse it for both the trace start and
       // the planner gate, instead of fetching the same tab twice.
       plannerTabInfo = await this._getTabUrlTitle(tabId);

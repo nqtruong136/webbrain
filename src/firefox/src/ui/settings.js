@@ -8,7 +8,7 @@ import { CAPABILITY_LABEL } from '../agent/permission-gate.js';
 
 // Version shown in the subtitle. Kept here so it only needs one update per
 // release; the subtitle string itself is translated.
-const EXT_VERSION = '18.0.2';
+const EXT_VERSION = '18.0.3';
 
 const providersContainer = document.getElementById('providers');
 const verboseToggle = document.getElementById('toggle-verbose');
@@ -23,7 +23,7 @@ const costSpentValueLabel = document.getElementById('cost-spent-value');
 const btnResetCostSpend = document.getElementById('btn-reset-cost-spend');
 const autoScreenshotSelect = document.getElementById('select-auto-screenshot');
 const siteAdaptersToggle = document.getElementById('toggle-site-adapters');
-const planBeforeActToggle = document.getElementById('toggle-plan-before-act');
+const planBeforeActModeSelect = document.getElementById('select-plan-before-act-mode');
 const notifySoundToggle = document.getElementById('toggle-notify-sound');
 const completionConfettiToggle = document.getElementById('toggle-completion-confetti');
 const tracingToggle = document.getElementById('toggle-tracing');
@@ -131,6 +131,14 @@ const WEBBRAIN_ACCOUNT_URL = 'https://api.webbrain.one/account';
 const DEFAULT_COST_ALLOWANCE_USD = 10;
 const MAX_AGENT_STEPS_DEFAULT = 130;
 const MAX_AGENT_STEPS_UNLIMITED_SENTINEL = 200;
+const PLAN_BEFORE_ACT_MODES = new Set(['try', 'strict', 'off']);
+
+function normalizePlanBeforeActMode(stored = {}) {
+  if (PLAN_BEFORE_ACT_MODES.has(stored.planBeforeActMode)) return stored.planBeforeActMode;
+  if (stored.planBeforeAct === true) return 'strict';
+  if (stored.planBeforeAct === false) return 'off';
+  return 'try';
+}
 
 function normalizeCostAmount(value, fallback = DEFAULT_COST_ALLOWANCE_USD) {
   const n = Number(value);
@@ -191,7 +199,7 @@ async function init() {
   browser.storage.local.remove(['authToken', 'authEmail', 'authDefaultModel']).catch(() => {});
 
   // Load display settings
-  const stored = await browser.storage.local.get(['verboseMode', 'screenshotFallback', 'maxAgentSteps', 'autoScreenshot', 'useSiteAdapters', 'planBeforeAct', 'notifySound', 'completionConfetti', 'tracingEnabled', 'strictSecretMode', 'agentAllowLocalNetwork', 'scheduledTasksEnabled', 'scheduledRequireConsequentialConfirmation', 'providerFilter', 'requestTimeoutMs', 'costAllowanceSessionUsd', 'costAllowanceTotalUsd', 'cloudCostSpentUsd']);
+  const stored = await browser.storage.local.get(['verboseMode', 'screenshotFallback', 'maxAgentSteps', 'autoScreenshot', 'useSiteAdapters', 'planBeforeActMode', 'planBeforeAct', 'notifySound', 'completionConfetti', 'tracingEnabled', 'strictSecretMode', 'agentAllowLocalNetwork', 'scheduledTasksEnabled', 'scheduledRequireConsequentialConfirmation', 'providerFilter', 'requestTimeoutMs', 'costAllowanceSessionUsd', 'costAllowanceTotalUsd', 'cloudCostSpentUsd']);
   if (typeof stored.providerFilter === 'string' && ['all','local','cloud','router'].includes(stored.providerFilter)) {
     providerFilter = stored.providerFilter;
   }
@@ -215,7 +223,7 @@ async function init() {
   }
   if (autoScreenshotSelect) autoScreenshotSelect.value = stored.autoScreenshot || 'state_change';
   if (siteAdaptersToggle) siteAdaptersToggle.checked = stored.useSiteAdapters ?? true;
-  if (planBeforeActToggle) planBeforeActToggle.checked = stored.planBeforeAct === true;
+  if (planBeforeActModeSelect) planBeforeActModeSelect.value = normalizePlanBeforeActMode(stored);
   if (notifySoundToggle) notifySoundToggle.checked = stored.notifySound ?? true;
   if (completionConfettiToggle) completionConfettiToggle.checked = stored.completionConfetti ?? true;
   if (tracingToggle) tracingToggle.checked = stored.tracingEnabled === true;
@@ -435,9 +443,13 @@ siteAdaptersToggle?.addEventListener('change', async () => {
   await browser.storage.local.set({ useSiteAdapters: siteAdaptersToggle.checked }).catch(() => {});
 });
 
-if (planBeforeActToggle) {
-  planBeforeActToggle.addEventListener('change', async () => {
-    await browser.storage.local.set({ planBeforeAct: planBeforeActToggle.checked }).catch(() => {});
+if (planBeforeActModeSelect) {
+  planBeforeActModeSelect.addEventListener('change', async () => {
+    const mode = PLAN_BEFORE_ACT_MODES.has(planBeforeActModeSelect.value) ? planBeforeActModeSelect.value : 'try';
+    await browser.storage.local.set({
+      planBeforeActMode: mode,
+      planBeforeAct: mode !== 'off',
+    }).catch(() => {});
   });
 }
 
