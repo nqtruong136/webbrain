@@ -221,6 +221,224 @@ export function getAllowLocalNetwork() {
   return _allowLocalNetwork;
 }
 
+function apiReplayOptionsForFetch(rawUrl, opts = {}, ctx = {}) {
+  const replayRequestId = opts.replayRequestId || opts.apiReplayRequestId;
+  if (!replayRequestId) return { ok: true, opts };
+  const replay = globalThis.__webbrainApiRequestReplay?.get(String(replayRequestId));
+  if (!replay) {
+    return { ok: false, error: `No captured API request replay data found for replayRequestId: ${replayRequestId}` };
+  }
+  if (ctx?.tabId != null && replay.tabId != null && Number(replay.tabId) !== Number(ctx.tabId)) {
+    return { ok: false, error: 'Captured API request replay data belongs to a different tab.' };
+  }
+  try {
+    const target = new URL(rawUrl);
+    const captured = new URL(replay.url);
+    if (target.origin !== captured.origin) {
+      return { ok: false, error: `Captured API request replay data is scoped to ${captured.origin}, not ${target.origin}.` };
+    }
+  } catch (e) {
+    return { ok: false, error: `Invalid captured API request replay URL: ${e.message}` };
+  }
+  const mergedHeaders = {
+    ...(replay.headers || {}),
+    ...(opts.headers || {}),
+  };
+  return {
+    ok: true,
+    opts: {
+      ...opts,
+      method: opts.method || replay.method || 'GET',
+      headers: mergedHeaders,
+      body: opts.body !== undefined ? opts.body : (replay.body ?? undefined),
+    },
+  };
+}
+
+function formatTextFetchResult({ status, contentType, finalUrl, text, replayContext = null }) {
+  const normalizedContentType = (contentType || '').toLowerCase();
+  const body = String(text ?? '');
+  const success = Number(status) < 400;
+  const error = success ? undefined : `Fetch returned HTTP ${status}`;
+  const base = {
+    success,
+    ...(error ? { error } : {}),
+    status,
+    contentType: normalizedContentType,
+    url: finalUrl,
+    ...(replayContext ? { replayContext } : {}),
+  };
+
+  if (normalizedContentType.includes('json')) {
+    let pretty = body;
+    try { pretty = JSON.stringify(JSON.parse(body), null, 2); } catch (e) {}
+    return {
+      ...base,
+      json: pretty.slice(0, FETCH_JSON_LIMIT),
+      truncated: pretty.length > FETCH_JSON_LIMIT,
+      originalLength: pretty.length,
+    };
+  }
+
+  if (normalizedContentType.includes('html') || normalizedContentType.includes('xhtml')) {
+    const { title, text: readableText } = htmlToText(body);
+    return {
+      ...base,
+      title,
+      text: readableText.slice(0, FETCH_TEXT_LIMIT),
+      truncated: readableText.length > FETCH_TEXT_LIMIT,
+      originalLength: readableText.length,
+    };
+  }
+
+  if (normalizedContentType.startsWith('text/') ||
+      normalizedContentType.includes('xml') ||
+      normalizedContentType.includes('javascript') ||
+      normalizedContentType.includes('csv') ||
+      normalizedContentType.includes('markdown') ||
+      normalizedContentType === '') {
+    return {
+      ...base,
+      text: body.slice(0, FETCH_TEXT_LIMIT),
+      truncated: body.length > FETCH_TEXT_LIMIT,
+      originalLength: body.length,
+    };
+  }
+
+  return {
+    ...base,
+    text: body.slice(0, FETCH_TEXT_LIMIT),
+    truncated: body.length > FETCH_TEXT_LIMIT,
+    originalLength: body.length,
+    note: 'Replay response was read as text because page-context replay cannot stream binary content back to the background.',
+  };
+}
+
+async function fetchReplayInPageContext(url, opts = {}, ctx = {}, allowLocal = false) {
+  const replayRequestId = opts.replayRequestId || opts.apiReplayRequestId;
+  const api = globalThis.browser;
+  if (!replayRequestId || ctx?.tabId == null || !api?.tabs?.get) return null;
+
+  let target;
+  try {
+    const tab = await api.tabs.get(ctx.tabId);
+    target = new URL(url);
+    const page = new URL(tab?.url || '');
+    if (page.origin !== target.origin) return null;
+  } catch (_) {
+    return null;
+  }
+  if (!api.tabs?.executeScript) {
+    return {
+      success: false,
+      error: 'Page-context API replay is unavailable in this browser context.',
+      replayContext: 'page',
+    };
+  }
+
+  const init = {
+    method: opts.method || 'GET',
+    headers: opts.headers || {},
+    body: opts.body ?? null,
+  };
+  const pageReplayScript = `
+    (async () => {
+      const rawUrl = ${JSON.stringify(url)};
+      const replayInit = ${JSON.stringify(init)};
+      try {
+        const targetUrl = new URL(rawUrl, location.href);
+        if (targetUrl.origin !== location.origin) {
+          return {
+            ok: false,
+            error: 'Page-context replay target ' + targetUrl.origin + ' does not match page origin ' + location.origin + '.',
+            finalUrl: targetUrl.href,
+          };
+        }
+        const headers = {};
+        for (const [name, value] of Object.entries(replayInit.headers || {})) {
+          if (value != null) headers[name] = String(value);
+        }
+        const response = await fetch(targetUrl.href, {
+          method: replayInit.method || 'GET',
+          headers,
+          body: replayInit.body == null ? undefined : replayInit.body,
+          credentials: 'include',
+          redirect: 'follow',
+        });
+        const finalUrl = response.url || targetUrl.href;
+        try {
+          if (new URL(finalUrl).origin !== location.origin) {
+            return {
+              ok: false,
+              error: 'Page-context replay redirected outside the page origin; response body was discarded.',
+              status: response.status,
+              finalUrl,
+            };
+          }
+        } catch (_) {}
+        return {
+          ok: true,
+          status: response.status,
+          url: finalUrl,
+          contentType: response.headers.get('content-type') || '',
+          text: await response.text(),
+        };
+      } catch (e) {
+        return { ok: false, error: e && e.message ? e.message : String(e) };
+      }
+    })()
+  `;
+
+  let payload;
+  try {
+    const results = await api.tabs.executeScript(ctx.tabId, { code: pageReplayScript, allFrames: false });
+    payload = results?.[0];
+  } catch (e) {
+    return {
+      success: false,
+      error: `Page-context API replay failed before fetch: ${e.message}`,
+      replayContext: 'page',
+    };
+  }
+
+  if (!payload) {
+    return { success: false, error: 'Page-context API replay produced no result.', replayContext: 'page' };
+  }
+  if (!payload.ok) {
+    return {
+      success: false,
+      error: `Page-context API replay failed: ${payload.error || 'unknown error'}`,
+      ...(payload.status != null ? { status: payload.status } : {}),
+      ...(payload.finalUrl ? { url: payload.finalUrl, finalUrl: payload.finalUrl } : {}),
+      replayContext: 'page',
+    };
+  }
+
+  const finalUrl = payload.url || url;
+  const v = validateFetchUrl(finalUrl, { allowLocalNetwork: allowLocal });
+  if (!v.ok) {
+    return { success: false, error: `Page-context replay redirected to blocked URL: ${v.error}`, finalUrl, replayContext: 'page' };
+  }
+  try {
+    if (new URL(finalUrl).origin !== target.origin) {
+      return {
+        success: false,
+        error: 'Page-context replay redirected outside the captured request origin; response body discarded.',
+        finalUrl,
+        replayContext: 'page',
+      };
+    }
+  } catch (_) {}
+
+  return formatTextFetchResult({
+    status: payload.status,
+    contentType: payload.contentType || '',
+    finalUrl,
+    text: payload.text || '',
+    replayContext: 'page',
+  });
+}
+
 export function extractPageSourceAssets(html, baseUrl) {
   const out = { stylesheets: [], scripts: [] };
   const seen = { stylesheets: new Set(), scripts: new Set() };
@@ -557,9 +775,15 @@ export async function readPageSource(url, opts = {}, ctx = {}) {
  */
 export async function fetchUrl(url, opts = {}, ctx = {}) {
   if (!url) return { success: false, error: 'url is required' };
+  const replay = apiReplayOptionsForFetch(url, opts, ctx);
+  if (!replay.ok) return { success: false, error: replay.error };
+  opts = replay.opts;
   const allowLocal = getAllowLocalNetwork();
   const v = validateFetchUrl(url, { allowLocalNetwork: allowLocal });
   if (!v.ok) return { success: false, error: v.error };
+
+  const pageReplay = await fetchReplayInPageContext(url, opts, ctx, allowLocal);
+  if (pageReplay) return pageReplay;
 
   let attachCookies = false;
   let tabRegDomain = null;
@@ -607,13 +831,15 @@ export async function fetchUrl(url, opts = {}, ctx = {}) {
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     const status = res.status;
     const finalUrl = res.url;
+    const success = status < 400;
+    const error = success ? undefined : `Fetch returned HTTP ${status}`;
 
     if (contentType.includes('json')) {
       const text = await res.text();
       let pretty = text;
       try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
       return {
-        success: true, status, contentType, url: finalUrl,
+        success, ...(error ? { error } : {}), status, contentType, url: finalUrl,
         json: pretty.slice(0, FETCH_JSON_LIMIT),
         truncated: pretty.length > FETCH_JSON_LIMIT,
         originalLength: pretty.length,
@@ -624,7 +850,7 @@ export async function fetchUrl(url, opts = {}, ctx = {}) {
       const html = await res.text();
       const { title, text } = htmlToText(html);
       return {
-        success: true, status, contentType, url: finalUrl, title,
+        success, ...(error ? { error } : {}), status, contentType, url: finalUrl, title,
         text: text.slice(0, FETCH_TEXT_LIMIT),
         truncated: text.length > FETCH_TEXT_LIMIT,
         originalLength: text.length,
@@ -639,7 +865,7 @@ export async function fetchUrl(url, opts = {}, ctx = {}) {
         contentType === '') {
       const text = await res.text();
       return {
-        success: true, status, contentType, url: finalUrl,
+        success, ...(error ? { error } : {}), status, contentType, url: finalUrl,
         text: text.slice(0, FETCH_TEXT_LIMIT),
         truncated: text.length > FETCH_TEXT_LIMIT,
         originalLength: text.length,
@@ -648,7 +874,7 @@ export async function fetchUrl(url, opts = {}, ctx = {}) {
 
     const len = res.headers.get('content-length');
     return {
-      success: true, status, contentType, url: finalUrl,
+      success, ...(error ? { error } : {}), status, contentType, url: finalUrl,
       note: 'Binary content not inlined. Use download_file({url}) then read_downloaded_file({downloadId}) if you need contents.',
       sizeBytes: len ? parseInt(len, 10) : null,
     };

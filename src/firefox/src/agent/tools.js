@@ -315,6 +315,34 @@ export const AGENT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'go_back',
+      description: 'Go back one entry in the current tab\'s session history, like the browser Back button. Use this for "go back" / "return to the previous page" rather than trying to run history.back() yourself (page scripts are CSP-blocked on many sites). Returns {success, url} on success, or {success:false, error} when there is no earlier entry or the page is internal (the URL is verified to actually change). Leaving a page with unsaved changes is blocked unless force:true.',
+      parameters: {
+        type: 'object',
+        properties: {
+          steps: { type: 'number', description: 'How many entries to go back. Default 1; clamped to 1–10.' },
+          force: { type: 'boolean', description: 'Set true to leave even when the current page has unsaved changes (attached files / filled fields). Default false.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'go_forward',
+      description: 'Go forward one entry in the current tab\'s session history, like the browser Forward button — reverses a previous go_back. Returns {success, url} on success, or {success:false, error} when there is no later entry or the page is internal. Leaving a page with unsaved changes is blocked unless force:true.',
+      parameters: {
+        type: 'object',
+        properties: {
+          steps: { type: 'number', description: 'How many entries to go forward. Default 1; clamped to 1–10.' },
+          force: { type: 'boolean', description: 'Set true to leave even when the current page has unsaved changes (attached files / filled fields). Default false.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'extract_data',
       description: 'Extract structured data from the page (tables, headings, or images).',
       parameters: {
@@ -597,6 +625,7 @@ export const AGENT_TOOLS = [
           method: { type: 'string', description: 'HTTP method (default GET)' },
           headers: { type: 'object', description: 'Optional request headers' },
           body: { type: 'string', description: 'Optional request body' },
+          replayRequestId: { type: 'string', description: 'Optional opaque id from a bulk API mutation hint. Reuses captured same-origin XHR/fetch body and safe headers without exposing hidden form tokens.' },
         },
         required: ['url'],
       },
@@ -1150,11 +1179,11 @@ DON'T REDO WORK YOU'VE ALREADY DONE — read this:
 - Watch for the loop: doubt → re-navigate to source → re-fetch / re-download → end up further from the goal. If you're about to navigate to a URL or path you've already used this session, STOP and read your scratchpad first.
 
 UI vs API — read this carefully:
-- For ANY action that creates, modifies, deletes, sends, submits, buys, transfers, posts, or publishes: ALWAYS go through the visible UI. NEVER call REST/GraphQL/API endpoints directly via \`fetch_url\` with POST/PUT/PATCH/DELETE, NEVER use \`execute_js\` to call \`fetch()\` with mutation methods.
+- For ANY action that creates, modifies, deletes, sends, submits, buys, transfers, posts, or publishes: ALWAYS go through the visible UI by default. NEVER call REST/GraphQL/API endpoints directly via \`fetch_url\` with POST/PUT/PATCH/DELETE, and NEVER use \`execute_js\` to call \`fetch()\` with mutation methods, unless one of the explicit exceptions below applies.
 - The user wants to see what's happening, verify before submission, and have actions look like a human did them through the page. UI flows also work with the user's existing session, while API endpoints often require separate tokens.
 - TWO exceptions where API mutations are allowed:
   (1) The user explicitly says "use the API" or "POST to /foo".
-  (2) The conversation has the [USER OVERRIDE — /allow-api] flag set (you'll see it as a context note). When that's set, you may use API mutations when UI is genuinely failing or unworkable, but ONLY after trying UI first. Even with the flag, default to UI when UI works. Before any destructive API call, state the URL, method, and payload in plain text in your response.
+  (2) The conversation has the [USER OVERRIDE — /allow-api] flag set (you'll see it as a context note). When that's set, you may use API mutations when UI is genuinely failing/unworkable, or when WebBrain reports a [BULK API MUTATION PATTERN] showing repeated successful same-kind UI actions and matching background API requests. Without /allow-api, mutating fetch_url calls are blocked. Before any destructive API call, state the URL, method, and payload in plain text in your response.
 - For READING data (looking things up, fetching a README, comparing prices, checking a status page), \`fetch_url\` and \`research_url\` are the RIGHT tool. Reading is fine.
 - Examples:
   - "Create a release on GitHub" → navigate to /releases/new, fill the form, click Publish. NOT a POST to api.github.com.
@@ -1253,7 +1282,7 @@ LISTINGS & PAGINATION — read this:
 export const MID_TOOL_NAMES = new Set([
   'get_accessibility_tree', 'click_ax', 'type_ax', 'set_field',
   'read_page', 'read_pdf', 'screenshot', 'get_window_info', 'resize_window', 'get_interactive_elements',
-  'click', 'type_text', 'press_keys', 'scroll', 'navigate',
+  'click', 'type_text', 'press_keys', 'scroll', 'navigate', 'go_back', 'go_forward',
   'extract_data', 'inspect_element_styles', 'wait_for_element', 'wait_for_stable', 'get_selection',
   'new_tab', 'done', 'clarify', 'schedule_resume', 'schedule_task',
   'iframe_read', 'iframe_click', 'iframe_type',
@@ -1286,7 +1315,7 @@ UNTRUSTED PAGE CONTENT:
 TOOLS — use only these:
 - get_accessibility_tree: PREFERRED read. Flat-text tree with roles, names, and stable ref_ids. Use filter:"visible" by default.
 - click_ax({ref_id}) / type_ax({ref_id, text}) / set_field({ref_id, text, submit}): act on nodes by ref_id. set_field is preferred for text fields.
-- read_page: prose fallback for long articles. screenshot: see the visible page. get_window_info / resize_window: inspect or resize the browser window for recording/layout tasks. scroll, navigate({url}), new_tab({url}).
+- read_page: prose fallback for long articles. screenshot: see the visible page. get_window_info / resize_window: inspect or resize the browser window for recording/layout tasks. scroll, navigate({url}), new_tab({url}), go_back()/go_forward(): walk the tab's history.
 - get_interactive_elements: legacy indexed element list (use when the tree misses elements). click({text}) / type_text({text}) / press_keys({key}): legacy fallbacks.
 - extract_data: tables/headings/images/links. inspect_element_styles: live computed CSS/box model. get_selection: highlighted text. read_pdf: read a PDF.
 - wait_for_element({selector}) / wait_for_stable({quietMs}): wait for an element / for the page to go quiet after an action.
@@ -1323,7 +1352,7 @@ FORMS & MODALS:
 
 IFRAMES & UI-vs-API:
 - Cross-origin iframes (Stripe, payment widgets, embedded forms) are NOT a blocker — extension scripts bypass same-origin. Use iframe_read / iframe_click / iframe_type with a urlFilter substring. Don't refuse with "I can't access cross-origin iframes".
-- For anything that creates, modifies, deletes, sends, submits, buys, transfers, or posts: go through the visible UI. Do NOT call REST/GraphQL endpoints via fetch_url with POST/PUT/PATCH/DELETE. Reading data (fetch_url / research_url GET) is fine.
+- For anything that creates, modifies, deletes, sends, submits, buys, transfers, or posts: go through the visible UI unless /allow-api is enabled and either UI is failing/unworkable or WebBrain reports a [BULK API MUTATION PATTERN]. Do NOT call REST/GraphQL endpoints via fetch_url with POST/PUT/PATCH/DELETE without /allow-api. Reading data (fetch_url / research_url GET) is fine.
 
 SCRATCHPAD & DON'T REDO WORK:
 - On long tasks, scratchpad_write({text}) pins miscellaneous facts (IDs, plans) that survive context summarization; downloads are auto-pinned for you (scan the \`[auto]\` lines for downloadIds). Keep entries short and factual.

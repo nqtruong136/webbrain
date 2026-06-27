@@ -136,6 +136,33 @@ async function loadCaptchaSolver() {
 }
 loadCaptchaSolver();
 
+function normalizePlanBeforeActMode(stored = {}) {
+  if (stored.planBeforeActMode === 'try' || stored.planBeforeActMode === 'strict' || stored.planBeforeActMode === 'off') {
+    return stored.planBeforeActMode;
+  }
+  if (stored.planBeforeAct === true) return 'strict';
+  if (stored.planBeforeAct === false) return 'off';
+  return 'off';
+}
+
+function applyPlanBeforeActMode(mode) {
+  if (typeof agent.setPlanBeforeActMode === 'function') {
+    agent.setPlanBeforeActMode(mode);
+    return;
+  }
+  agent.planBeforeActMode = mode;
+  agent.planBeforeAct = mode !== 'off';
+}
+
+async function loadPlanBeforeAct() {
+  const stored = await browser.storage.local.get(['planBeforeActMode', 'planBeforeAct']);
+  applyPlanBeforeActMode(normalizePlanBeforeActMode(stored));
+}
+// Hydrate once at SW boot. handleMessage awaits this promise so the first chat
+// can't race ahead of hydration, but it does NOT re-read storage per message —
+// the storage.onChanged listener below keeps the planner mode in sync. (#5)
+const planBeforeActReady = loadPlanBeforeAct();
+
 // Initialize on install
 browser.runtime.onInstalled.addListener(async () => {
   createContextMenus();
@@ -162,6 +189,9 @@ browser.storage.onChanged.addListener((changes) => {
     agent.useSiteAdapters = changes.useSiteAdapters.newValue;
     refreshPrompts = true;
   }
+  if (changes[API_MUTATION_OBSERVER_KEY]) {
+    setApiMutationObserverEnabled(changes[API_MUTATION_OBSERVER_KEY].newValue === true);
+  }
   if (changes.strictSecretMode) {
     agent.strictSecretMode = !!changes.strictSecretMode.newValue;
     // The setting only flips the `done` tool description and the credential
@@ -178,6 +208,12 @@ browser.storage.onChanged.addListener((changes) => {
   if (changes.captchaSolverEnabled) {
     agent.captchaSolverEnabled = !!changes.captchaSolverEnabled.newValue;
     refreshPrompts = true;
+  }
+  if (changes.planBeforeActMode || changes.planBeforeAct) {
+    applyPlanBeforeActMode(normalizePlanBeforeActMode({
+      planBeforeActMode: changes.planBeforeActMode?.newValue,
+      planBeforeAct: changes.planBeforeAct?.newValue,
+    }));
   }
   if (refreshPrompts) agent._refreshSystemPrompts();
 });
@@ -378,6 +414,173 @@ browser.webNavigation?.onReferenceFragmentUpdated?.addListener?.((details) => {
   if (details.frameId === 0) invalidateContextMenuForTab(details.tabId);
 });
 
+// Background API call observer (issue #189). Watches XHR/fetch requests the
+// page itself fires — e.g. clicking "Next Page" — so the agent can later spot
+// a repeated UI action and shortcut to calling the underlying API directly.
+// Strict matching only: same tab, exact method/url captured as-is — no
+// param-pattern fuzzing yet. Replay material is kept behind opaque ids so CSRF
+// tokens and form bodies do not get printed into model context.
+const API_REQUESTS_PER_TAB_LIMIT = 40;
+const API_MUTATION_OBSERVER_KEY = 'apiMutationObserverEnabled';
+const API_MUTATION_OBSERVER_DEFAULT = false;
+const API_REPLAY_BODY_LIMIT = 16000;
+const apiRequestsByTab = new Map(); // tabId -> [{ url, method, ts, replayRequestId, ... }]
+const apiRequestReplayById = new Map(); // replayRequestId -> captured same-origin replay options
+globalThis.__webbrainApiRequests = apiRequestsByTab;
+globalThis.__webbrainApiRequestReplay = apiRequestReplayById;
+let apiMutationObserverRegistered = false;
+
+function apiReplayId(tabId, requestId) {
+  return `api_${tabId}_${String(requestId || Date.now()).replace(/[^\w.-]/g, '_')}`;
+}
+
+function extractApiReplayBody(requestBody) {
+  if (!requestBody) return null;
+  try {
+    if (Array.isArray(requestBody.raw) && requestBody.raw.length) {
+      const chunks = [];
+      for (const part of requestBody.raw) {
+        if (part?.bytes) chunks.push(new Uint8Array(part.bytes));
+      }
+      const total = chunks.reduce((n, chunk) => n + chunk.byteLength, 0);
+      if (!total || total > API_REPLAY_BODY_LIMIT) return null;
+      const merged = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        merged.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return new TextDecoder().decode(merged);
+    }
+    if (requestBody.formData && typeof requestBody.formData === 'object') {
+      const params = new URLSearchParams();
+      for (const [key, values] of Object.entries(requestBody.formData)) {
+        const list = Array.isArray(values) ? values : [values];
+        for (const value of list) params.append(key, String(value));
+      }
+      const text = params.toString();
+      return text.length <= API_REPLAY_BODY_LIMIT ? text : null;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function filterApiReplayHeaders(requestHeaders = []) {
+  const allowed = new Set([
+    'accept',
+    'content-type',
+    'x-requested-with',
+    'x-csrf-token',
+    'x-xsrf-token',
+    'x-github-requested-with',
+    'x-turbo-request-id',
+  ]);
+  const headers = {};
+  for (const header of requestHeaders || []) {
+    const name = String(header?.name || '').toLowerCase();
+    if (!allowed.has(name)) continue;
+    const value = header?.value;
+    if (value != null) headers[name] = String(value);
+  }
+  return headers;
+}
+
+function pruneApiReplayStore() {
+  const liveIds = new Set();
+  for (const list of apiRequestsByTab.values()) {
+    for (const item of list) {
+      if (item?.replayRequestId) liveIds.add(item.replayRequestId);
+    }
+  }
+  for (const id of apiRequestReplayById.keys()) {
+    if (!liveIds.has(id)) apiRequestReplayById.delete(id);
+  }
+}
+
+function recordApiRequest(details) {
+  const { tabId, url, method, requestId } = details;
+  if (tabId == null || tabId < 0) return;
+  const replayRequestId = apiReplayId(tabId, requestId);
+  const body = extractApiReplayBody(details.requestBody);
+  const entry = {
+    requestId,
+    replayRequestId,
+    url,
+    method,
+    ts: Date.now(),
+    hasBody: body != null,
+    headerNames: [],
+  };
+  const list = apiRequestsByTab.get(tabId) || [];
+  list.push(entry);
+  if (list.length > API_REQUESTS_PER_TAB_LIMIT) list.shift();
+  apiRequestsByTab.set(tabId, list);
+  apiRequestReplayById.set(replayRequestId, {
+    tabId,
+    requestId,
+    url,
+    method,
+    body,
+    headers: {},
+  });
+  pruneApiReplayStore();
+}
+
+function recordApiRequestHeaders(details) {
+  const { tabId, requestId } = details;
+  if (tabId == null || tabId < 0 || !requestId) return;
+  const list = apiRequestsByTab.get(tabId) || [];
+  const entry = [...list].reverse().find(item => item?.requestId === requestId);
+  if (!entry) return;
+  const headers = filterApiReplayHeaders(details.requestHeaders);
+  entry.headerNames = Object.keys(headers);
+  const replay = apiRequestReplayById.get(entry.replayRequestId);
+  if (replay) replay.headers = headers;
+}
+
+function setApiMutationObserverEnabled(enabled) {
+  const shouldEnable = enabled === true;
+  const onBeforeRequest = browser.webRequest?.onBeforeRequest;
+  const onBeforeSendHeaders = browser.webRequest?.onBeforeSendHeaders;
+  if (!onBeforeRequest) return;
+  if (shouldEnable && !apiMutationObserverRegistered) {
+    onBeforeRequest.addListener(recordApiRequest, { urls: ['<all_urls>'], types: ['xmlhttprequest'] }, ['requestBody']);
+    onBeforeSendHeaders?.addListener(
+      recordApiRequestHeaders,
+      { urls: ['<all_urls>'], types: ['xmlhttprequest'] },
+      ['requestHeaders']
+    );
+    apiMutationObserverRegistered = true;
+  } else if (!shouldEnable && apiMutationObserverRegistered) {
+    onBeforeRequest.removeListener(recordApiRequest);
+    onBeforeSendHeaders?.removeListener(recordApiRequestHeaders);
+    apiMutationObserverRegistered = false;
+    apiRequestsByTab.clear();
+    apiRequestReplayById.clear();
+  } else if (!shouldEnable) {
+    apiRequestsByTab.clear();
+    apiRequestReplayById.clear();
+  }
+}
+
+async function loadApiMutationObserverSetting() {
+  try {
+    const stored = await browser.storage.local.get({ [API_MUTATION_OBSERVER_KEY]: API_MUTATION_OBSERVER_DEFAULT });
+    setApiMutationObserverEnabled(stored[API_MUTATION_OBSERVER_KEY] === true);
+  } catch (e) {
+    setApiMutationObserverEnabled(API_MUTATION_OBSERVER_DEFAULT);
+  }
+}
+
+loadApiMutationObserverSetting();
+
+browser.tabs.onRemoved.addListener((tabId) => {
+  apiRequestsByTab.delete(tabId);
+  for (const [id, replay] of apiRequestReplayById.entries()) {
+    if (replay?.tabId === tabId) apiRequestReplayById.delete(id);
+  }
+});
+
 // Action click: toggle sidebar (existing UX) AND ensure source tab is
 // in the WebBrain group so the colored label appears immediately.
 browser.browserAction.onClicked.addListener((tab) => {
@@ -403,11 +606,49 @@ browser.browserAction.onClicked.addListener((tab) => {
  * effort: silently no-ops on about:* / file:// pages without our
  * content script and on tabs that haven't loaded yet.
  */
+const activeIndicatorTabs = new Set();
+
 function sendIndicatorMessage(tabId, type) {
   if (tabId == null || !type) return;
+  if (type === 'WB_SHOW_AGENT_INDICATORS') {
+    activeIndicatorTabs.add(tabId);
+  } else if (type === 'WB_HIDE_AGENT_INDICATORS') {
+    activeIndicatorTabs.delete(tabId);
+  }
   try {
     browser.tabs.sendMessage(tabId, { type }).catch(() => { /* expected */ });
   } catch { /* ignore */ }
+}
+
+function reassertIndicatorIfActive(tabId) {
+  if (!activeIndicatorTabs.has(tabId)) return;
+  sendIndicatorMessage(tabId, 'WB_SHOW_AGENT_INDICATORS');
+  setTimeout(() => {
+    if (activeIndicatorTabs.has(tabId)) {
+      sendIndicatorMessage(tabId, 'WB_SHOW_AGENT_INDICATORS');
+    }
+  }, 500);
+}
+
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo?.status === 'complete') {
+    reassertIndicatorIfActive(tabId);
+  }
+});
+
+browser.tabs.onRemoved.addListener((tabId) => {
+  activeIndicatorTabs.delete(tabId);
+});
+
+function sendAgentRunComplete(tabId) {
+  if (tabId == null) return;
+  browser.runtime.sendMessage({
+    target: 'sidepanel',
+    action: 'agent_update',
+    tabId,
+    type: 'run_complete',
+    data: {},
+  }).catch(() => {});
 }
 
 // Stop button on the page → abort the agent run for that tab. Mirrors
@@ -434,6 +675,9 @@ async function handleMessage(msg, sender) {
   if (providerManager.providers.size === 0) {
     await providerManager.load();
   }
+  // Hydrate planBeforeAct once at boot (not per message); onChanged keeps it
+  // in sync afterward.
+  await planBeforeActReady;
 
   switch (msg.action) {
     case 'chat': {
@@ -468,6 +712,7 @@ async function handleMessage(msg, sender) {
 
         return { content: result, updates };
       } finally {
+        sendAgentRunComplete(tabId);
         sendIndicatorMessage(tabId, 'WB_HIDE_AGENT_INDICATORS');
       }
     }
@@ -493,6 +738,7 @@ async function handleMessage(msg, sender) {
 
         return { content: result };
       } finally {
+        sendAgentRunComplete(tabId);
         sendIndicatorMessage(tabId, 'WB_HIDE_AGENT_INDICATORS');
       }
     }
@@ -516,6 +762,7 @@ async function handleMessage(msg, sender) {
 
         return { content: result };
       } finally {
+        sendAgentRunComplete(tabId);
         sendIndicatorMessage(tabId, 'WB_HIDE_AGENT_INDICATORS');
       }
     }
@@ -620,6 +867,17 @@ async function handleMessage(msg, sender) {
       if (!clarifyId) return { ok: false, error: 'clarifyId required' };
       if (!answer) return { ok: false, error: 'answer required' };
       const matched = agent.submitClarifyResponse(tabId, clarifyId, answer, msg.source || 'user');
+      return { ok: matched, matched };
+    }
+
+    case 'plan_response': {
+      const tabId = msg.tabId || sender.tab?.id;
+      if (!tabId) return { ok: false, error: 'No tab ID' };
+      const planId = String(msg.planId || '');
+      const decision = String(msg.decision || 'reject');
+      const editedText = String(msg.editedText || '');
+      if (!planId) return { ok: false, error: 'planId required' };
+      const matched = agent.submitPlanResponse(tabId, planId, decision, editedText);
       return { ok: matched, matched };
     }
 

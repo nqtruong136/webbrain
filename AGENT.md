@@ -13,6 +13,9 @@ vanilla JS/CSS unless there is a very strong reason to add a framework.
   exists for deliberate exceptions, not as a default path.
 - Preserve local-model usability: compact prompts, smaller tool surfaces, context
   trimming, and clear failure-mode reminders matter.
+- Gate optional prompt guidance with mechanical state where possible. For
+  example, only add API-replay planner instructions when `/allow-api` is active
+  for that tab, instead of bloating every LLM call with unavailable paths.
 - Keep Chrome and Firefox behavior aligned where the platform allows it. When a
   difference is platform-real, document it near the implementation or in docs.
 - Treat site adapters as high-leverage product work. Short, concrete adapter
@@ -77,6 +80,10 @@ vanilla JS/CSS unless there is a very strong reason to add a framework.
   should stay current with behavior.
 - `test/`: browser-neutral regression tests and parity checks.
 - `web/`: marketing site and blog content; run the web build after editing it.
+  Most homepage files under `web/` are generated: change
+  `web/build/template.html` and `web/build/locales/*.json`, then run
+  `npm run build:web`. Do not hand-edit only `web/index.html` or localized
+  `web/*/index.html`, because the next build will erase those changes.
 
 ## Testing
 

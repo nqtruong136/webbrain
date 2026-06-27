@@ -1,12 +1,13 @@
 {
   "manifest_version": 2,
   "name": "WebBrain",
-  "version": "17.8.1",
+  "version": "18.0.12",
   "description": "Open-source AI browser agent — chat with pages, automate tasks, multi-provider LLM support.",
   "permissions": [
     "activeTab",
     "menus",
     "webNavigation",
+    "webRequest",
     "storage",
     "unlimitedStorage",
     "tabs",

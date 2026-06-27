@@ -24,6 +24,16 @@ import {
 import * as trace from '../trace/recorder.js';
 import { solveCaptcha, detectCaptcha, injectToken } from './captcha-solver.js';
 import { Capability, CAPABILITY_LABEL, capabilitiesFor, requiredHosts, frameHostMatches, isNetworkMutation, PermissionManager, UNTRUSTED_CONTENT_TOOLS } from './permission-gate.js';
+import {
+  buildPlannerMessages,
+  parsePlanFromContent,
+  formatPlanMarkdown,
+  formatPlanScratchpad,
+  userMessageToText,
+  messageContentToText,
+} from './planner.js';
+import { extractFirstJsonObject } from './json-extract.js';
+import { sanitizeText as sanitizePlannerText } from './text-sanitize.js';
 
 const DEFAULT_CLOUD_COST_ALLOWANCE_USD = 10;
 const COST_ALLOWANCE_SESSION_KEY = 'costAllowanceSessionUsd';
@@ -98,6 +108,12 @@ export class Agent {
     // model to try `solve_captcha` once before falling back to asking
     // the user. The API key is read at call time from browser.storage.
     this.captchaSolverEnabled = false;
+    // Pre-execution planner (Settings → Plan before Act). Default off; "try"
+    // attempts a read-only planning LLM call but continues without a pinned
+    // plan if planning itself fails. "strict" fails closed.
+    this.planBeforeActMode = 'off';
+    this.planBeforeAct = false; // legacy boolean mirror for older call sites/tests
+    this._pendingPlans = new Map();
     // Strict secret-handling mode — see chrome/agent.js for rationale.
     // Default off; user opts in via Settings → "Strict secret handling".
     this.strictSecretMode = false;
@@ -109,6 +125,9 @@ export class Agent {
     this.recentCoordClicks = new Map();
     this.apiAllowedTabs = new Set();
     this.apiAllowedInjected = new Set();
+    this.bulkApiMutationClicks = new Map();
+    this.bulkApiMutationHints = new Map();
+    this.failedBulkApiReplayShapes = new Map(); // "tabId|runId" -> Set("METHOD|requestShape")
     // Cache for `_isPdfTab` HEAD probes — see Chrome agent.js for
     // design notes. Same (tabId,url) → isPdf shape.
     this._isPdfTabCache = new Map();
@@ -116,7 +135,7 @@ export class Agent {
     this._recentSubmitClicks = new Map();
     this._runningTabs = new Set(); // tabIds with an active processMessage/Stream in flight
     this.scheduler = null;
-    this.scheduledRunPolicies = new Map(); // tabId -> { requireConsequentialConfirmation }
+    this.scheduledRunPolicies = new Map(); // tabId -> { requireConsequentialConfirmation, autoApprovePlanReview }
     // Pending clarify() tool calls awaiting user input — see Chrome
     // agent.js. Keyed by tabId → (clarifyId → {resolve, ts}).
     this._pendingClarifications = new Map();
@@ -217,6 +236,7 @@ export class Agent {
   setScheduledRunPolicy(tabId, policy) {
     this.scheduledRunPolicies.set(tabId, {
       requireConsequentialConfirmation: policy?.requireConsequentialConfirmation !== false,
+      autoApprovePlanReview: policy?.autoApprovePlanReview === true,
     });
   }
 
@@ -443,26 +463,37 @@ export class Agent {
   }
 
   // ---- Loop detection ----
-  _recordCall(tabId, name, args, result) {
+  _isToolResultErroredForLoop(name, _args, result) {
+    if (!result || typeof result !== 'object') return false;
+    if (result.error || result.success === false || result.noProgress) return true;
+    const status = Number(result.status);
+    return URL_FAMILY_TOOLS.has(name) && Number.isFinite(status) && status >= 400;
+  }
+
+  _loopCallKey(name, args, result) {
     // URL-family tools (fetch_url, research_url, …) bucket by resource
     // identity so the agent can't escape loop detection by fetching the
     // same logical file via 8 different API endpoints. See loop-bucket.js.
-    const errored = !!(result && (result.error || result.success === false));
+    const errored = this._isToolResultErroredForLoop(name, args, result);
     const argsHash = bucketArgsKey(name, args);
-    const key = `${name}|${argsHash}|${errored ? 'err' : 'ok'}`;
+    return `${name}|${argsHash}|${errored ? 'err' : 'ok'}`;
+  }
+
+  _recordCall(tabId, name, args, result) {
+    const key = this._loopCallKey(name, args, result);
     const buf = this.recentCalls.get(tabId) || [];
     buf.push({ key, name, ts: Date.now() });
     if (buf.length > 6) buf.shift();
     this.recentCalls.set(tabId, buf);
-    return buf;
+    return { buf, key };
   }
 
-  _detectLoop(buf) {
+  _detectLoop(buf, activeKey = null) {
     if (!buf || buf.length < 3) return null;
     const counts = new Map();
     for (const e of buf) counts.set(e.key, (counts.get(e.key) || 0) + 1);
     for (const [key, n] of counts) {
-      if (n >= 3) return { type: 'repeat', key, name: key.split('|')[0], count: n };
+      if (n >= 3 && (!activeKey || key === activeKey)) return { type: 'repeat', key, name: key.split('|')[0], count: n };
     }
     if (buf.length >= 4) {
       const last4 = buf.slice(-4);
@@ -477,11 +508,360 @@ export class Agent {
     return null;
   }
 
+  _isFailedApiMutationForLoop(name, args, result) {
+    return isNetworkMutation(name, args) && this._isToolResultErroredForLoop(name, args, result);
+  }
+
+  _bulkApiReplayShapeKey(method, requestShape) {
+    const m = String(method || '').toUpperCase();
+    const shape = String(requestShape || '').trim();
+    return m && shape ? `${m}|${shape}` : '';
+  }
+
+  _bulkApiReplayFailureScope(tabId) {
+    return `${tabId}|${this.currentRunId.get(tabId) || 'runless'}`;
+  }
+
+  _hasFailedBulkApiReplayShape(tabId, method, requestShape) {
+    const key = this._bulkApiReplayShapeKey(method, requestShape);
+    return !!key && !!this.failedBulkApiReplayShapes.get(this._bulkApiReplayFailureScope(tabId))?.has(key);
+  }
+
+  _setFailedBulkApiReplayShape(tabId, method, requestShape, failed) {
+    const key = this._bulkApiReplayShapeKey(method, requestShape);
+    if (!key) return;
+    const scope = this._bulkApiReplayFailureScope(tabId);
+    const failures = this.failedBulkApiReplayShapes.get(scope) || new Set();
+    if (failed) {
+      failures.add(key);
+      this.failedBulkApiReplayShapes.set(scope, failures);
+    } else {
+      failures.delete(key);
+      if (failures.size) this.failedBulkApiReplayShapes.set(scope, failures);
+      else this.failedBulkApiReplayShapes.delete(scope);
+    }
+  }
+
+  _trackBulkApiReplayResult(tabId, name, args, result) {
+    if (name !== 'fetch_url' || !args?.replayRequestId || !isNetworkMutation(name, args)) return null;
+    const method = String(args.method || 'GET').toUpperCase();
+    const requestShape = this._bulkApiRequestShape(args.url);
+    if (!requestShape) return null;
+    const failed = this._isToolResultErroredForLoop(name, args, result);
+    this._setFailedBulkApiReplayShape(tabId, method, requestShape, failed);
+    return { method, requestShape, failed };
+  }
+
   _clearLoopState(tabId) {
     this.recentCalls.delete(tabId);
     this.loopNudges.delete(tabId);
     this.healthyCallsSinceLoop.delete(tabId);
     this.recentCoordClicks.delete(tabId);
+    this.bulkApiMutationClicks.delete(tabId);
+    this.bulkApiMutationHints.delete(tabId);
+    const replayFailurePrefix = `${tabId}|`;
+    for (const key of this.failedBulkApiReplayShapes.keys()) {
+      if (key === tabId || String(key).startsWith(replayFailurePrefix)) {
+        this.failedBulkApiReplayShapes.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Issue #189 — mutation API observer shortcutter. When _checkLoop flags a
+   * repeated click (e.g. "Next Page" clicked 3x), check whether each click
+   * fired the same background XHR/fetch (captured by the webRequest
+   * listener in background.js). If so, surface the URL/method so the model
+   * can call fetch_url directly instead of clicking again.
+   *
+   * Strict matching only: same tab, exact url+method repeated, and request
+   * must land within WINDOW_MS after the click that triggered it. No fuzzy
+   * param-pattern matching.
+   */
+  _detectApiShortcut(tabId, loop, buf) {
+    if (loop.type !== 'repeat') return null;
+    if (!['click', 'click_ax'].includes(loop.name)) return null;
+    const apiRequests = globalThis.__webbrainApiRequests?.get(tabId);
+    if (!apiRequests || apiRequests.length === 0) return null;
+
+    const clickTimes = buf.filter(e => e.key === loop.key).map(e => e.ts);
+    if (clickTimes.length < 2) return null;
+
+    const WINDOW_MS = 3000;
+    let candidate = null;
+    let matches = 0;
+    const usedRequestIndexes = new Set();
+    for (const clickTs of clickTimes) {
+      const hitIndex = apiRequests.findIndex((r, idx) =>
+        !usedRequestIndexes.has(idx) &&
+        r.ts >= clickTs && r.ts <= clickTs + WINDOW_MS &&
+        (!candidate || (r.url === candidate.url && String(r.method || '').toUpperCase() === candidate.method))
+      );
+      if (hitIndex < 0) continue;
+      const hit = apiRequests[hitIndex];
+      if (!hit) continue;
+      if (!candidate) {
+        candidate = {
+          url: hit.url,
+          method: String(hit.method || '').toUpperCase(),
+          replayRequestId: hit.replayRequestId,
+        };
+      }
+      usedRequestIndexes.add(hitIndex);
+      matches++;
+    }
+    if (!candidate || matches < 2) return null;
+    return {
+      url: candidate.url,
+      method: candidate.method,
+      occurrences: matches,
+      replayRequestId: candidate.replayRequestId,
+    };
+  }
+
+  _bulkClickLabel(toolName, args, result) {
+    if (!['click', 'click_ax'].includes(toolName)) return '';
+    const candidates = [
+      result?.name,
+      result?.text,
+      result?.matched,
+      result?.label,
+      args?.text,
+      args?.selector,
+    ];
+    for (const value of candidates) {
+      const label = String(value || '').replace(/\s+/g, ' ').trim();
+      if (label) return label.slice(0, 160);
+    }
+    return '';
+  }
+
+  _bulkClickActionKey(label) {
+    const words = String(label || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9_\-\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')
+      .filter(Boolean);
+    if (!words.length) return '';
+    const verbs = new Set([
+      'follow', 'unfollow', 'like', 'unlike', 'connect', 'add', 'remove',
+      'subscribe', 'unsubscribe', 'join', 'leave', 'star', 'unstar', 'watch',
+      'unwatch', 'accept', 'reject', 'approve', 'decline', 'invite', 'block',
+      'unblock', 'archive', 'unarchive', 'mark', 'save', 'unsave', 'delete',
+      'restore', 'close', 'reopen', 'resolve', 'submit', 'send', 'publish',
+      'repost', 'boost', 'favorite', 'unfavorite',
+    ]);
+    if (verbs.has(words[0])) {
+      if (words[0] === 'add' && words[1] === 'to') return 'add to';
+      return words[0];
+    }
+    return words.slice(0, Math.min(2, words.length)).join(' ');
+  }
+
+  _bulkApiRequestShape(rawUrl) {
+    try {
+      const u = new URL(rawUrl);
+      const path = u.pathname
+        .split('/')
+        .map((segment) => {
+          if (!segment) return '';
+          if (/^\d+$/.test(segment)) return ':id';
+          if (/^[a-f0-9]{8,}$/i.test(segment)) return ':id';
+          if (/^[a-z0-9_-]{24,}$/i.test(segment)) return ':id';
+          return segment;
+        })
+        .join('/')
+        .replace(/\/+$/, '') || '/';
+      const params = [...u.searchParams.keys()].sort();
+      const query = params.length ? `?${params.map(k => `${k}=*`).join('&')}` : '';
+      return `${u.origin.toLowerCase()}${path}${query}`;
+    } catch {
+      return String(rawUrl || '');
+    }
+  }
+
+  _scoreBulkApiRequest(request, actionKey, label, pageUrl = '') {
+    const method = String(request?.method || '').toUpperCase();
+    const mutationMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+    if (!mutationMethods.has(method)) return -Infinity;
+    let score = 5;
+    let url;
+    try { url = new URL(request.url); } catch { return -Infinity; }
+    const haystack = `${url.hostname} ${url.pathname} ${url.search}`.toLowerCase();
+    const actionWord = String(actionKey || '').split(/\s+/)[0];
+    if (actionWord && haystack.includes(actionWord)) score += 6;
+    const labelWords = String(label || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 3);
+    for (const word of labelWords) {
+      if (word.length >= 4 && haystack.includes(word)) score += 1;
+    }
+    if (/analytics|beacon|collect|telemetry|metrics|stats|tracking|log|heartbeat/.test(haystack)) {
+      score -= 8;
+    }
+    try {
+      const pageHost = new URL(pageUrl).hostname.toLowerCase();
+      if (pageHost && url.hostname.toLowerCase() === pageHost) score += 2;
+    } catch { /* pageUrl may be blank */ }
+    return score;
+  }
+
+  _findBulkApiRequest(tabId, startedAt, endedAt, actionKey, label, pageUrl = '') {
+    const apiRequests = globalThis.__webbrainApiRequests?.get(tabId);
+    if (!apiRequests || apiRequests.length === 0) return null;
+    const candidates = apiRequests
+      .filter(r => r && r.ts >= startedAt - 100 && r.ts <= endedAt + 100)
+      .map(r => ({ request: r, score: this._scoreBulkApiRequest(r, actionKey, label, pageUrl) }))
+      .filter(item => item.score >= 1)
+      .sort((a, b) => (b.score - a.score) || ((b.request.ts || 0) - (a.request.ts || 0)));
+    return candidates[0]?.request || null;
+  }
+
+  _detectBulkApiMutationShortcut(tabId, toolName, args, result, timing = {}) {
+    if (!['click', 'click_ax'].includes(toolName)) return null;
+    if (!result || result.success !== true || result.noProgress || result.error) return null;
+    const label = this._bulkClickLabel(toolName, args, result);
+    const actionKey = this._bulkClickActionKey(label);
+    if (!actionKey) return null;
+    const startedAt = Number(timing.startedAt) || Date.now();
+    const endedAt = Number(timing.endedAt) || Date.now();
+    const request = this._findBulkApiRequest(tabId, startedAt, endedAt, actionKey, label, timing.pageUrl || '');
+    if (!request) return null;
+
+    const now = Date.now();
+    const entry = {
+      ts: now,
+      toolName,
+      actionKey,
+      label,
+      method: String(request.method || '').toUpperCase(),
+      url: request.url,
+      requestShape: this._bulkApiRequestShape(request.url),
+      requestTs: request.ts,
+      replayRequestId: request.replayRequestId,
+      hasBody: !!request.hasBody,
+      headerNames: Array.isArray(request.headerNames) ? request.headerNames : [],
+    };
+    const recent = (this.bulkApiMutationClicks.get(tabId) || [])
+      .filter(item => now - item.ts <= 60000);
+    recent.push(entry);
+    while (recent.length > 24) recent.shift();
+    this.bulkApiMutationClicks.set(tabId, recent);
+
+    const group = recent.filter(item =>
+      item.actionKey === entry.actionKey &&
+      item.method === entry.method &&
+      item.requestShape === entry.requestShape
+    );
+    if (group.length < 2) return null;
+    if (this._hasFailedBulkApiReplayShape(tabId, entry.method, entry.requestShape)) return null;
+
+    const hintKey = `${entry.actionKey}|${entry.method}|${entry.requestShape}`;
+    const hinted = this.bulkApiMutationHints.get(tabId) || new Map();
+    const lastHintedCount = hinted.get(hintKey) || 0;
+    if (lastHintedCount && group.length < lastHintedCount + 2) return null;
+    hinted.set(hintKey, group.length);
+    this.bulkApiMutationHints.set(tabId, hinted);
+
+    const examples = [...new Set(group.slice(-4).map(item => item.url))];
+    // Prefer a same-shape entry that still has its captured body: bodies over
+    // API_REPLAY_BODY_LIMIT (16 KB) are dropped (body:null, hasBody:false), and
+    // replaying a body-bearing mutation without its body fails (missing CSRF /
+    // form data). Fall back to any replayable entry only if none kept a body.
+    const reversed = [...group].reverse();
+    const replaySource =
+      reversed.find(item => item.replayRequestId && item.hasBody) ||
+      reversed.find(item => item.replayRequestId);
+    return {
+      action: entry.actionKey,
+      label,
+      method: entry.method,
+      requestShape: entry.requestShape,
+      count: group.length,
+      examples,
+      replayRequestId: replaySource?.replayRequestId || null,
+      replayHasBody: !!replaySource?.hasBody,
+      replayHeaderNames: replaySource?.headerNames || [],
+      apiAllowed: this.apiAllowedTabs.has(tabId),
+    };
+  }
+
+  // URLs in the bulk-mutation warning come from the page's own XHR/fetch
+  // traffic (apiRequestsByTab), so they are attacker-controlled. This note is
+  // appended OUTSIDE the <untrusted_page_content> wrap (it's a trusted WebBrain
+  // directive), so neutralize chars that could break out of the bracket framing
+  // and clamp length before interpolating — same treatment as the PDF docTitle.
+  _sanitizeBulkApiUrl(url) {
+    return String(url || '')
+      .replace(/[[\]<>`"\r\n]/g, ' ')
+      .replace(/untrusted_page_content/gi, 'untrusted-content')
+      .trim()
+      .slice(0, 300);
+  }
+
+  _formatBulkApiMutationWarning(shortcut) {
+    const examples = (shortcut.examples || [])
+      .map(url => `${shortcut.method} ${this._sanitizeBulkApiUrl(url)}`)
+      .join('; ');
+    const requestShape = this._sanitizeBulkApiUrl(shortcut.requestShape);
+    const permission = shortcut.apiAllowed
+      ? 'API mutations are enabled for this conversation. Stop further same-shape UI clicks and sample one direct fetch_url replay for the next matching item.'
+      : 'API mutations are NOT enabled for this conversation; ask the user to type /allow-api before using mutating fetch_url, or continue through the visible UI.';
+    const replay = shortcut.replayRequestId
+      ? ` Captured replay material is available as replayRequestId "${shortcut.replayRequestId}"${shortcut.replayHasBody ? ' with a request body' : ''}${shortcut.replayHeaderNames?.length ? ` and headers (${shortcut.replayHeaderNames.join(', ')})` : ''}; use fetch_url({url: "<next matching concrete URL>", method: "${shortcut.method}", replayRequestId: "${shortcut.replayRequestId}"}) for exactly one sampled remaining item so WebBrain reuses same-origin body/headers without exposing hidden tokens.`
+      : '';
+    return `[BULK API MUTATION PATTERN: You have successfully clicked ${shortcut.count} similar "${shortcut.action}" controls, and each click triggered ${shortcut.method} requests with the same URL shape: ${requestShape}. Recent concrete examples: ${examples}. This is repeated bulk mutation work, not a stuck loop. ${permission}${replay} If the sampled direct API call returns success:false or HTTP 4xx/5xx, fall back to the visible UI for this shape and do not loop on fetch_url. Verify the page after any API batch.]`;
+  }
+
+  _toolCallArgs(tc) {
+    try {
+      return typeof tc?.function?.arguments === 'string'
+        ? JSON.parse(tc.function.arguments)
+        : (tc?.function?.arguments || {});
+    } catch {
+      return {};
+    }
+  }
+
+  _toolCallArgsWithReplayMethod(tabId, name, args) {
+    if ((name !== 'fetch_url' && name !== 'research_url') || !args || args.method) return args;
+    const replayRequestId = args.replayRequestId || args.apiReplayRequestId;
+    if (!replayRequestId) return args;
+    const replay = globalThis.__webbrainApiRequestReplay?.get(String(replayRequestId));
+    if (!replay?.method) return args;
+    if (tabId != null && replay.tabId != null && Number(replay.tabId) !== Number(tabId)) return args;
+    return { ...args, method: String(replay.method).toUpperCase() };
+  }
+
+  _bulkApiReplayInstruction(shortcut) {
+    return `Stop executing same-shape UI clicks. API mutations are enabled and WebBrain captured replayRequestId "${shortcut.replayRequestId}" for ${shortcut.method} ${shortcut.requestShape}. On the next turn, sample one remaining matching item with fetch_url({url: "<next matching concrete URL>", method: "${shortcut.method}", replayRequestId: "${shortcut.replayRequestId}"}). If that sample fails, fall back to the visible UI for this request shape.`;
+  }
+
+  _appendSyntheticToolResults(tabId, toolCalls, startIndex, messages, onUpdate, step, makeResult) {
+    let count = 0;
+    for (let i = startIndex; i < toolCalls.length; i++) {
+      const tc = toolCalls[i];
+      const fnName = tc?.function?.name || 'unknown_tool';
+      const fnArgs = this._toolCallArgsWithReplayMethod(tabId, fnName, this._toolCallArgs(tc));
+      const result = makeResult(fnName, fnArgs, i);
+      messages.push({
+        role: 'tool',
+        tool_call_id: tc.id,
+        content: JSON.stringify(result),
+      });
+      onUpdate('tool_result', { name: fnName, result });
+      const runId = this.currentRunId.get(tabId);
+      if (runId) {
+        trace.recordToolCall(runId, step, {
+          name: fnName,
+          args: fnArgs,
+          result,
+          latencyMs: 0,
+        });
+      }
+      count++;
+    }
+    return count;
   }
 
   /**
@@ -545,8 +925,8 @@ export class Agent {
   }
 
   _checkLoop(tabId, toolName, toolArgs, toolResult) {
-    const buf = this._recordCall(tabId, toolName, toolArgs, toolResult);
-    const loop = this._detectLoop(buf);
+    const { buf, key } = this._recordCall(tabId, toolName, toolArgs, toolResult);
+    const loop = this._detectLoop(buf, key);
     if (!loop) {
       // Healthy run — reset nudges only after a sustained streak.
       const healthy = (this.healthyCallsSinceLoop.get(tabId) || 0) + 1;
@@ -570,15 +950,21 @@ export class Agent {
         message: `Stopped: I detected I was looping on ${desc} without making progress after multiple warnings. Please tell me what's blocking, give me a different instruction, or take a look at the page yourself.`,
       };
     }
-    const warning = loop.type === 'repeat'
-      ? `[LOOP DETECTED: You've just called ${loop.name} ${loop.count} times with the same arguments and the same outcome. The current approach is NOT working. Try something fundamentally different: a different selector, a different tool, scroll to find a different element, or take a screenshot to see what's actually on screen. DO NOT repeat this exact call again — try a creative alternative.]`
-      : `[LOOP DETECTED: You're oscillating between ${loop.a} and ${loop.b} without making progress. Stop. Take a screenshot to see what's actually happening, then try a completely different approach.]`;
+    let warning;
+    if (loop.type === 'repeat') {
+      const shortcut = this._detectApiShortcut(tabId, loop, buf);
+      warning = shortcut
+        ? `[LOOP DETECTED + API SHORTCUT FOUND: You've called ${loop.name} ${loop.count} times. Each click triggered the same background request pattern: ${shortcut.method} ${shortcut.url}. Instead of clicking again, consider fetch_url({url: "${shortcut.url}", method: "${shortcut.method}"${shortcut.replayRequestId ? `, replayRequestId: "${shortcut.replayRequestId}"` : ''}}) with the same method; follow the UI/API mutation policy for mutating methods.]`
+        : `[LOOP DETECTED: You've just called ${loop.name} ${loop.count} times with the same arguments and the same outcome. The current approach is NOT working. Try something fundamentally different: a different selector, a different tool, scroll to find a different element, or take a screenshot to see what's actually on screen. DO NOT repeat this exact call again — try a creative alternative.]`;
+    } else {
+      warning = `[LOOP DETECTED: You're oscillating between ${loop.a} and ${loop.b} without making progress. Stop. Take a screenshot to see what's actually happening, then try a completely different approach.]`;
+    }
     return { kind: 'nudge', warning };
   }
 
-  static NAV_TOOLS = new Set(['navigate', 'new_tab']);
-  static STATE_CHANGE_TOOLS = new Set(['navigate', 'new_tab', 'click', 'click_ax', 'type_text', 'type_ax', 'set_field', 'press_keys', 'scroll', 'hover', 'drag_drop']);
-  static NAV_PRONE_TOOLS = new Set(['click', 'click_ax', 'navigate', 'execute_js', 'iframe_click']);
+  static NAV_TOOLS = new Set(['navigate', 'new_tab', 'go_back', 'go_forward']);
+  static STATE_CHANGE_TOOLS = new Set(['navigate', 'new_tab', 'go_back', 'go_forward', 'click', 'click_ax', 'type_text', 'type_ax', 'set_field', 'press_keys', 'scroll', 'hover', 'drag_drop']);
+  static NAV_PRONE_TOOLS = new Set(['click', 'click_ax', 'navigate', 'go_back', 'go_forward', 'execute_js', 'iframe_click']);
 
   // System prompt for the dedicated "vision model" sub-call. Kept terse and
   // format-oriented so the description is actually useful to the planning
@@ -656,8 +1042,90 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (!url) return '';
     try {
       const u = new URL(url);
+      return u.origin + u.pathname + u.search + u.hash;
+    } catch (e) { return url; }
+  }
+
+  /**
+   * Path-level URL normalization for the click side-effect navigation notice.
+   * Drops query + hash so SPA interactions that only change ?page=2 / #thread
+   * (pagination, filter pills, tab toggles, utm/fbclid rewrites) do NOT trip
+   * the "navigation occurred — re-plan from scratch" warning. Distinct from
+   * _normalizeUrl, which keeps query/hash so go_back/go_forward can detect
+   * history movement between entries that differ only by search params/anchor.
+   */
+  _normalizeUrlPath(url) {
+    if (!url) return '';
+    try {
+      const u = new URL(url);
       return u.origin + u.pathname;
     } catch (e) { return url; }
+  }
+
+  /**
+   * Flush accumulated side-effect navigation notices as a user message. Called
+   * from every _executeToolBatch exit that continues the run (the normal
+   * post-loop path AND the bulk-API-replay early return), so a click that both
+   * triggered the bulk pattern and navigated the page never silently drops the
+   * "previous page is GONE" warning.
+   */
+  _injectNavNotices(messages, navNotices, onUpdate) {
+    if (!navNotices || navNotices.length === 0) return;
+    const last = navNotices[navNotices.length - 1];
+    const noticeText =
+      `[NAVIGATION OCCURRED — the page changed as a side effect of your last action.\n` +
+      `  Was on: ${last.before}\n` +
+      `  Now on: ${last.after}\n` +
+      `  Triggered by: ${last.viaTool}\n` +
+      `\n` +
+      `The previous page is GONE. Any plan you had for that page no longer applies. ` +
+      `DO NOT continue executing steps from the previous page's plan — those elements no longer exist. ` +
+      `STOP, take a fresh screenshot, call get_interactive_elements, decide whether this new page is what you wanted, ` +
+      `and re-plan from scratch. If this navigation was unintended, navigate back with \`navigate({url: "${last.before}"})\` and try a more specific click.]`;
+    messages.push({ role: 'user', content: noticeText });
+    onUpdate('warning', { message: 'Page navigated unexpectedly — agent notified.' });
+  }
+
+  /**
+   * Shared unsaved-changes guard for tools that leave the current page
+   * (navigate / go_back / go_forward). Leaving discards in-progress form state
+   * — attached files reset, filled fields clear — so before navigating away we
+   * probe the live DOM and block unless the caller passed force:true.
+   *
+   * Returns a blocking tool result ({ success:false, blockedUnsavedChanges })
+   * when there is meaningful unsaved state, or null when it's safe to proceed.
+   */
+  async _probeUnsavedChanges(tabId, toolName = 'navigate') {
+    try {
+      const probeCode = `
+        (() => {
+          let attachedFiles = 0;
+          for (const inp of document.querySelectorAll('input[type=file]')) {
+            if (inp.files && inp.files.length) attachedFiles += inp.files.length;
+          }
+          let dirtyFields = 0;
+          for (const el of document.querySelectorAll('input, textarea')) {
+            const t = (el.type || '').toLowerCase();
+            if (['file','hidden','submit','button','reset','search','checkbox','radio'].includes(t)) continue;
+            if (el.value && el.value !== el.defaultValue) dirtyFields++;
+          }
+          return { attachedFiles, dirtyFields };
+        })()
+      `;
+      const probeResults = await browser.tabs.executeScript(tabId, { code: probeCode });
+      const d = (probeResults && probeResults[0]) || {};
+      if (d.attachedFiles > 0 || d.dirtyFields >= 2) {
+        const parts = [];
+        if (d.attachedFiles > 0) parts.push(`${d.attachedFiles} attached file(s)`);
+        if (d.dirtyFields > 0) parts.push(`${d.dirtyFields} filled field(s)`);
+        const detail = parts.join(', ');
+        const error = toolName === 'navigate'
+          ? `Navigation blocked: the current page has unsaved changes (${detail}) that leaving will discard. Re-navigating resets forms like GitHub's "New release" page — you would lose the tag, title, and attached binaries, then have to start over. Finish the current action first (e.g. click "Publish release"). If discarding is genuinely intended, call navigate again with force:true.`
+          : `${toolName} blocked: the current page has unsaved changes (${detail}) that leaving will discard. Finish the current action first, or call ${toolName} again with force:true to discard them intentionally.`;
+        return { success: false, blockedUnsavedChanges: true, error };
+      }
+    } catch { /* probe failed (e.g. privileged page) — nothing to protect, allow navigation */ }
+    return null;
   }
 
   async _getVisibleInteractiveElements(tabId) {
@@ -737,12 +1205,19 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   async _executeToolBatch(tabId, toolCalls, messages, onUpdate, provider, partialAssistantText = null, allowedToolNames = AGENT_TOOL_NAMES, step = null) {
     let didStateChange = false;
     const navNotices = [];
+    const failedApiMutationLoopKeysThisBatch = new Set();
 
-    for (const tc of toolCalls) {
+    for (let toolIndex = 0; toolIndex < toolCalls.length; toolIndex++) {
+      const tc = toolCalls[toolIndex];
       if (this._checkAbort(tabId)) {
-        const value = partialAssistantText || '[Stopped by user]';
+        const value = '[Stopped by user before executing requested tool calls.]';
+        this._appendSyntheticToolResults(tabId, toolCalls, toolIndex, messages, onUpdate, step, () => ({
+          success: false,
+          cancelled: true,
+          error: value,
+        }));
         onUpdate('warning', { message: 'Stopped by user.' });
-        return { action: 'return', value };
+        return { action: 'abort', value };
       }
       const fnName = tc.function?.name || '';
       if (!allowedToolNames.has(fnName)) {
@@ -757,14 +1232,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         });
         continue;
       }
-      let fnArgs;
-      try {
-        fnArgs = typeof tc.function.arguments === 'string'
-          ? JSON.parse(tc.function.arguments)
-          : tc.function.arguments;
-      } catch {
-        fnArgs = {};
-      }
+      const fnArgs = this._toolCallArgsWithReplayMethod(tabId, fnName, this._toolCallArgs(tc));
 
       // Deterministic capability × origin permission gate (permission-gate.js).
       // Maps the tool to a capability and requires a (capability, host) grant —
@@ -775,6 +1243,20 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // both types AND submits, so it needs a TYPE grant and a CLICK grant.
       const capabilities = capabilitiesFor(fnName, fnArgs);
       await this._ensureGateSetting();
+      if (isNetworkMutation(fnName, fnArgs) && !this.apiAllowedTabs.has(tabId)) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: JSON.stringify({
+            success: false,
+            denied: true,
+            requiresApiAllow: true,
+            error: `API mutations via ${fnName} require the user to enable /allow-api for this conversation. Do not retry this mutating API call unless the user enables /allow-api; continue through the visible UI or ask the user to type /allow-api.`,
+          }),
+        });
+        onUpdate('warning', { message: 'API mutation blocked until /allow-api is enabled.' });
+        continue;
+      }
       const scheduledPolicy = this.scheduledRunPolicies.get(tabId);
       const scheduledBypassesGate = scheduledPolicy?.requireConsequentialConfirmation === false;
       if (capabilities.length && !this._skipPermissionGate && !scheduledBypassesGate) {
@@ -807,8 +1289,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           if (aborted || blocked) break;
         }
         if (aborted) {
+          const value = '[Stopped by user before executing requested tool calls.]';
+          this._appendSyntheticToolResults(tabId, toolCalls, toolIndex, messages, onUpdate, step, () => ({
+            success: false,
+            cancelled: true,
+            error: value,
+          }));
           onUpdate('warning', { message: 'Stopped by user.' });
-          return { action: 'return', value: partialAssistantText || '[Stopped by user]' };
+          return { action: 'abort', value };
         }
         if (failClosed) {
           // Target host couldn't be identified (e.g. an iframe action with no
@@ -846,27 +1334,18 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       onUpdate('tool_call', { name: fnName, args: fnArgs });
       const _toolStart = Date.now();
       const toolResult = await this.executeTool(tabId, fnName, fnArgs, onUpdate);
-      try {
-        const runId = this.currentRunId.get(tabId);
-        if (runId) {
-          await trace.recordToolCall(runId, step, {
-            name: fnName, args: fnArgs, result: toolResult,
-            latencyMs: Date.now() - _toolStart,
-          });
-        }
-      } catch {}
-      if (!toolResult?.done) {
-        onUpdate('tool_result', { name: fnName, result: toolResult });
-      }
+      const _toolLatency = Date.now() - _toolStart;
 
       // Pin any durable download handle this tool produced, so a later
       // read survives context compaction even if the model never calls
       // scratchpad_write itself — the failure that made it invent file paths.
       this._pinDownloadHandles(tabId, fnName, toolResult);
+      const replayTracking = this._trackBulkApiReplayResult(tabId, fnName, fnArgs, toolResult);
 
       let progressObserved = null;
       let progressAuto = null;
       let progressWarning = '';
+      let bulkApiShortcut = null;
       if (toolResult && typeof toolResult === 'object' && !toolResult.done) {
         progressObserved = await this._recordProgressObservation(tabId, fnName, toolResult);
         progressAuto = this._autoRecordProgressAction(tabId, fnName, fnArgs, toolResult);
@@ -883,12 +1362,44 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       if (Agent.NAV_PRONE_TOOLS.has(fnName) && beforeUrl && !toolResult?.error) {
         await new Promise(r => setTimeout(r, 200));
         const afterUrl = await this._currentUrl(tabId);
-        const beforeNorm = this._normalizeUrl(beforeUrl);
-        const afterNorm = this._normalizeUrl(afterUrl);
-        if (beforeNorm && afterNorm && beforeNorm !== afterNorm && fnName !== 'navigate') {
+        const beforeNorm = this._normalizeUrlPath(beforeUrl);
+        const afterNorm = this._normalizeUrlPath(afterUrl);
+        if (beforeNorm && afterNorm && beforeNorm !== afterNorm && !Agent.NAV_TOOLS.has(fnName)) {
           navNotices.push({ before: beforeUrl, after: afterUrl, viaTool: fnName });
         }
       }
+      if (toolResult && typeof toolResult === 'object' && !toolResult.done) {
+        bulkApiShortcut = this._detectBulkApiMutationShortcut(tabId, fnName, fnArgs, toolResult, {
+          startedAt: _toolStart,
+          endedAt: Date.now(),
+          pageUrl: beforeUrl,
+        });
+        if (bulkApiShortcut) {
+          toolResult.bulkApiMutationPattern = {
+            action: bulkApiShortcut.action,
+            method: bulkApiShortcut.method,
+            requestShape: bulkApiShortcut.requestShape,
+            count: bulkApiShortcut.count,
+            replayRequestId: bulkApiShortcut.replayRequestId,
+            replayHasBody: bulkApiShortcut.replayHasBody,
+            replayHeaderNames: bulkApiShortcut.replayHeaderNames,
+            apiAllowed: bulkApiShortcut.apiAllowed,
+          };
+        }
+      }
+
+      if (!toolResult?.done) {
+        onUpdate('tool_result', { name: fnName, result: toolResult });
+      }
+      try {
+        const runId = this.currentRunId.get(tabId);
+        if (runId) {
+          await trace.recordToolCall(runId, step, {
+            name: fnName, args: fnArgs, result: toolResult,
+            latencyMs: _toolLatency,
+          });
+        }
+      } catch {}
 
       if (toolResult && toolResult.done) {
         const progressBlock = this._shouldBlockDoneForProgress(tabId)
@@ -924,7 +1435,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       }
 
       // Loop detection — general + coordinate-specific. Strongest wins.
-      const loopCheck = this._checkLoop(tabId, fnName, fnArgs, toolResult);
+      let loopCheck = { kind: 'none' };
+      const loopKey = this._loopCallKey(fnName, fnArgs, toolResult);
+      const failedApiMutation = this._isFailedApiMutationForLoop(fnName, fnArgs, toolResult);
+      if (!failedApiMutation || !failedApiMutationLoopKeysThisBatch.has(loopKey)) {
+        if (failedApiMutation) failedApiMutationLoopKeysThisBatch.add(loopKey);
+        loopCheck = this._checkLoop(tabId, fnName, fnArgs, toolResult);
+      }
       let coordCheck = { kind: 'none' };
       if (fnName === 'click' && fnArgs?.x != null && fnArgs?.y != null) {
         coordCheck = this._checkCoordClickLoop(tabId, fnArgs.x, fnArgs.y);
@@ -981,6 +1498,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       if (progressWarning) {
         resultContent += '\n' + progressWarning;
       }
+      if (bulkApiShortcut) {
+        resultContent += '\n' + this._formatBulkApiMutationWarning(bulkApiShortcut);
+        onUpdate('warning', { message: 'Bulk API mutation pattern detected.' });
+      }
+      if (replayTracking?.failed) {
+        resultContent += `\n[BULK API REPLAY FAILED: Direct API replay for ${replayTracking.method} ${replayTracking.requestShape} returned failure. Fall back to the visible UI for this request shape and do not keep retrying fetch_url.]`;
+        onUpdate('warning', { message: 'Bulk API replay failed; falling back to UI for this shape.' });
+      }
       if (effectiveKind === 'nudge') {
         resultContent = resultContent + '\n' + nudgeWarning;
         onUpdate('warning', { message: 'Loop detected — nudging the agent.' });
@@ -1025,26 +1550,53 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         this._clearLoopState(tabId);
         return { action: 'return', value: stopMessage };
       }
+      if (bulkApiShortcut?.apiAllowed && bulkApiShortcut.replayRequestId && toolIndex < toolCalls.length - 1) {
+        const instruction = this._bulkApiReplayInstruction(bulkApiShortcut);
+        const skippedCount = this._appendSyntheticToolResults(
+          tabId,
+          toolCalls,
+          toolIndex + 1,
+          messages,
+          onUpdate,
+          step,
+          (skippedName) => ({
+            success: false,
+            skipped: true,
+            skippedBecause: 'bulk_api_replay_available',
+            error: `Skipped ${skippedName} because ${instruction}`,
+            bulkApiReplay: {
+              action: bulkApiShortcut.action,
+              method: bulkApiShortcut.method,
+              requestShape: bulkApiShortcut.requestShape,
+              replayRequestId: bulkApiShortcut.replayRequestId,
+              replayHasBody: bulkApiShortcut.replayHasBody,
+              replayHeaderNames: bulkApiShortcut.replayHeaderNames,
+              apiAllowed: bulkApiShortcut.apiAllowed,
+            },
+          }),
+        );
+        onUpdate('warning', { message: `Bulk API replay available; paused ${skippedCount} remaining tool call(s).` });
+        const runId = this.currentRunId.get(tabId);
+        if (runId) {
+          trace.recordNote(runId, step, 'bulk_api_replay_batch_interrupted', {
+            skippedCount,
+            method: bulkApiShortcut.method,
+            requestShape: bulkApiShortcut.requestShape,
+            replayRequestId: bulkApiShortcut.replayRequestId,
+          });
+        }
+        // A click can both trigger the bulk pattern AND navigate the page; this
+        // early return skips the post-loop flush, so emit any nav notices here
+        // or the model would replay against stale URLs from the prior page.
+        this._injectNavNotices(messages, navNotices, onUpdate);
+        return { action: 'continue' };
+      }
       if (this._shouldAutoScreenshot(fnName) && !toolResult?.error) {
         didStateChange = true;
       }
     }
 
-    if (navNotices.length > 0) {
-      const last = navNotices[navNotices.length - 1];
-      const noticeText =
-        `[NAVIGATION OCCURRED — the page changed as a side effect of your last action.\n` +
-        `  Was on: ${last.before}\n` +
-        `  Now on: ${last.after}\n` +
-        `  Triggered by: ${last.viaTool}\n` +
-        `\n` +
-        `The previous page is GONE. Any plan you had for that page no longer applies. ` +
-        `DO NOT continue executing steps from the previous page's plan — those elements no longer exist. ` +
-        `STOP, take a fresh screenshot, call get_interactive_elements, decide whether this new page is what you wanted, ` +
-        `and re-plan from scratch. If this navigation was unintended, navigate back with \`navigate({url: "${last.before}"})\` and try a more specific click.]`;
-      messages.push({ role: 'user', content: noticeText });
-      onUpdate('warning', { message: 'Page navigated unexpectedly — agent notified.' });
-    }
+    this._injectNavNotices(messages, navNotices, onUpdate);
 
     // Auto-screenshot after state change. Capture if either the main
     // provider supports images, or a dedicated vision model is configured
@@ -1722,48 +2274,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   static _extractFirstJsonObject(raw) {
-    const text = String(raw || '').trim();
-    if (!text) return null;
-    const candidates = [];
-    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    if (fenced) candidates.push(fenced[1].trim());
-    candidates.push(text);
-
-    for (const candidate of candidates) {
-      const start = candidate.indexOf('{');
-      if (start < 0) continue;
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      for (let i = start; i < candidate.length; i++) {
-        const ch = candidate[i];
-        if (inString) {
-          if (escaped) {
-            escaped = false;
-          } else if (ch === '\\') {
-            escaped = true;
-          } else if (ch === '"') {
-            inString = false;
-          }
-          continue;
-        }
-        if (ch === '"') {
-          inString = true;
-        } else if (ch === '{') {
-          depth += 1;
-        } else if (ch === '}') {
-          depth -= 1;
-          if (depth === 0) {
-            try {
-              return JSON.parse(candidate.slice(start, i + 1));
-            } catch (_) {
-              break;
-            }
-          }
-        }
-      }
-    }
-    return null;
+    return extractFirstJsonObject(raw);
   }
 
   static _normalizeVisibleMediaLocation(raw, viewport = {}) {
@@ -2015,7 +2526,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       : '';
 
     if (this.apiAllowedTabs.has(tabId) && !this.apiAllowedInjected.has(tabId)) {
-      contextLine += `[USER OVERRIDE — /allow-api: For this conversation the user has explicitly authorized you to use API mutations (POST/PUT/PATCH/DELETE via fetch_url, or fetch() with mutation methods via execute_js) when you judge API to be more reliable than UI for a specific step. The default UI-first rule still applies — only reach for the API when UI has actually failed or is genuinely unworkable. Before any destructive API call, state the URL, method, and payload in plain text in your response so the user can see what you're about to do.]\n\n`;
+      contextLine += `[USER OVERRIDE — /allow-api: For this conversation the user has explicitly authorized you to use API mutations (POST/PUT/PATCH/DELETE via fetch_url, or fetch() with mutation methods via execute_js) when you judge API to be more reliable than UI for a specific step. The default UI-first rule still applies — reach for the API when UI has failed/is genuinely unworkable, or when WebBrain reports a [BULK API MUTATION PATTERN] for repeated successful same-kind UI actions. Before any destructive API call, state the URL, method, and payload in plain text in your response so the user can see what you're about to do.]\n\n`;
       this.apiAllowedInjected.add(tabId);
     }
 
@@ -2084,6 +2595,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   abort(tabId) {
     this.abortFlags.set(tabId, true);
     this._cancelClarifications(tabId, 'aborted by user');
+    this._cancelPendingPlans(tabId, 'aborted by user');
   }
 
   /**
@@ -2112,6 +2624,335 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       try { entry.resolve({ cancelled: true, reason }); } catch {}
     }
     this._pendingClarifications.delete(tabId);
+  }
+
+  submitPlanResponse(tabId, planId, action, editedText = '') {
+    const tabPending = this._pendingPlans.get(tabId);
+    if (!tabPending) return false;
+    const entry = tabPending.get(planId);
+    if (!entry) return false;
+    try {
+      entry.resolve({
+        action: String(action || 'reject'),
+        editedText: String(editedText || '').trim(),
+      });
+    } catch {}
+    return true;
+  }
+
+  _cancelPendingPlans(tabId, reason) {
+    const tabPending = this._pendingPlans.get(tabId);
+    if (!tabPending) return;
+    for (const [, entry] of tabPending) {
+      try { entry.resolve({ action: 'reject', cancelled: true, reason }); } catch {}
+    }
+    this._pendingPlans.delete(tabId);
+  }
+
+  async _waitForPlanReview(tabId, planId, plan, markdown, onUpdate) {
+    const PLAN_REVIEW_TIMEOUT_MS = 10 * 60 * 1000;
+    const tabPending = this._pendingPlans.get(tabId) || new Map();
+    this._pendingPlans.set(tabId, tabPending);
+    const responsePromise = new Promise((resolve) => {
+      tabPending.set(planId, { resolve, ts: Date.now() });
+    });
+    let timeoutId = null;
+    const timeoutPromise = new Promise((resolve) => {
+      timeoutId = setTimeout(() => resolve({
+        action: 'reject',
+        cancelled: true,
+        reason: 'plan review timed out',
+      }), PLAN_REVIEW_TIMEOUT_MS);
+    });
+    if (typeof onUpdate === 'function') {
+      try {
+        onUpdate('plan_review', { planId, plan, markdown });
+      } catch {}
+    }
+    try {
+      return await Promise.race([responsePromise, timeoutPromise]);
+    } finally {
+      // Cancel the 10-minute timer once the race settles so a fast approval
+      // doesn't leave an armed timer (and its captured resolve/plan closure)
+      // alive for up to 10 minutes.
+      if (timeoutId != null) clearTimeout(timeoutId);
+      tabPending.delete(planId);
+      if (!tabPending.size) this._pendingPlans.delete(tabId);
+    }
+  }
+
+  /**
+   * Fetch the tab's url/title, tolerating a missing tab. Returns empty strings
+   * on failure so callers never have to guard. Centralized so the planner gate
+   * and trace start can share one fetch instead of hitting browser.tabs.get twice.
+   */
+  async _getTabUrlTitle(tabId) {
+    try {
+      const tab = await browser.tabs.get(tabId);
+      return { tabUrl: tab?.url || '', tabTitle: tab?.title || '' };
+    } catch {
+      return { tabUrl: '', tabTitle: '' };
+    }
+  }
+
+  async _startTraceRun(tabId, userMessage, mode, provider, tabInfo = null) {
+    const { tabUrl, tabTitle } = tabInfo || await this._getTabUrlTitle(tabId);
+    // Tracing must never break a run: a recorder failure returns null and the
+    // run proceeds untraced rather than throwing out of the message path.
+    let runId = null;
+    try {
+      runId = await trace.startRun({
+        model: provider?.model,
+        providerId: provider?.name,
+        providerClass: provider?.constructor?.name,
+        userMessage: typeof userMessage === 'string' ? userMessage : JSON.stringify(userMessage).slice(0, 2000),
+        tabUrl,
+        tabTitle,
+        mode,
+        conversationId: this.conversationIds.get(tabId) || null,
+      });
+    } catch {
+      return null;
+    }
+    if (runId) this.currentRunId.set(tabId, runId);
+    return runId;
+  }
+
+  /**
+   * End a trace run and clear its currentRunId, tolerating recorder errors.
+   * No-op when runId is falsy. Shared by the streaming and non-streaming
+   * message paths so the teardown stays in one place. (#9)
+   */
+  _endTraceRun(tabId, runId, status, finalContent) {
+    if (!runId) return;
+    try {
+      const r = trace.endRun(runId, { status, finalContent });
+      if (r && typeof r.then === 'function') r.catch(() => {});
+    } catch {}
+    this.currentRunId.delete(tabId);
+  }
+
+  /**
+   * Build a compact, single-line-per-turn digest of recent conversation so the
+   * planner can resolve follow-up references ("continue", "open the first
+   * result"). Skips system / scratchpad / progress-ledger bookkeeping turns.
+   */
+  _buildPlannerHistoryDigest(messages, maxChars = 1500) {
+    if (!Array.isArray(messages) || messages.length === 0) return '';
+    const lines = [];
+    for (const m of messages.slice(-10)) {
+      if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
+      if (this._isScratchpadMessage(m) || this._isProgressLedgerMessage(m)) continue;
+      const text = sanitizePlannerText(userMessageToText(m), 300, { collapseWhitespace: true });
+      if (!text) continue;
+      lines.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${text}`);
+    }
+    if (lines.length === 0) return '';
+    const digest = lines.join('\n');
+    return digest.length > maxChars ? `…${digest.slice(digest.length - maxChars)}` : digest;
+  }
+
+  _normalizePlanBeforeActMode(mode) {
+    return mode === 'strict' || mode === 'off' || mode === 'try' ? mode : 'off';
+  }
+
+  setPlanBeforeActMode(mode) {
+    const normalized = this._normalizePlanBeforeActMode(mode);
+    this.planBeforeActMode = normalized;
+    this.planBeforeAct = normalized !== 'off';
+    return normalized;
+  }
+
+  _plannerMode() {
+    const mode = this._normalizePlanBeforeActMode(this.planBeforeActMode);
+    if (mode === 'off' || this.planBeforeAct === false) return 'off';
+    return mode;
+  }
+
+  _plannerIsEnabled() {
+    return this._plannerMode() !== 'off';
+  }
+
+  async _maybeRunPlannerGate(tabId, messages, enriched, onUpdate, mode, costState, runId, tabInfo = null) {
+    const plannerMode = mode === 'act' ? this._plannerMode() : 'off';
+    const runPlanner = plannerMode !== 'off';
+
+    // Snapshot prior turns for the planner digest BEFORE appending, then always
+    // record the user's turn first so a planner failure (or a throw while
+    // building the digest) can never drop the just-typed message from the
+    // transcript.
+    const priorMessages = runPlanner ? messages.slice() : null;
+    messages.push(enriched);
+    if (!runPlanner) return { proceed: true };
+
+    const historyDigest = this._buildPlannerHistoryDigest(priorMessages);
+    const gate = await this._runPlannerGate(tabId, enriched, onUpdate, costState, runId, historyDigest, tabInfo, plannerMode);
+    if (!gate.proceed) {
+      messages.push({ role: 'assistant', content: gate.message || 'Task cancelled.' });
+      return { proceed: false, message: gate.message || 'Task cancelled.', reason: gate.reason };
+    }
+
+    if (gate.approvedScratchpadText) {
+      const scratchResult = this._scratchpadWrite(tabId, { text: gate.approvedScratchpadText });
+      if (!scratchResult?.success) {
+        onUpdate('warning', { message: scratchResult?.error || 'Could not pin plan to scratchpad.' });
+      } else {
+        const scratchIdx = this._findScratchpadIndex(messages);
+        if (scratchIdx >= 0 && scratchIdx < messages.length - 1) {
+          const scratchMsg = messages[scratchIdx];
+          messages.splice(scratchIdx, 1);
+          messages.push(scratchMsg);
+        }
+        // Note: the "Plan approved — running…" confirmation is rendered locally
+        // by submitPlanReview in the sidepanel, so there's no plan_approved
+        // agent_update to emit here (no handler consumed it).
+      }
+    }
+    return { proceed: true };
+  }
+
+  _plannerChatOptions(provider, retry = false) {
+    const opts = {
+      temperature: retry ? 0.1 : 0.3,
+      maxTokens: 4096,
+    };
+    const providerName = String(provider?.config?.providerName || provider?.name || '').toLowerCase();
+    // vLLM/SGLang expose Qwen-style chat_template_kwargs; disabling thinking
+    // keeps planner calls from spending the whole output budget on hidden
+    // reasoning and returning empty final content.
+    if (providerName === 'vllm' || providerName === 'sglang') {
+      opts.extraBody = { chat_template_kwargs: { enable_thinking: false } };
+    }
+    return opts;
+  }
+
+  _plannerPrefersNoThinkPrompt(provider) {
+    const model = String(provider?.model || provider?.config?.model || '').toLowerCase();
+    return /\b(qwen[-_ ]?3|qwq)\b/.test(model) || /deepseek[-_ ]?r1/.test(model);
+  }
+
+  _plannerRepairMessages(plannerMessages) {
+    return [
+      ...plannerMessages,
+      {
+        role: 'user',
+        content:
+          '/no_think\n' +
+          'The previous planner attempt did not return a parseable final JSON object. ' +
+          'Re-read the task above and output exactly one JSON object matching the schema. ' +
+          'No prose, no markdown, no tool calls, and no reasoning text.',
+      },
+    ];
+  }
+
+  async _runPlannerGate(tabId, enriched, onUpdate, costState, runId = null, historyDigest = '', tabInfo = null, plannerMode = this._plannerMode()) {
+    const { tabUrl, tabTitle } = tabInfo || await this._getTabUrlTitle(tabId);
+    const strictPlanner = this._normalizePlanBeforeActMode(plannerMode) === 'strict';
+
+    onUpdate('thinking', { step: 0, note: 'Planning…' });
+
+    const provider = this.providerManager.getActive();
+    const plannerMessages = buildPlannerMessages(enriched, tabUrl, tabTitle, historyDigest, {
+      noThink: this._plannerPrefersNoThinkPrompt(provider),
+      allowApi: this.apiAllowedTabs.has(tabId),
+    });
+    const plannerStep = 0;
+
+    try {
+      if (runId) {
+        try {
+          await trace.recordLLMRequest(runId, plannerStep, {
+            providerClass: provider?.constructor?.name,
+            model: provider?.model,
+            messageCount: plannerMessages.length,
+            toolsCount: 0,
+            phase: 'planner',
+          });
+        } catch {}
+      }
+      const _llmStart = Date.now();
+      let result = await this._chatWithCostAllowance(
+        provider,
+        plannerMessages,
+        this._plannerChatOptions(provider),
+        costState,
+      );
+      if (runId) {
+        try {
+          await trace.recordLLMResponse(runId, plannerStep, {
+            content: result.content,
+            toolCalls: null,
+            usage: result.usage,
+            latencyMs: Date.now() - _llmStart,
+            model: provider?.model,
+            phase: 'planner',
+          });
+        } catch {}
+      }
+      if (this._checkAbort(tabId)) {
+        return { proceed: false, message: '[Stopped by user]' };
+      }
+      let plan = parsePlanFromContent(result.content);
+      // Retry whenever the first attempt yields no parseable plan — empty
+      // output, thinking-only output, OR non-JSON prose ("Sure, here's the
+      // plan…"). The repair prompt exists precisely to coerce JSON out of that
+      // prose case, so it must not be gated on emptiness/reasoning. (#1)
+      if (!plan) {
+        onUpdate('thinking', { step: 0, note: 'Planning… retrying JSON output' });
+        result = await this._chatWithCostAllowance(
+          provider,
+          this._plannerRepairMessages(plannerMessages),
+          this._plannerChatOptions(provider, true),
+          costState,
+        );
+        plan = parsePlanFromContent(result.content);
+      }
+      // The retry above is a paid LLM call that does not honor the abort flag
+      // itself; re-check before pinning the plan or showing the review card so
+      // a Stop pressed during the retry isn't ignored until after approval. (#2)
+      if (this._checkAbort(tabId)) {
+        return { proceed: false, message: '[Stopped by user]' };
+      }
+      if (!plan) {
+        if (!strictPlanner) {
+          onUpdate('warning', { message: 'Planner could not produce a valid structured plan; continuing without a pinned plan.' });
+          return { proceed: true };
+        }
+        const msg = 'Strict Planning is enabled but the planner could not produce a valid structured plan. Task cancelled — no actions were taken.';
+        onUpdate('warning', { message: msg });
+        return { proceed: false, message: msg };
+      }
+
+      const planId = `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      const markdown = formatPlanMarkdown(plan);
+      const scheduledPolicy = this.scheduledRunPolicies.get(tabId);
+      if (scheduledPolicy?.autoApprovePlanReview === true) {
+        const approvedScratchpadText = formatPlanScratchpad(plan, '', markdown);
+        return { proceed: true, approvedScratchpadText, planId };
+      }
+      const choice = await this._waitForPlanReview(tabId, planId, plan, markdown, onUpdate);
+
+      if (this._checkAbort(tabId)) {
+        return { proceed: false, message: '[Stopped by user]' };
+      }
+      if (choice?.cancelled || choice?.action === 'reject') {
+        return { proceed: false, message: 'Task cancelled — plan was not approved.' };
+      }
+
+      const approvedScratchpadText = formatPlanScratchpad(plan, choice?.editedText, markdown);
+      return { proceed: true, approvedScratchpadText, planId };
+    } catch (e) {
+      if (this._isCostAllowanceError(e)) {
+        return { proceed: false, message: e.message, reason: 'cost_limit' };
+      }
+      if (!strictPlanner) {
+        onUpdate('warning', { message: `Planning failed (${e.message || 'unknown error'}); continuing without a pinned plan.` });
+        return { proceed: true };
+      }
+      const msg = `Strict Planning is enabled but planning failed (${e.message || 'unknown error'}). Task cancelled — no actions were taken.`;
+      onUpdate('warning', { message: msg });
+      return { proceed: false, message: msg };
+    }
   }
 
   /**
@@ -2255,6 +3096,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    */
   clearConversation(tabId) {
     this._cancelClarifications(tabId, 'conversation cleared');
+    this._cancelPendingPlans(tabId, 'conversation cleared');
     this.conversations.delete(tabId);
     this.progressLedgers.delete(tabId);
     this.progressPageScopes.delete(tabId);
@@ -2270,6 +3112,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   _cleanupTab(tabId, { preserveRunGuard = false } = {}) {
+    this._cancelPendingPlans(tabId, 'tab closed');
     this._isPdfTabCache.delete(tabId);
     this.progressPageScopes.delete(tabId);
     this.progressSessions.delete(tabId);
@@ -2777,11 +3620,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   _messageText(content) {
-    if (typeof content === 'string') return content;
-    if (Array.isArray(content)) {
-      return content.map(part => typeof part?.text === 'string' ? part.text : '').filter(Boolean).join('\n');
-    }
-    return '';
+    return messageContentToText(content);
   }
 
   _originalTaskText(tabId) {
@@ -3665,6 +4504,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         if (parsed.url) return `now on ${this._truncate(parsed.url, 110)}`;
         break;
       }
+      case 'go_back':
+      case 'go_forward': {
+        if (parsed.blockedUnsavedChanges) return `${name} blocked: unsaved changes on current page (use force:true to discard)`;
+        if (parsed.success === false) return `${name} failed: ${this._truncate(parsed.error || '', 110)}`;
+        if (parsed.url) return `went ${parsed.direction || (name === 'go_back' ? 'back' : 'forward')} to ${this._truncate(parsed.url, 110)}`;
+        break;
+      }
       case 'upload_file': {
         if (parsed.success === false) return `upload failed: ${this._truncate(parsed.error || '', 110)}`;
         if (parsed.attached) return `uploaded ${this._truncate(parsed.attached.name || '', 60)} (${parsed.attached.size} bytes)`;
@@ -4036,41 +4882,82 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // can't tell its uploads landed will renavigate and destroy its own
       // progress. Detect meaningful unsaved state and block unless forced.
       if (!args.force) {
-        try {
-          const probeCode = `
-            (() => {
-              let attachedFiles = 0;
-              for (const inp of document.querySelectorAll('input[type=file]')) {
-                if (inp.files && inp.files.length) attachedFiles += inp.files.length;
-              }
-              let dirtyFields = 0;
-              for (const el of document.querySelectorAll('input, textarea')) {
-                const t = (el.type || '').toLowerCase();
-                if (['file','hidden','submit','button','reset','search','checkbox','radio'].includes(t)) continue;
-                if (el.value && el.value !== el.defaultValue) dirtyFields++;
-              }
-              return { attachedFiles, dirtyFields };
-            })()
-          `;
-          const probeResults = await browser.tabs.executeScript(tabId, { code: probeCode });
-          const d = (probeResults && probeResults[0]) || {};
-          if (d.attachedFiles > 0 || d.dirtyFields >= 2) {
-            const parts = [];
-            if (d.attachedFiles > 0) parts.push(`${d.attachedFiles} attached file(s)`);
-            if (d.dirtyFields > 0) parts.push(`${d.dirtyFields} filled field(s)`);
-            return {
-              success: false,
-              blockedUnsavedChanges: true,
-              error: `Navigation blocked: the current page has unsaved changes (${parts.join(', ')}) that leaving will discard. Re-navigating resets forms like GitHub's "New release" page — you would lose the tag, title, and attached binaries, then have to start over. Finish the current action first (e.g. click "Publish release"). If discarding is genuinely intended, call navigate again with force:true.`,
-            };
-          }
-        } catch { /* probe failed (e.g. privileged page) — allow navigation */ }
+        const blocked = await this._probeUnsavedChanges(tabId, 'navigate');
+        if (blocked) return blocked;
       }
 
       await browser.tabs.update(tabId, { url: args.url });
       // Wait a moment for navigation
       await new Promise(r => setTimeout(r, 2000));
       return { success: true, url: args.url };
+    }
+
+    if (name === 'go_back' || name === 'go_forward') {
+      const direction = name === 'go_back' ? 'back' : 'forward';
+      // Clamp steps to a sane range; default to a single entry.
+      let steps = Math.floor(Number(args.steps));
+      if (!Number.isFinite(steps) || steps < 1) steps = 1;
+      if (steps > 10) steps = 10;
+
+      let beforeUrl = '';
+      try {
+        const tab = await browser.tabs.get(tabId);
+        beforeUrl = tab?.url || '';
+      } catch {}
+
+      // Internal pages (about:, view-source, extension) have no meaningful
+      // web session history to walk.
+      if (/^(about|moz-extension|view-source|data|chrome):/i.test(beforeUrl)) {
+        return { success: false, error: `${name}: history navigation is not available on internal pages (${beforeUrl || 'unknown'}).` };
+      }
+
+      // Same unsaved-changes guard as navigate — going back/forward leaves the
+      // current page and discards attached files / filled fields.
+      if (!args.force) {
+        const blocked = await this._probeUnsavedChanges(tabId, name);
+        if (blocked) return blocked;
+      }
+
+      // Drive history from the page context (CSP-safe; this is the extension's
+      // injected code, not page eval).
+      let probe = null;
+      try {
+        const delta = direction === 'back' ? -steps : steps;
+        const code = `
+          (() => {
+            const before = location.href;
+            history.go(${delta});
+            return { before };
+          })()
+        `;
+        const results = await browser.tabs.executeScript(tabId, { code });
+        probe = (results && results[0]) || null;
+      } catch (e) {
+        return { success: false, error: `${name}: cannot navigate history on this page (${e.message}).` };
+      }
+      if (!probe) {
+        return { success: false, error: `${name}: history navigation did not run on this page.` };
+      }
+
+      // history.go() commits asynchronously (including bfcache restores), so
+      // wait briefly, then confirm the URL actually changed. If it didn't,
+      // there was no entry in that direction — report failure rather than a
+      // misleading success the model would build on.
+      await new Promise(r => setTimeout(r, 1500));
+      let afterUrl = probe.before;
+      try {
+        const tab = await browser.tabs.get(tabId);
+        if (tab?.url) afterUrl = tab.url;
+      } catch {}
+
+      if (this._normalizeUrl(afterUrl) === this._normalizeUrl(probe.before)) {
+        const dirWord = direction === 'back' ? 'earlier' : 'later';
+        return {
+          success: false,
+          error: `${name}: no ${dirWord} entry in this tab's history (the page did not change).`,
+        };
+      }
+      return { success: true, url: afterUrl, previousUrl: probe.before, direction, steps };
     }
 
     if (name === 'new_tab') {
@@ -5194,9 +6081,42 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     await this._manageContext(tabId, messages, onUpdate, costState);
 
     const enriched = await this._enrichUserMessageWithCurrentPage(tabId, messages, userMessage, costState);
-    messages.push(enriched);
 
     const provider = this.providerManager.getActive();
+
+    // Clear any stale abort flag before any LLM work. The planner gate makes a
+    // paid LLM call and checks/consumes this flag, so a leftover flag from a
+    // prior run must not cancel this fresh task. (#1)
+    this.abortFlags.delete(tabId);
+
+    let runId = null;
+    let finalResponse = '';
+    let _traceStatus = 'done';
+
+    // Everything that can throw — trace start, planner gate, run setup, and the
+    // agent loop — runs inside this try so the finally always ends the trace
+    // run and clears currentRunId, even on an early throw during setup. (#2)
+    try {
+    // When the planner gate runs, start the trace up-front so the planner LLM
+    // call is recorded under this run; otherwise it's started just before the
+    // loop. _startTraceRun is the single source of truth (no duplicate tab
+    // fetch / startRun payload). (#6)
+    let plannerTabInfo = null;
+    if (mode === 'act' && this._plannerIsEnabled()) {
+      // Fetch the tab url/title once and reuse it for both the trace start and
+      // the planner gate, instead of fetching the same tab twice.
+      plannerTabInfo = await this._getTabUrlTitle(tabId);
+      runId = await this._startTraceRun(tabId, userMessage, mode, provider, plannerTabInfo);
+    }
+
+    const gateOutcome = await this._maybeRunPlannerGate(
+      tabId, messages, enriched, onUpdate, mode, costState, runId, plannerTabInfo,
+    );
+    if (!gateOutcome.proceed) {
+      _traceStatus = gateOutcome.reason === 'cost_limit' ? 'cost_limit' : 'cancelled';
+      return (finalResponse = gateOutcome.message || 'Task cancelled.');
+    }
+
     if (mode === 'act') {
       await this._ensureProgressSessionForCurrentTask(tabId, { provider, costState });
     }
@@ -5205,38 +6125,19 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     const allowedToolNames = new Set(tools.map(t => t.function.name));
     const plannerTemperature = mode === 'act' ? 0.15 : 0.3;
     let steps = 0;
-    let finalResponse = '';
-    let _traceStatus = 'done';
     // Tracks whether we've already nudged the model after an empty
     // (no-content + no-tool-call) response. Prevents an infinite
     // empty→nudge→empty→nudge cycle.
     let emptyOutputRecoveryAttempted = false;
 
-    this.abortFlags.delete(tabId); // clear any stale abort
+    if (!runId) {
+      runId = await this._startTraceRun(tabId, userMessage, mode, provider);
+    }
 
-    // Start trace run (gated inside recorder by tracingEnabled setting).
-    let runId = null;
-    try {
-      let tabUrl = '', tabTitle = '';
-      try {
-        const tab = await browser.tabs.get(tabId);
-        tabUrl = tab?.url || ''; tabTitle = tab?.title || '';
-      } catch {}
-      runId = await trace.startRun({
-        model: provider.model,
-        providerId: provider.name,
-        providerClass: provider.constructor.name,
-        userMessage: typeof userMessage === 'string' ? userMessage : JSON.stringify(userMessage).slice(0, 2000),
-        tabUrl, tabTitle, mode,
-        conversationId: this.conversationIds.get(tabId) || null,
-      });
-      if (runId) this.currentRunId.set(tabId, runId);
-    } catch {}
-
-    try {
     while (steps < this.maxSteps) {
       if (this._checkAbort(tabId)) {
         finalResponse = finalResponse || '[Stopped by user]';
+        _traceStatus = 'cancelled';
         onUpdate('warning', { message: 'Stopped by user.' });
         messages.push({ role: 'assistant', content: finalResponse });
         break;
@@ -5333,7 +6234,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
       // Check for abort after LLM response
       if (this._checkAbort(tabId)) {
-        finalResponse = result?.content || '[Stopped by user]';
+        const hadToolCalls = !!(result?.toolCalls && result.toolCalls.length > 0);
+        finalResponse = hadToolCalls
+          ? '[Stopped by user before executing requested tool calls.]'
+          : '[Stopped by user]';
+        _traceStatus = 'cancelled';
         onUpdate('warning', { message: 'Stopped by user.' });
         messages.push({ role: 'assistant', content: finalResponse });
         break;
@@ -5380,6 +6285,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         );
         if (batchResult.action === 'return') {
           finalResponse = batchResult.value;
+          return finalResponse;
+        }
+        if (batchResult.action === 'abort') {
+          finalResponse = batchResult.value;
+          _traceStatus = 'cancelled';
           return finalResponse;
         }
         continue;
@@ -5440,12 +6350,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
     return finalResponse;
     } finally {
-      try {
-        if (runId) {
-          await trace.endRun(runId, { status: _traceStatus, finalContent: finalResponse });
-          this.currentRunId.delete(tabId);
-        }
-      } catch {}
+      this._endTraceRun(tabId, runId, _traceStatus, finalResponse);
     }
   }
 
@@ -5476,9 +6381,42 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     await this._manageContext(tabId, messages, onUpdate, costState);
 
     const enriched = await this._enrichUserMessageWithCurrentPage(tabId, messages, userMessage, costState);
-    messages.push(enriched);
 
     const provider = this.providerManager.getActive();
+
+    // Clear any stale abort flag before any LLM work. The planner gate makes a
+    // paid LLM call and checks/consumes this flag, so a leftover flag from a
+    // prior run must not cancel this fresh task. (#1)
+    this.abortFlags.delete(tabId);
+
+    let runId = null;
+    let finalResponse = '';
+    let _traceStatus = 'done';
+    const finish = (response, status = _traceStatus) => {
+      finalResponse = response || '';
+      _traceStatus = status;
+      return response;
+    };
+
+    // All throwing work — trace start, planner gate, run setup, and the agent
+    // loop — runs inside this try so the finally always ends the trace run and
+    // clears currentRunId, even on an early throw during setup. (#2)
+    try {
+    let plannerTabInfo = null;
+    if (mode === 'act' && this._plannerIsEnabled()) {
+      // Fetch the tab url/title once and reuse it for both the trace start and
+      // the planner gate, instead of fetching the same tab twice.
+      plannerTabInfo = await this._getTabUrlTitle(tabId);
+      runId = await this._startTraceRun(tabId, userMessage, mode, provider, plannerTabInfo);
+    }
+
+    const gateOutcome = await this._maybeRunPlannerGate(
+      tabId, messages, enriched, onUpdate, mode, costState, runId, plannerTabInfo,
+    );
+    if (!gateOutcome.proceed) {
+      return finish(gateOutcome.message || 'Task cancelled.', gateOutcome.reason === 'cost_limit' ? 'cost_limit' : 'cancelled');
+    }
+
     if (mode === 'act') {
       await this._ensureProgressSessionForCurrentTask(tabId, { provider, costState });
     }
@@ -5490,12 +6428,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // See processMessage — used to break the empty-response→nudge cycle.
     let emptyOutputRecoveryAttempted = false;
 
-    this.abortFlags.delete(tabId);
-
     while (steps < this.maxSteps) {
       if (this._checkAbort(tabId)) {
         onUpdate('warning', { message: 'Stopped by user.' });
-        return '[Stopped by user]';
+        return finish('[Stopped by user]', 'cancelled');
       }
 
       if (steps > 0) {
@@ -5522,7 +6458,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         if (beforeCost) {
           messages.push({ role: 'assistant', content: beforeCost });
           onUpdate('warning', { message: beforeCost });
-          return beforeCost;
+          return finish(beforeCost, 'cost_limit');
         }
         let costStopMessage = '';
 
@@ -5578,7 +6514,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           if (costStopMessage) {
             messages.push({ role: 'assistant', content: costStopMessage });
             onUpdate('warning', { message: costStopMessage });
-            return costStopMessage;
+            return finish(costStopMessage, 'cost_limit');
           }
           const toolCalls = Object.values(toolCallsAccumulator);
           this._logDebug({ type: 'llm_stream_response', step: steps, content: fullText, toolCalls });
@@ -5591,7 +6527,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             tabId, toolCalls, messages, onUpdate, provider, fullText, allowedToolNames, steps
           );
           if (batchResult.action === 'return') {
-            return batchResult.value;
+            return finish(batchResult.value);
+          }
+          if (batchResult.action === 'abort') {
+            return finish(batchResult.value, 'cancelled');
           }
           continue;
         }
@@ -5603,7 +6542,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         if ((!fullText || !fullText.trim()) && costStopMessage) {
           messages.push({ role: 'assistant', content: costStopMessage });
           onUpdate('warning', { message: costStopMessage });
-          return costStopMessage;
+          return finish(costStopMessage, 'cost_limit');
         }
         if (!fullText || !fullText.trim()) {
           if (!emptyOutputRecoveryAttempted) {
@@ -5617,7 +6556,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           const failMsg = '[Agent emitted no output and no tool call, even after a recovery nudge. This usually means the task exceeded the current model\'s capability or context budget. Try a stronger model, raise the step limit in settings, or break the task into smaller parts.]';
           messages.push({ role: 'assistant', content: failMsg });
           onUpdate('warning', { message: failMsg });
-          return failMsg;
+          return finish(failMsg, 'empty_output');
         }
         emptyOutputRecoveryAttempted = false;
         const progressFinalBlock = this._plainFinalProgressBlock(tabId);
@@ -5632,7 +6571,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           fullText = `${fullText}\n\n${costStopMessage}`;
         }
         messages.push({ role: 'assistant', content: fullText });
-        return fullText;
+        return finish(fullText);
 
       } catch (e) {
         this._logDebug({ type: 'llm_stream_error', step: steps, error: e.message });
@@ -5645,7 +6584,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         onUpdate('error', { message: e.message });
         const errMsg = `Error: ${e.message}`;
         messages.push({ role: 'assistant', content: errMsg });
-        return errMsg;
+        return finish(errMsg, 'error');
       }
     }
 
@@ -5655,6 +6594,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     const summary = this._buildStepLimitSummary(messages, steps);
     messages.push({ role: 'assistant', content: summary });
     onUpdate('text', { content: summary });
-    return summary;
+    return finish(summary, 'max_steps');
+    } finally {
+      this._endTraceRun(tabId, runId, _traceStatus, finalResponse);
+    }
   }
 }
