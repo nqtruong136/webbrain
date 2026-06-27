@@ -140,12 +140,11 @@ export class Agent {
     // asking the user. The agent reads the key from chrome.storage.local
     // at call time so rotating the key doesn't require a restart.
     this.captchaSolverEnabled = false;
-    // Pre-execution planner (Settings → Plan before Act). In default "try"
-    // mode, Act-mode attempts a read-only planning LLM call but continues
-    // without a pinned plan if planning itself fails. "strict" preserves the
-    // older fail-closed behavior; "off" skips planning entirely.
-    this.planBeforeActMode = 'try';
-    this.planBeforeAct = true; // legacy boolean mirror for older call sites/tests
+    // Pre-execution planner (Settings → Plan before Act). Default off; "try"
+    // attempts a read-only planning LLM call but continues without a pinned
+    // plan if planning itself fails. "strict" fails closed.
+    this.planBeforeActMode = 'off';
+    this.planBeforeAct = false; // legacy boolean mirror for older call sites/tests
     this._pendingPlans = new Map(); // tabId → (planId → { resolve, ts })
     // Stale click detection: per-tab last clicked element identity.
     this._lastCdpClickIdent = new Map(); // tabId -> string
@@ -3445,7 +3444,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   _normalizePlanBeforeActMode(mode) {
-    return mode === 'strict' || mode === 'off' || mode === 'try' ? mode : 'try';
+    return mode === 'strict' || mode === 'off' || mode === 'try' ? mode : 'off';
   }
 
   setPlanBeforeActMode(mode) {

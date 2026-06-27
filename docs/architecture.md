@@ -124,7 +124,7 @@ _enrichUserMessageWithCurrentPage(tabId, messages, userMessage)
 
 ### Step 4: Plan-before-Act Gate
 
-When `planBeforeAct` is enabled (default) and the run is in Act mode, the agent calls the active provider once before the tool loop with `planner.js`'s structured JSON prompt. The planner sees the user task, sanitized URL/title, and a short recent-history digest; page context is wrapped as untrusted data and image blocks are dropped.
+When `planBeforeAct` is enabled and the run is in Act mode, the agent calls the active provider once before the tool loop with `planner.js`'s structured JSON prompt. The feature is off by default. The planner sees the user task, sanitized URL/title, and a short recent-history digest; page context is wrapped as untrusted data and image blocks are dropped.
 
 If the planner returns valid JSON, the side panel receives `agent_update: plan_review` and renders an editable review card. Approval pins the approved plan into the scratchpad so it survives context compaction. Rejection, timeout, invalid JSON after retry, or user abort stops the run before any browser tools execute. Scheduled runs can set `autoApprovePlanReview` and pin the plan without showing the card.
 
@@ -198,7 +198,7 @@ Background relays these via `chrome.runtime.sendMessage` to the side panel, whic
 
 ### Plan before Act (`planner.js`)
 
-The optional Act-mode planning gate runs before the first browser tool call and is on by default. The planner prompt requires a single JSON object with summary, concrete steps, memory strategy, scheduling hint, risks, and `mode: "act"`. `normalizePlan()` bounds and sanitizes each field; `formatPlanMarkdown()` renders the side-panel review card; `formatPlanScratchpad()` pins the approved or edited plan as an `[Approved plan]` scratchpad entry.
+The optional Act-mode planning gate runs before the first browser tool call when enabled; it is off by default. The planner prompt requires a single JSON object with summary, concrete steps, memory strategy, scheduling hint, risks, and `mode: "act"`. `normalizePlan()` bounds and sanitizes each field; `formatPlanMarkdown()` renders the side-panel review card; `formatPlanScratchpad()` pins the approved or edited plan as an `[Approved plan]` scratchpad entry.
 
 Planner calls are traced with `phase: "planner"` when trace recording is enabled. They also use the cost allowance guard, abort checks, a JSON-repair retry, and Qwen/DeepSeek no-think handling before the run is allowed to continue.
 

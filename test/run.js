@@ -10316,12 +10316,15 @@ function plannerFixtureJson() {
   });
 }
 
-test('plan before act: try mode is default with strict/off migration', () => {
+test('plan before act: off is default with strict/try migration', () => {
   for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
     const agent = new AgentClass({});
-    assert.equal(agent.planBeforeActMode, 'try', `${label} default mode`);
-    assert.equal(agent.planBeforeAct, true, `${label} legacy mirror default`);
-    assert.equal(agent._plannerMode(), 'try', `${label} effective default mode`);
+    assert.equal(agent.planBeforeActMode, 'off', `${label} default mode`);
+    assert.equal(agent.planBeforeAct, false, `${label} legacy mirror default`);
+    assert.equal(agent._plannerMode(), 'off', `${label} effective default mode`);
+    agent.setPlanBeforeActMode('try');
+    assert.equal(agent.planBeforeAct, true, `${label} try enables legacy mirror`);
+    assert.equal(agent._plannerMode(), 'try', `${label} try mode`);
     agent.setPlanBeforeActMode('strict');
     assert.equal(agent.planBeforeAct, true, `${label} strict enables legacy mirror`);
     assert.equal(agent._plannerMode(), 'strict', `${label} strict mode`);
@@ -10337,8 +10340,15 @@ test('plan before act: try mode is default with strict/off migration', () => {
   ]) {
     const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
     assert.match(source, /planBeforeActMode/, `${file} should use the planner mode setting`);
-    assert.match(source, /return 'try'/, `${file} should treat unset storage as try planning`);
-    assert.match(source, /return 'off'/, `${file} should preserve legacy disabled storage`);
+    assert.match(source, /return 'off'/, `${file} should treat unset storage as planning off`);
+    assert.match(source, /planBeforeAct(?:Mode)?[^]*?=== true[^]*?return 'strict'/, `${file} should migrate legacy enabled storage to strict`);
+  }
+  for (const file of [
+    'src/chrome/src/ui/settings.html',
+    'src/firefox/src/ui/settings.html',
+  ]) {
+    const html = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    assert.match(html, /<select id="select-plan-before-act-mode">\s*<option value="off"/, `${file} should render off as the first/default option`);
   }
 });
 
@@ -10480,7 +10490,7 @@ test('planner gate: approving plan appends without deleting scratchpad facts', a
     for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
       const tabId = label === 'chrome' ? 9201 : 9202;
       const agent = new AgentClass({ getActive: () => ({}) });
-      agent.planBeforeAct = true;
+      agent.setPlanBeforeActMode('try');
       agent.conversations.set(tabId, [
         { role: 'system', content: 'system' },
         { role: 'user', content: 'original task' },
@@ -10514,7 +10524,7 @@ test('planner gate: scheduled runs auto-approve plan review', async () => {
     for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
       const tabId = label === 'chrome' ? 9221 : 9222;
       const agent = new AgentClass({ getActive: () => ({}) });
-      agent.planBeforeAct = true;
+      agent.setPlanBeforeActMode('try');
       agent.conversations.set(tabId, [{ role: 'system', content: 'system' }]);
       agent.setScheduledRunPolicy(tabId, {
         requireConsequentialConfirmation: false,
@@ -10586,7 +10596,7 @@ test('planner gate: streaming path clears active trace run after completion', as
         getActive: () => provider,
         getVisionProvider: async () => null,
       });
-      agent.planBeforeAct = true;
+      agent.setPlanBeforeActMode('try');
       agent.maxSteps = 2;
       agent._manageContext = async () => {};
       agent._enrichUserMessageWithCurrentPage = async (_tabId, _messages, content) => ({ role: 'user', content });
@@ -10627,7 +10637,7 @@ test('planner gate: a stale abort flag does not cancel a fresh task', async () =
         getActive: () => provider,
         getVisionProvider: async () => null,
       });
-      agent.planBeforeAct = true;
+      agent.setPlanBeforeActMode('try');
       agent.maxSteps = 2;
       agent._manageContext = async () => {};
       agent._enrichUserMessageWithCurrentPage = async (_tabId, _messages, content) => ({ role: 'user', content });
@@ -10672,7 +10682,7 @@ test('planner gate: trace run is ended when run setup throws', async () => {
         getActive: () => provider,
         getVisionProvider: async () => null,
       });
-      agent.planBeforeAct = true;
+      agent.setPlanBeforeActMode('try');
       agent.maxSteps = 2;
       agent._manageContext = async () => {};
       agent._enrichUserMessageWithCurrentPage = async (_tabId, _messages, content) => ({ role: 'user', content });

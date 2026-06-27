@@ -8,7 +8,7 @@ import { CAPABILITY_LABEL } from '../agent/permission-gate.js';
 
 // Version shown in the subtitle. Kept here so it only needs one update per
 // release; the subtitle string itself is translated.
-const EXT_VERSION = '18.0.10';
+const EXT_VERSION = '18.0.11';
 
 const providersContainer = document.getElementById('providers');
 const verboseToggle = document.getElementById('toggle-verbose');
@@ -135,7 +135,7 @@ function normalizePlanBeforeActMode(stored = {}) {
   if (PLAN_BEFORE_ACT_MODES.has(stored.planBeforeActMode)) return stored.planBeforeActMode;
   if (stored.planBeforeAct === true) return 'strict';
   if (stored.planBeforeAct === false) return 'off';
-  return 'try';
+  return 'off';
 }
 
 function normalizeCostAmount(value, fallback = DEFAULT_COST_ALLOWANCE_USD) {
@@ -413,7 +413,7 @@ apiMutationObserverToggle?.addEventListener('change', async () => {
 
 if (planBeforeActModeSelect) {
   planBeforeActModeSelect.addEventListener('change', async () => {
-    const mode = PLAN_BEFORE_ACT_MODES.has(planBeforeActModeSelect.value) ? planBeforeActModeSelect.value : 'try';
+    const mode = PLAN_BEFORE_ACT_MODES.has(planBeforeActModeSelect.value) ? planBeforeActModeSelect.value : 'off';
     await browser.storage.local.set({
       planBeforeActMode: mode,
       planBeforeAct: mode !== 'off',

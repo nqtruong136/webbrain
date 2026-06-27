@@ -1,6 +1,6 @@
 # WebBrain Chrome Extension — Architecture
 
-> Version 18.0.10 · Manifest V3 · Service Worker background
+> Version 18.0.11 · Manifest V3 · Service Worker background
 
 ## High-Level Overview
 
@@ -100,13 +100,14 @@ src/chrome/
 
 ## Plan-before-Act Gate (v18.0.0)
 
-When `planBeforeAct` is enabled (default), Act-mode runs call `agent/planner.js`
+When `planBeforeAct` is enabled, Act-mode runs call `agent/planner.js`
 before the first tool loop. The planner returns a bounded JSON plan with steps,
 memory strategy, scheduling hints, and risks. The side panel renders that plan
 as an editable approval card; approving it pins the plan to the scratchpad so it
 survives context compaction. Rejecting, timing out, invalid JSON after retry, or
 pressing Stop cancels before browser tools execute. Scheduled runs can set
 `autoApprovePlanReview` so the plan is pinned without blocking on the UI.
+The feature is off by default.
 
 Planner LLM requests are recorded in traces with `phase: "planner"` and use the
 same cost allowance and abort checks as the main loop.

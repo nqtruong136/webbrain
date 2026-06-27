@@ -99,7 +99,7 @@ Click the gear icon or go to the extension's Options page to configure:
 - Verbose Mode — Show full tool call JSON (off by default)
 - Screenshot Fallback — Use screenshots when DOM reading fails
 - Max Agent Steps — Configurable step limit (5-200, default 60)
-- Plan before Act — Generate and review a structured Act-mode plan before browser tools run (on by default)
+- Plan before Act — Optionally generate and review a structured Act-mode plan before browser tools run (off by default)
 
 **Providers:**
 

@@ -108,12 +108,11 @@ export class Agent {
     // model to try `solve_captcha` once before falling back to asking
     // the user. The API key is read at call time from browser.storage.
     this.captchaSolverEnabled = false;
-    // Pre-execution planner (Settings → Plan before Act). In default "try"
-    // mode, Act-mode attempts a read-only planning LLM call but continues
-    // without a pinned plan if planning itself fails. "strict" preserves the
-    // older fail-closed behavior; "off" skips planning entirely.
-    this.planBeforeActMode = 'try';
-    this.planBeforeAct = true; // legacy boolean mirror for older call sites/tests
+    // Pre-execution planner (Settings → Plan before Act). Default off; "try"
+    // attempts a read-only planning LLM call but continues without a pinned
+    // plan if planning itself fails. "strict" fails closed.
+    this.planBeforeActMode = 'off';
+    this.planBeforeAct = false; // legacy boolean mirror for older call sites/tests
     this._pendingPlans = new Map();
     // Strict secret-handling mode — see chrome/agent.js for rationale.
     // Default off; user opts in via Settings → "Strict secret handling".
@@ -2688,7 +2687,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   _normalizePlanBeforeActMode(mode) {
-    return mode === 'strict' || mode === 'off' || mode === 'try' ? mode : 'try';
+    return mode === 'strict' || mode === 'off' || mode === 'try' ? mode : 'off';
   }
 
   setPlanBeforeActMode(mode) {
