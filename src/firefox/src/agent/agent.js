@@ -855,7 +855,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           });
         }
       } catch {}
-      onUpdate('tool_result', { name: fnName, result: toolResult });
+      if (!toolResult?.done) {
+        onUpdate('tool_result', { name: fnName, result: toolResult });
+      }
 
       // Pin any durable download handle this tool produced, so a later
       // read survives context compaction even if the model never calls
@@ -900,6 +902,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             counts: progressBlock.counts,
             unresolved: progressBlock.unresolved,
           };
+          onUpdate('tool_result', { name: fnName, result: blockedResult });
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
@@ -908,6 +911,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           onUpdate('warning', { message: 'Progress ledger has unresolved rows; continuing.' });
           continue;
         }
+        onUpdate('tool_result', { name: fnName, result: toolResult });
         const finalResponse = this._appendProgressLedgerToFinal(tabId, toolResult.summary || partialAssistantText || 'Task completed.');
         messages.push({
           role: 'tool',

@@ -1236,7 +1236,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       const _toolStart = Date.now();
       const toolResult = await this.executeTool(tabId, fnName, fnArgs, onUpdate);
       const _toolLatency = Date.now() - _toolStart;
-      onUpdate('tool_result', { name: fnName, result: toolResult });
+      if (!toolResult?.done) {
+        onUpdate('tool_result', { name: fnName, result: toolResult });
+      }
       const _runIdForTool = this.currentRunId.get(tabId);
       if (_runIdForTool) {
         trace.recordToolCall(_runIdForTool, step, {
@@ -1295,6 +1297,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             counts: progressBlock.counts,
             unresolved: progressBlock.unresolved,
           };
+          onUpdate('tool_result', { name: fnName, result: blockedResult });
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
@@ -1304,6 +1307,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           this._persist(tabId);
           continue;
         }
+        onUpdate('tool_result', { name: fnName, result: toolResult });
         const finalResponse = this._appendProgressLedgerToFinal(tabId, toolResult.summary || partialAssistantText || 'Task completed.');
         messages.push({
           role: 'tool',

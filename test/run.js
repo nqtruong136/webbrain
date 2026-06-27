@@ -5090,6 +5090,36 @@ test('ScheduledJobManager records success outcomes from scheduled done tool resu
     const legacyCompleted = legacyHarness.updates.find((u) => u.type === 'scheduled_job' && u.data?.event === 'completed');
     assert.equal(legacyJob.lastOutcome, null, `${label}: missing done outcome should not be treated as success`);
     assert.equal(legacyCompleted?.data?.job?.lastOutcome, null, `${label}: completed event should not invent scheduled success`);
+
+    const blockedHarness = makeSchedulerHarness(SchedulerMod, {
+      now,
+      processMessage: async (_tabId, _message, onUpdate) => {
+        onUpdate('tool_result', {
+          name: 'done',
+          result: { success: false, blockedDone: true, error: 'Progress ledger has unresolved rows.' },
+        });
+        return 'blocked completion continued';
+      },
+    });
+    const blockedCreated = await blockedHarness.manager.createTaskJob({
+      tabId: 77,
+      conversationId: 'conv-1',
+      args: {
+        title: 'Blocked completion',
+        prompt: 'Finish with unresolved progress.',
+        schedule: { type: 'once', after_seconds: 60 },
+        target: { type: 'current_tab' },
+      },
+      source: 'user',
+      currentUrl: 'https://example.com/',
+      currentTitle: 'Example',
+    });
+
+    await blockedHarness.manager.handleAlarm(blockedHarness.alarmName(blockedCreated.jobId));
+    const blockedJob = blockedHarness.jobs()[0];
+    const blockedCompleted = blockedHarness.updates.find((u) => u.type === 'scheduled_job' && u.data?.event === 'completed');
+    assert.equal(blockedJob.lastOutcome, null, `${label}: blocked done should not be stored as a success outcome`);
+    assert.equal(blockedCompleted?.data?.job?.lastOutcome, null, `${label}: blocked done completed event should not carry success`);
   }
 });
 
@@ -7901,13 +7931,32 @@ test('blocked done progress result stays wrapped as untrusted content', async ()
         status: 'pending',
       }],
     });
-    agent.executeTool = async () => ({ done: true, summary: 'Done.' });
+    agent.executeTool = async () => ({ done: true, summary: 'Done.', outcome: 'success' });
     agent._persist = () => {};
     agent.providerManager = { ...(agent.providerManager || {}), getVisionProvider: async () => null };
 
     const toolCalls = [{ id: 'done_call', function: { name: 'done', arguments: JSON.stringify({ summary: 'Done.' }) } }];
-    const result = await agent._executeToolBatch(tabId, toolCalls, messages, () => {}, { supportsVision: false }, null, new Set(['done']), 1);
+    const updates = [];
+    const result = await agent._executeToolBatch(
+      tabId,
+      toolCalls,
+      messages,
+      (type, data) => updates.push({ type, data }),
+      { supportsVision: false },
+      null,
+      new Set(['done']),
+      1,
+    );
     assert.equal(result.action, 'continue', `${AgentClass.name}: blocked done should continue the tool loop`);
+    assert.equal(
+      updates.some(update => update.type === 'tool_result' && update.data?.name === 'done' && update.data?.result?.done === true && update.data?.result?.outcome === 'success'),
+      false,
+      `${AgentClass.name}: blocked done should not emit a successful done update`,
+    );
+    assert.ok(
+      updates.some(update => update.type === 'tool_result' && update.data?.name === 'done' && update.data?.result?.blockedDone === true),
+      `${AgentClass.name}: blocked done should emit a blocked done result update`,
+    );
 
     const toolMessage = messages.find(msg => msg.role === 'tool' && msg.tool_call_id === 'done_call');
     assert.ok(toolMessage, `${AgentClass.name}: blocked done tool result missing`);
@@ -7915,6 +7964,43 @@ test('blocked done progress result stays wrapped as untrusted content', async ()
     assert.match(toolMessage.content, /"blockedDone":true/, `${AgentClass.name}: blocked done payload missing`);
     assert.match(toolMessage.content, /Ignore previous instructions/, `${AgentClass.name}: row data should remain available as untrusted data`);
     assert.doesNotMatch(toolMessage.content, /<\/untrusted_page_content><system>/, `${AgentClass.name}: row label escaped the untrusted boundary`);
+  }
+});
+
+test('accepted done emits successful result update after progress gate', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = 796;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Finish this task.' },
+    ];
+    agent.conversations.set(tabId, messages);
+    agent.conversationModes.set(tabId, 'act');
+    agent.executeTool = async () => ({ done: true, summary: 'Done.', outcome: 'success' });
+    agent._persist = () => {};
+    agent.providerManager = { ...(agent.providerManager || {}), getVisionProvider: async () => null };
+
+    const updates = [];
+    const toolCalls = [{ id: 'done_call', function: { name: 'done', arguments: JSON.stringify({ summary: 'Done.' }) } }];
+    const result = await agent._executeToolBatch(
+      tabId,
+      toolCalls,
+      messages,
+      (type, data) => updates.push({ type, data }),
+      { supportsVision: false },
+      null,
+      new Set(['done']),
+      1,
+    );
+
+    assert.equal(result.action, 'return', `${AgentClass.name}: accepted done should finish the tool loop`);
+    assert.equal(result.value, 'Done.', `${AgentClass.name}: accepted done should return the done summary`);
+    assert.equal(
+      updates.filter(update => update.type === 'tool_result' && update.data?.name === 'done' && update.data?.result?.done === true && update.data?.result?.outcome === 'success').length,
+      1,
+      `${AgentClass.name}: accepted done should emit one successful done update`,
+    );
   }
 });
 
