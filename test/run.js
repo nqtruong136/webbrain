@@ -6705,6 +6705,77 @@ test('ProviderManager testProvider repairs simple base URL variants', async () =
   }
 });
 
+test('ProviderManager testProvider does not persist stale base URL repairs', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = globalThis.chrome;
+  const originalBrowser = globalThis.browser;
+
+  function makeRuntime(writes) {
+    return {
+      storage: {
+        local: {
+          async get() { return {}; },
+          async set(patch) { writes.push(patch); },
+        },
+      },
+      runtime: { id: 'test-runtime' },
+    };
+  }
+
+  function chatOk() {
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    for (const [label, PM, runtimeKey] of [
+      ['chrome', ProviderManagerCh, 'chrome'],
+      ['firefox', ProviderManagerFx, 'browser'],
+    ]) {
+      const writes = [];
+      const observedBaseUrl = 'http://172.27.183.122:8000';
+      const repairedBaseUrl = `${observedBaseUrl}/v1`;
+      const userSavedBaseUrl = 'http://127.0.0.1:9000/v1';
+      const workingUrl = `${repairedBaseUrl}/chat/completions`;
+      globalThis[runtimeKey] = makeRuntime(writes);
+
+      const mgr = new PM();
+      const originalConfig = {
+        ...mgr._defaultConfigs().vllm,
+        baseUrl: observedBaseUrl,
+        model: 'served-model',
+      };
+      mgr.activeProviderId = 'vllm';
+      mgr.providers.set('vllm', mgr._createProvider('vllm', originalConfig));
+
+      globalThis.fetch = async (url) => {
+        if (String(url) === workingUrl) {
+          mgr.providers.set('vllm', mgr._createProvider('vllm', {
+            ...originalConfig,
+            baseUrl: userSavedBaseUrl,
+          }));
+          return chatOk();
+        }
+        return new Response('bad path', { status: 404 });
+      };
+
+      const result = await mgr.testProvider('vllm');
+      assert.equal(result.ok, true, `${label}: stale test should still report probe success`);
+      assert.equal(result.baseUrl, undefined, `${label}: stale test should not report repaired URL`);
+      assert.equal(mgr.providers.get('vllm').config.baseUrl, userSavedBaseUrl, `${label}: user-saved URL should remain current`);
+      assert.equal(writes.length, 0, `${label}: stale test repair should not be persisted`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = originalChrome;
+    if (originalBrowser === undefined) delete globalThis.browser;
+    else globalThis.browser = originalBrowser;
+  }
+});
+
 test('listProviderModels persists canonical local provider base URLs', async () => {
   const originalFetch = globalThis.fetch;
   const originalChrome = globalThis.chrome;
@@ -6781,6 +6852,71 @@ test('listProviderModels persists canonical local provider base URLs', async () 
         assert.equal(writes[writes.length - 1].providers[scenario.id].baseUrl, scenario.expectedBaseUrl, `${label}: ${scenario.id} URL should be persisted`);
         assert.ok(calls.includes(scenario.expectedRequestUrl), `${label}: ${scenario.id} should try the expected model URL`);
       }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = originalChrome;
+    if (originalBrowser === undefined) delete globalThis.browser;
+    else globalThis.browser = originalBrowser;
+  }
+});
+
+test('listProviderModels does not persist stale base URL repairs', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = globalThis.chrome;
+  const originalBrowser = globalThis.browser;
+
+  function makeRuntime(writes) {
+    return {
+      storage: {
+        local: {
+          async get() { return {}; },
+          async set(patch) { writes.push(patch); },
+        },
+      },
+      runtime: { id: 'test-runtime' },
+    };
+  }
+
+  try {
+    for (const [label, PM, runtimeKey] of [
+      ['chrome', ProviderManagerCh, 'chrome'],
+      ['firefox', ProviderManagerFx, 'browser'],
+    ]) {
+      const writes = [];
+      const observedBaseUrl = 'http://172.27.183.122:8000';
+      const repairedBaseUrl = `${observedBaseUrl}/v1`;
+      const userSavedBaseUrl = 'http://127.0.0.1:9000/v1';
+      const expectedRequestUrl = `${repairedBaseUrl}/models`;
+      globalThis[runtimeKey] = makeRuntime(writes);
+
+      const mgr = new PM();
+      const originalConfig = {
+        ...mgr._defaultConfigs().vllm,
+        baseUrl: observedBaseUrl,
+      };
+      mgr.activeProviderId = 'vllm';
+      mgr.providers.set('vllm', mgr._createProvider('vllm', originalConfig));
+
+      globalThis.fetch = async (url) => {
+        if (String(url) === expectedRequestUrl) {
+          mgr.providers.set('vllm', mgr._createProvider('vllm', {
+            ...originalConfig,
+            baseUrl: userSavedBaseUrl,
+          }));
+          return new Response(JSON.stringify({ data: [{ id: 'served-model' }] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response('bad path', { status: 404 });
+      };
+
+      const result = await mgr.listProviderModels('vllm');
+      assert.deepEqual(result, { ok: true, models: ['served-model'] }, `${label}: stale model load should omit repaired URL`);
+      assert.equal(mgr.providers.get('vllm').config.baseUrl, userSavedBaseUrl, `${label}: user-saved URL should remain current`);
+      assert.equal(writes.length, 0, `${label}: stale model repair should not be persisted`);
     }
   } finally {
     globalThis.fetch = originalFetch;

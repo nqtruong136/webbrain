@@ -519,19 +519,20 @@ export class ProviderManager {
   async testProvider(id) {
     const provider = this.providers.get(id);
     if (!provider) return { ok: false, error: 'Provider not found' };
+    const observedBaseUrl = provider.config.baseUrl;
     const candidates = this._baseUrlCandidates(provider.config);
     if (!candidates.length) return provider.testConnection();
 
     let firstFailure = null;
     for (const baseUrl of candidates) {
-      const candidateProvider = baseUrl === provider.config.baseUrl
+      const candidateProvider = baseUrl === observedBaseUrl
         ? provider
         : this._createProvider(id, { ...provider.config, baseUrl });
       const result = await candidateProvider.testConnection();
       if (result.ok) {
-        if (baseUrl !== provider.config.baseUrl) {
-          await this._updateProviderBaseUrl(id, baseUrl);
-          return { ...result, baseUrl };
+        if (baseUrl !== observedBaseUrl) {
+          const updated = await this._updateProviderBaseUrl(id, baseUrl, observedBaseUrl);
+          return updated ? { ...result, baseUrl } : result;
         }
         return result;
       }
@@ -611,7 +612,8 @@ export class ProviderManager {
       return { ok: false, error: 'Model loading is only supported for local providers' };
     }
 
-    const rawBaseUrl = (provider.config.baseUrl || '').trim().replace(/\/+$/, '');
+    const observedBaseUrl = provider.config.baseUrl;
+    const rawBaseUrl = (observedBaseUrl || '').trim().replace(/\/+$/, '');
     if (!rawBaseUrl) return { ok: false, error: 'Base URL is empty' };
 
     // LM Studio: prefer its native /api/v0/models, which (unlike the
@@ -633,9 +635,10 @@ export class ProviderManager {
           if (models.length) {
             const configBaseUrl = `${host}/v1`;
             const result = { ok: true, models };
-            if (configBaseUrl !== provider.config.baseUrl) {
-              await this._updateProviderBaseUrl(id, configBaseUrl);
-              result.baseUrl = configBaseUrl;
+            if (configBaseUrl !== observedBaseUrl) {
+              if (await this._updateProviderBaseUrl(id, configBaseUrl, observedBaseUrl)) {
+                result.baseUrl = configBaseUrl;
+              }
             }
             return result;
           }
@@ -664,9 +667,10 @@ export class ProviderManager {
         const data = await res.json();
         const models = this._extractModelIds(id, data);
         const result = { ok: true, models };
-        if (candidate.configBaseUrl !== provider.config.baseUrl) {
-          await this._updateProviderBaseUrl(id, candidate.configBaseUrl);
-          result.baseUrl = candidate.configBaseUrl;
+        if (candidate.configBaseUrl !== observedBaseUrl) {
+          if (await this._updateProviderBaseUrl(id, candidate.configBaseUrl, observedBaseUrl)) {
+            result.baseUrl = candidate.configBaseUrl;
+          }
         }
         return result;
       } catch (e) {
@@ -741,11 +745,14 @@ export class ProviderManager {
     return candidates;
   }
 
-  async _updateProviderBaseUrl(id, baseUrl) {
+  async _updateProviderBaseUrl(id, baseUrl, observedBaseUrl) {
     const current = this.providers.get(id);
-    if (!current || current.config.baseUrl === baseUrl) return;
+    if (!current) return false;
+    if (current.config.baseUrl === baseUrl) return true;
+    if (observedBaseUrl !== undefined && current.config.baseUrl !== observedBaseUrl) return false;
     this.providers.set(id, this._createProvider(id, { ...current.config, baseUrl }));
     await this.save();
+    return true;
   }
 
   _extractModelIds(id, data) {
