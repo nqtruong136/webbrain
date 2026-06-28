@@ -4172,6 +4172,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     } else {
       usedTokens = Math.max(lastReported, estTokens);
     }
+    const fixedPromptOverheadTokens = lastReported > 0 && lastEstChars != null
+      ? Math.max(0, lastReported - Math.ceil(lastEstChars / 4))
+      : 0;
 
     const tooManyMessages = messages.length > this.maxContextMessages;
     const tooManyChars = totalChars > this.maxContextChars;
@@ -4253,7 +4256,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       }
       const pinnedChars = this._estimateContextChars([systemMsg, originalTask, scratchpadMsg, progressMsg].filter(Boolean));
       const compactOverheadChars = 3000; // summary wrapper + ack + manual summary fallback
-      const maxRecentChars = Math.max(0, (tokenBudget * 4) - pinnedChars - compactOverheadChars);
+      const fixedPromptOverheadChars = fixedPromptOverheadTokens * 4;
+      const maxRecentChars = Math.max(0, (tokenBudget * 4) - fixedPromptOverheadChars - pinnedChars - compactOverheadChars);
       while (oldMessages.length >= 4 && recentMessages.length > 1 && this._estimateContextChars(recentMessages) > maxRecentChars) {
         moveOldestRecentToSummary();
       }
