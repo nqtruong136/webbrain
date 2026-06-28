@@ -80,10 +80,9 @@ export class Agent {
     this._debugLog = []; // ring buffer for deep verbose (LLM requests/responses)
     this._debugLogMax = 200; // max entries before oldest are dropped
     this.maxContextChars = 80000; // rough char budget (~20k tokens)
-    // Fraction of the model's context window at which we auto-compact. Once
-    // the running input-token count crosses this share of provider.contextWindow,
-    // _manageContext summarizes older turns ("Context automatically compacted")
-    // — leaving headroom for the next request plus the output budget.
+    // Default fraction of the model's context window at which we auto-compact.
+    // _contextCompactRatioForWindow tightens this for small context windows and
+    // relaxes it for very large ones.
     this.contextCompactRatio = 0.75;
     // tabId -> most recent provider-reported input (prompt) token count. Drives
     // the token-aware auto-compaction trigger; updated after each LLM response,
@@ -4837,15 +4836,22 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   /**
    * Token budget at which we proactively auto-compact for the active provider:
-   * a fraction (contextCompactRatio) of the model's context window. Compacting
+   * an adaptive fraction of the model's context window. Compacting
    * here — before the provider hard-errors on overflow — keeps the run smooth
    * and lets us surface a clean "Context automatically compacted" notice rather
    * than the jarring _emergencyTrim fallback.
    */
+  _contextCompactRatioForWindow(contextWindow) {
+    if (contextWindow <= 32768) return 0.65;
+    if (contextWindow <= 65536) return 0.70;
+    if (contextWindow <= 131072) return this.contextCompactRatio;
+    return 0.80;
+  }
+
   _contextTokenBudget() {
     const provider = this.providerManager.getActive();
     const window = (provider && Number(provider.contextWindow)) || 128000;
-    return Math.floor(window * this.contextCompactRatio);
+    return Math.floor(window * this._contextCompactRatioForWindow(window));
   }
 
   // Char-equivalent billed for the single screenshot that survives image
@@ -4982,6 +4988,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     } else {
       usedTokens = Math.max(lastReported, estTokens);
     }
+    const fixedPromptOverheadTokens = lastReported > 0 && lastEstChars != null
+      ? Math.max(0, lastReported - Math.ceil(lastEstChars / 4))
+      : 0;
 
     const tooManyMessages = messages.length > this.maxContextMessages;
     const tooManyChars = totalChars > this.maxContextChars;
@@ -5030,8 +5039,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     const keepRecent = 30;
     // Exclude the pinned original task from both summary and recent slices.
     const afterPin = originalTaskIdx >= 0 ? originalTaskIdx + 1 : 1;
-    const oldMessagesRaw = messages.slice(afterPin, -keepRecent);
-    const recentMessagesRaw = messages.slice(-keepRecent);
+    const recentStart = Math.max(afterPin, messages.length - keepRecent);
+    const oldMessagesRaw = messages.slice(afterPin, recentStart);
+    const recentMessagesRaw = messages.slice(recentStart);
     // Strip the scratchpad out of both slices — we re-pin a single copy of
     // it in the rebuild step below. Without this we'd either lose it (if it
     // fell into oldMessages and got summarized away) or duplicate it.
@@ -5050,8 +5060,48 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     while (recentMessages.length && recentMessages[0].role === 'tool') {
       oldMessages.push(recentMessages.shift());
     }
+    let retainedRecentOverBudget = false;
+    if (tooManyTokens) {
+      // Small-window runs can exceed the token budget before they have more
+      // than 30 post-task messages. In that case, keeping all 30 recent turns
+      // would leave too little `oldMessages` history to summarize and we'd send
+      // the same over-budget prompt again. Move just enough of the earliest
+      // recent turns back into the summary set to make compaction possible.
+      const latestUserRecentIndex = () => {
+        for (let i = recentMessages.length - 1; i >= 0; i--) {
+          const msg = recentMessages[i];
+          if (msg?.role === 'user' && !this._isAgentInjectedUserContent(msg.content)) return i;
+        }
+        return -1;
+      };
+      const canMoveOldestRecentToSummary = () => {
+        if (!recentMessages.length) return false;
+        const latestUserIdx = latestUserRecentIndex();
+        if (latestUserIdx === 0) return false;
+        if (latestUserIdx < 0 && recentMessages[0]?.role === 'tool') return true;
+        return latestUserIdx > 0 || recentMessages.length > 1;
+      };
+      const moveOldestRecentToSummary = () => {
+        if (!canMoveOldestRecentToSummary()) return false;
+        oldMessages.push(recentMessages.shift());
+        while (recentMessages.length && recentMessages[0].role === 'tool' && canMoveOldestRecentToSummary()) {
+          oldMessages.push(recentMessages.shift());
+        }
+        return true;
+      };
+      while (oldMessages.length < 4 && moveOldestRecentToSummary()) {}
+      const pinnedChars = this._estimateContextChars([systemMsg, originalTask, scratchpadMsg, progressMsg].filter(Boolean));
+      const compactOverheadChars = 3000; // summary wrapper + ack + manual summary fallback
+      const fixedPromptOverheadChars = fixedPromptOverheadTokens * 4;
+      const maxRecentChars = Math.max(0, (tokenBudget * 4) - fixedPromptOverheadChars - pinnedChars - compactOverheadChars);
+      while (oldMessages.length >= 4 && canMoveOldestRecentToSummary() && this._estimateContextChars(recentMessages) > maxRecentChars) {
+        moveOldestRecentToSummary();
+      }
+      retainedRecentOverBudget = this._estimateContextChars(recentMessages) > maxRecentChars;
+    }
 
-    if (oldMessages.length < 4) {
+    const minSummarizableMessages = tooManyTokens && oldMessages.some(m => m?.role === 'user') ? 1 : 4;
+    if (oldMessages.length < minSummarizableMessages || retainedRecentOverBudget) {
       // Not enough history to summarize. But if the TOKEN budget is what
       // tripped us (e.g. a single huge page/tool result early in a run on a
       // small local model), returning unchanged would re-send the same

@@ -9669,6 +9669,267 @@ test('manual compactConversation compacts before automatic thresholds', async ()
   }
 });
 
+test('context token budget uses adaptive compaction ratios', async () => {
+  const cases = [
+    [16000, 10400],
+    [32000, 20800],
+    [32768, 21299],
+    [64000, 44800],
+    [65536, 45875],
+    [128000, 96000],
+    [131072, 98304],
+    [256000, 204800],
+    [262144, 209715],
+  ];
+
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    for (const [contextWindow, expectedBudget] of cases) {
+      const agent = new AgentClass({ getActive: () => ({ contextWindow, supportsVision: false }) });
+      assert.equal(agent._contextTokenBudget(), expectedBudget, `${AgentClass.name}: wrong budget for ${contextWindow}`);
+    }
+  }
+});
+
+test('context compaction keeps the same recent turn window in chrome and firefox', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 188 : 189;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'keep working on the task' },
+    ];
+    for (let i = 0; i < 40; i++) {
+      messages.push({ role: 'assistant', content: `step ${i}` });
+      messages.push({ role: 'user', content: `ok ${i}` });
+    }
+    agent.conversations.set(tabId, messages);
+
+    const origLog = console.log;
+    console.log = () => {};
+    try {
+      await agent.compactConversation(tabId);
+    } finally {
+      console.log = origLog;
+    }
+
+    const compacted = agent.conversations.get(tabId);
+    assert.ok(compacted.some(m => m.role === 'assistant' && m.content === 'step 25'), `${AgentClass.name}: did not keep the last 30 messages`);
+    assert.ok(compacted.some(m => m.role === 'user' && m.content === 'ok 39'), `${AgentClass.name}: lost newest user turn`);
+
+    const h = agent.persistTimers?.get?.(tabId);
+    if (h) clearTimeout(h);
+  }
+});
+
+test('context compaction shrinks recent window when small-window runs exceed token budget early', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 32768, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 190 : 191;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'keep working on the task' },
+    ];
+    for (let i = 0; i < 15; i++) {
+      messages.push({ role: 'assistant', content: `step ${i} ${'x'.repeat(2990)}` });
+      messages.push({ role: 'user', content: `ok ${i} ${'y'.repeat(2990)}` });
+    }
+
+    const origLog = console.log;
+    console.log = () => {};
+    let result;
+    try {
+      result = await agent._manageContext(tabId, messages, () => {});
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(result.compacted, true, `${AgentClass.name}: over-budget small-window history should compact`);
+    assert.ok(result.summarized >= 4, `${AgentClass.name}: should summarize enough early turns`);
+    assert.notEqual(result.reason, 'over_budget_unshrinkable', `${AgentClass.name}: should not leave oversized prompt uncompactable`);
+    assert.ok(messages.some(m => /Context window was trimmed/i.test(String(m.content || ''))), `${AgentClass.name}: summary message missing`);
+    assert.ok(messages.some(m => String(m.content || '').includes('ok 14')), `${AgentClass.name}: newest user turn should remain recent`);
+
+    const h = agent.persistTimers?.get?.(tabId);
+    if (h) clearTimeout(h);
+  }
+});
+
+test('context compaction preserves the latest user turn while seeding a small summary', async () => {
+  const latestUserTurn = 'CURRENT USER REQUEST: keep this latest turn verbatim';
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 4000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 196 : 197;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'keep working on the task' },
+      { role: 'assistant', content: `first exchange ${'x'.repeat(3900)}` },
+      { role: 'user', content: `previous clarification ${'y'.repeat(3900)}` },
+      { role: 'assistant', content: `second exchange ${'z'.repeat(3900)}` },
+      { role: 'user', content: latestUserTurn },
+    ];
+
+    const origLog = console.log;
+    console.log = () => {};
+    let result;
+    try {
+      result = await agent._manageContext(tabId, messages, () => {});
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(result.compacted, true, `${AgentClass.name}: short over-budget history should compact`);
+    assert.equal(result.summarized, 3, `${AgentClass.name}: should summarize only turns before the latest user request`);
+    assert.ok(messages.some(m => m.role === 'user' && m.content === latestUserTurn), `${AgentClass.name}: latest user turn should remain verbatim`);
+    const summary = messages.find(m => /Context window was trimmed/i.test(String(m.content || '')));
+    assert.ok(summary, `${AgentClass.name}: summary message missing`);
+    assert.ok(!String(summary.content || '').includes(latestUserTurn), `${AgentClass.name}: latest user turn should not be folded into the summary`);
+
+    const h = agent.persistTimers?.get?.(tabId);
+    if (h) clearTimeout(h);
+  }
+});
+
+test('context compaction ignores injected user notes when preserving the latest user turn', async () => {
+  const latestUserTurn = 'CURRENT HUMAN REQUEST: revise the next step with this instruction';
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 4000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 200 : 201;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'keep working on the task' },
+      { role: 'assistant', content: `first exchange ${'x'.repeat(3900)}` },
+      { role: 'user', content: `previous clarification ${'y'.repeat(3900)}` },
+      { role: 'assistant', content: `second exchange ${'z'.repeat(3900)}` },
+      { role: 'user', content: latestUserTurn },
+      { role: 'user', content: '[Auto-screenshot after the action above - vision sub-call failed, image omitted.]' },
+    ];
+
+    const origLog = console.log;
+    console.log = () => {};
+    let result;
+    try {
+      result = await agent._manageContext(tabId, messages, () => {});
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(result.compacted, true, `${AgentClass.name}: injected-note history should compact`);
+    assert.equal(result.summarized, 3, `${AgentClass.name}: should preserve the latest real user request`);
+    assert.ok(messages.some(m => m.role === 'user' && m.content === latestUserTurn), `${AgentClass.name}: latest real user turn should remain verbatim`);
+    const summary = messages.find(m => /Context window was trimmed/i.test(String(m.content || '')));
+    assert.ok(summary, `${AgentClass.name}: summary message missing`);
+    assert.ok(!String(summary.content || '').includes(latestUserTurn), `${AgentClass.name}: latest real user turn should not be folded into the summary`);
+
+    const h = agent.persistTimers?.get?.(tabId);
+    if (h) clearTimeout(h);
+  }
+});
+
+test('context compaction truncates when protected recent history still exceeds budget', async () => {
+  const latestUserTurn = 'CURRENT USER REQUEST: inspect this large result next';
+  const hugeToolResult = 'tool-result '.repeat(900);
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 4000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 198 : 199;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'keep working on the task' },
+      { role: 'assistant', content: `first exchange ${'x'.repeat(3900)}` },
+      { role: 'user', content: `previous clarification ${'y'.repeat(3900)}` },
+      { role: 'assistant', content: `second exchange ${'z'.repeat(3900)}` },
+      { role: 'user', content: latestUserTurn },
+      { role: 'assistant', tool_calls: [{ id: 'tool-protected', function: { name: 'read_page' } }] },
+      { role: 'tool', tool_call_id: 'tool-protected', content: hugeToolResult },
+    ];
+
+    const origLog = console.log;
+    console.log = () => {};
+    let result;
+    try {
+      result = await agent._manageContext(tabId, messages, () => {});
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(result.compacted, true, `${AgentClass.name}: protected oversized recent tail should still compact via truncation`);
+    assert.equal(result.reason, 'truncated_oversized_messages', `${AgentClass.name}: should fall back to truncation instead of rebuilding over budget`);
+    assert.ok(messages.some(m => m.role === 'user' && m.content === latestUserTurn), `${AgentClass.name}: latest user turn should remain verbatim`);
+    assert.match(messages[messages.length - 1].content, /\[\.\.\.truncated to fit context\]/, `${AgentClass.name}: protected recent tool result should be truncated`);
+
+    const h = agent.persistTimers?.get?.(tabId);
+    if (h) clearTimeout(h);
+  }
+});
+
+test('context compaction shrinks bulky retained recent history to fit small-window budget', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 16384, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 192 : 193;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'keep working on the task' },
+    ];
+    for (let i = 0; i < 20; i++) {
+      messages.push({ role: 'assistant', content: `step ${i} ${'x'.repeat(2490)}` });
+      messages.push({ role: 'user', content: `ok ${i} ${'y'.repeat(2490)}` });
+    }
+
+    const origLog = console.log;
+    console.log = () => {};
+    let result;
+    try {
+      result = await agent._manageContext(tabId, messages, () => {});
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(result.compacted, true, `${AgentClass.name}: bulky retained history should compact`);
+    assert.ok(result.summarized > 10, `${AgentClass.name}: should summarize some retained recent messages`);
+    assert.ok(agent._estimateContextChars(messages) <= result.budget * 4, `${AgentClass.name}: compacted messages still exceed budget estimate`);
+    assert.ok(messages.some(m => String(m.content || '').includes('ok 19')), `${AgentClass.name}: newest user turn should remain recent`);
+    assert.ok(!messages.some(m => m.role === 'assistant' && String(m.content || '').startsWith('step 5 ')), `${AgentClass.name}: bulky older recent turn should be summarized`);
+
+    const h = agent.persistTimers?.get?.(tabId);
+    if (h) clearTimeout(h);
+  }
+});
+
+test('context compaction reserves provider-reported fixed prompt overhead', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 16384, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 194 : 195;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'keep working on the task' },
+    ];
+    for (let i = 0; i < 20; i++) {
+      messages.push({ role: 'assistant', content: `step ${i} ${'x'.repeat(2490)}` });
+      messages.push({ role: 'user', content: `ok ${i} ${'y'.repeat(2490)}` });
+    }
+
+    const totalChars = agent._estimateContextChars(messages);
+    const fixedOverheadTokens = 2000;
+    agent._lastEstCharsAtReport.set(tabId, totalChars);
+    agent._lastInputTokens.set(tabId, Math.ceil(totalChars / 4) + fixedOverheadTokens);
+
+    const origLog = console.log;
+    console.log = () => {};
+    let result;
+    try {
+      result = await agent._manageContext(tabId, messages, () => {});
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(result.compacted, true, `${AgentClass.name}: fixed-overhead run should compact`);
+    assert.ok(agent._estimateContextChars(messages) + (fixedOverheadTokens * 4) <= result.budget * 4, `${AgentClass.name}: compacted prompt does not reserve fixed overhead`);
+    assert.ok(messages.some(m => String(m.content || '').includes('ok 19')), `${AgentClass.name}: newest user turn should remain recent`);
+
+    const h = agent.persistTimers?.get?.(tabId);
+    if (h) clearTimeout(h);
+  }
+});
+
 test('manual compactConversation reports emergency truncation as compacted', async () => {
   for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
     const agent = new AgentClass({ getActive: () => ({ contextWindow: 4000, supportsVision: false }) });
