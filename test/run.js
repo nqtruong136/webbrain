@@ -3362,6 +3362,20 @@ test('settings General search filters visible and Advanced controls', () => {
   }
 });
 
+test('CAPTCHA guidance points to General Advanced settings', () => {
+  for (const [label, agentRel, toolsRel] of [
+    ['chrome', 'src/chrome/src/agent/agent.js', 'src/chrome/src/agent/tools.js'],
+    ['firefox', 'src/firefox/src/agent/agent.js', 'src/firefox/src/agent/tools.js'],
+  ]) {
+    const agent = fs.readFileSync(path.join(ROOT, agentRel), 'utf8');
+    const tools = fs.readFileSync(path.join(ROOT, toolsRel), 'utf8');
+    const removedSettingsPath = new RegExp('Settings → ' + 'CAPTCHA');
+    assert.doesNotMatch(`${agent}\n${tools}`, removedSettingsPath, `${label}: CAPTCHA setup guidance should not point to removed tab`);
+    assert.match(agent, /Settings → General → Advanced/, `${label}: solve_captcha runtime errors should point to General Advanced`);
+    assert.match(tools, /Settings → General → Advanced/, `${label}: solve_captcha tool description should point to General Advanced`);
+  }
+});
+
 test('chrome sidepanel Escape abort honors slash autocomplete dismissal', () => {
   const panel = fs.readFileSync(path.join(ROOT, 'src/chrome/src/ui/sidepanel.js'), 'utf8');
   assert.match(panel, /if \(e\.key === 'Escape'\) \{\s*e\.preventDefault\(\);\s*hideSlashCommandAutocomplete\(\);\s*return true;\s*\}/, 'chrome: slash autocomplete Escape should consume the key event');
