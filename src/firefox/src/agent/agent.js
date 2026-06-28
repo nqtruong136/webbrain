@@ -4248,7 +4248,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // recent turns back into the summary set to make compaction possible.
       const latestUserRecentIndex = () => {
         for (let i = recentMessages.length - 1; i >= 0; i--) {
-          if (recentMessages[i]?.role === 'user') return i;
+          const msg = recentMessages[i];
+          if (msg?.role === 'user' && !this._isAgentInjectedUserContent(msg.content)) return i;
         }
         return -1;
       };

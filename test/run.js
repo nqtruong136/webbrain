@@ -9789,6 +9789,42 @@ test('context compaction preserves the latest user turn while seeding a small su
   }
 });
 
+test('context compaction ignores injected user notes when preserving the latest user turn', async () => {
+  const latestUserTurn = 'CURRENT HUMAN REQUEST: revise the next step with this instruction';
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 4000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 200 : 201;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'keep working on the task' },
+      { role: 'assistant', content: `first exchange ${'x'.repeat(3900)}` },
+      { role: 'user', content: `previous clarification ${'y'.repeat(3900)}` },
+      { role: 'assistant', content: `second exchange ${'z'.repeat(3900)}` },
+      { role: 'user', content: latestUserTurn },
+      { role: 'user', content: '[Auto-screenshot after the action above - vision sub-call failed, image omitted.]' },
+    ];
+
+    const origLog = console.log;
+    console.log = () => {};
+    let result;
+    try {
+      result = await agent._manageContext(tabId, messages, () => {});
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(result.compacted, true, `${AgentClass.name}: injected-note history should compact`);
+    assert.equal(result.summarized, 3, `${AgentClass.name}: should preserve the latest real user request`);
+    assert.ok(messages.some(m => m.role === 'user' && m.content === latestUserTurn), `${AgentClass.name}: latest real user turn should remain verbatim`);
+    const summary = messages.find(m => /Context window was trimmed/i.test(String(m.content || '')));
+    assert.ok(summary, `${AgentClass.name}: summary message missing`);
+    assert.ok(!String(summary.content || '').includes(latestUserTurn), `${AgentClass.name}: latest real user turn should not be folded into the summary`);
+
+    const h = agent.persistTimers?.get?.(tabId);
+    if (h) clearTimeout(h);
+  }
+});
+
 test('context compaction truncates when protected recent history still exceeds budget', async () => {
   const latestUserTurn = 'CURRENT USER REQUEST: inspect this large result next';
   const hugeToolResult = 'tool-result '.repeat(900);
