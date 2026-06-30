@@ -4807,6 +4807,66 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return this._currentTaskProgressRows(tabId).length > 0;
   }
 
+  _emptyOutputRecoveryNudge(mode) {
+    if (mode === 'act') {
+      return '[System nudge: your previous response had neither text nor a tool call. Continue the active browser task with tool calls. If the task is truly complete, call the done tool with a real summary. Do not output a plain summary and do not stop without a tool call.]';
+    }
+    return '[System nudge: your previous response had neither text nor a tool call. You may have run out of output budget on internal reasoning. In ONE short message, summarize what you accomplished, what you tried, and what blocked you - then stop. Do not start any new tool calls.]';
+  }
+
+  _buildAutoProgressResumeInstruction(tabId) {
+    const rows = this._currentTaskLedgerRows(tabId);
+    const unresolved = this._currentTaskProgressRows(tabId);
+    const counts = progressCounts(rows);
+    return [
+      'Continue the active Act-mode progress-ledger task after the previous run hit consecutive stalled model outputs.',
+      'Reread the current page/state before acting.',
+      'Use the pinned progress ledger or progress_read to decide what remains.',
+      'Do not redo processed, skipped, or failed rows.',
+      'Continue only unresolved pending/acted rows for the current task.',
+      'Prefer a small batch of tool calls, then update progress.',
+      'When all rows are processed, skipped, or failed, call done with a real summary.',
+      `Current progress snapshot: ${counts.total} row(s), ${unresolved.length} unresolved.`,
+    ].join(' ');
+  }
+
+  async _scheduleAutoProgressResume(tabId, onUpdate = () => {}) {
+    if (!this.scheduler) return null;
+    if ((this.conversationModes.get(tabId) || 'ask') !== 'act') return null;
+    if (!this._shouldBlockDoneForProgress(tabId)) return null;
+
+    const { tabUrl, tabTitle } = await this._getTabUrlTitle(tabId);
+    let result;
+    try {
+      result = await this.scheduler.createResumeJob({
+        tabId,
+        conversationId: this.conversationIds.get(tabId) || null,
+        mode: 'act',
+        args: {
+          after_seconds: 90,
+          reason: 'The active progress-ledger task hit consecutive stalled model outputs before finishing.',
+          resume_instruction: this._buildAutoProgressResumeInstruction(tabId),
+        },
+        currentUrl: tabUrl,
+        currentTitle: tabTitle,
+      });
+    } catch (e) {
+      onUpdate('warning', { message: `Could not schedule automatic resume: ${e?.message || e}` });
+      return null;
+    }
+    if (!result?.success) {
+      const error = result?.error || 'unknown error';
+      onUpdate('warning', { message: `Could not schedule automatic resume: ${error}` });
+      return null;
+    }
+
+    const message = result.deduped
+      ? `Agent hit consecutive stalled outputs; an existing resume is already scheduled for ${result.scheduledAt}.`
+      : `Agent hit consecutive stalled outputs; scheduled a resume for ${result.scheduledAt}.`;
+    onUpdate('warning', { message });
+    return { ...result, message };
+  }
+
   _plainFinalProgressBlock(tabId) {
     const progressBlock = this._shouldBlockDoneForProgress(tabId)
       ? this._progressDoneBlock(tabId)
@@ -9181,6 +9241,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
   // ─────────────────────────────────────────────────────────────────────
 
+  _isCompressionPlaceholderResponse(text) {
+    const normalized = String(text || '').trim().toLowerCase();
+    return normalized === '[compressed]' || normalized === '[context compressed]';
+  }
+
   async processMessage(tabId, userMessage, onUpdate = () => {}, mode = 'ask') {
     if (this._runningTabs.has(tabId)) {
       throw new Error('An agent run is already in progress for this tab.');
@@ -9254,6 +9319,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // (no-content + no-tool-call) response. Used by the recovery branch
     // in the main loop to avoid an infinite empty→nudge→empty→nudge loop.
     let emptyOutputRecoveryAttempted = false;
+    let compressionPlaceholderRecoveryAttempted = false;
 
     if (!runId) {
       runId = await this._startTraceRun(tabId, userMessage, mode, provider);
@@ -9432,7 +9498,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       //   (b) Model returned NEITHER content NOR tool calls. This is the
       //       "model gave up mid-thought" failure mode (often after burning
       //       its output budget on internal reasoning_tokens). We try to
-      //       recover ONCE by nudging the model to emit a summary; if the
+      //       recover ONCE with a mode-aware nudge; if the
       //       second attempt also comes back empty we abandon the run with
       //       a transparent failure message instead of silently recording
       //       a "done" run with empty content (the previous behavior).
@@ -9444,16 +9510,51 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         onUpdate('warning', { message: finalResponse });
         break;
       }
+      if (mode === 'act' && this._isCompressionPlaceholderResponse(result.content)) {
+        if (!compressionPlaceholderRecoveryAttempted) {
+          compressionPlaceholderRecoveryAttempted = true;
+          messages.push({ role: 'assistant', content: result.content });
+          messages.push({
+            role: 'user',
+            content: '[System nudge: your previous response was a context-compression placeholder, not a real final answer or tool call. Continue the active browser task with tool calls. Do not output "[compressed]".]',
+          });
+          onUpdate('warning', { message: 'Model returned a compression placeholder; continuing.' });
+          this._persist(tabId);
+          continue;
+        }
+        const scheduledResume = await this._scheduleAutoProgressResume(tabId, onUpdate);
+        if (scheduledResume) {
+          finalResponse = scheduledResume.message;
+          _traceStatus = 'scheduled_resume';
+          messages.push({ role: 'assistant', content: finalResponse });
+          this._persist(tabId);
+          break;
+        }
+        finalResponse = '[Agent stopped because the model returned a context-compression placeholder instead of a tool call or real final answer, even after a recovery nudge.]';
+        _traceStatus = 'placeholder_output';
+        messages.push({ role: 'assistant', content: finalResponse });
+        onUpdate('warning', { message: finalResponse });
+        break;
+      }
       if (isEmpty) {
         if (!emptyOutputRecoveryAttempted) {
           emptyOutputRecoveryAttempted = true;
           messages.push({
             role: 'user',
-            content: '[System nudge: your previous response had neither text nor a tool call. You may have run out of output budget on internal reasoning. In ONE short message, summarize what you accomplished, what you tried, and what blocked you — then stop. Do not start any new tool calls.]',
+            content: this._emptyOutputRecoveryNudge(mode),
           });
-          continue; // give the model one more turn to summarize
+          this._persist(tabId);
+          continue; // give the model one more turn to recover
         }
-        // Second empty in a row — give up with a transparent message.
+        const scheduledResume = await this._scheduleAutoProgressResume(tabId, onUpdate);
+        if (scheduledResume) {
+          finalResponse = scheduledResume.message;
+          _traceStatus = 'scheduled_resume';
+          messages.push({ role: 'assistant', content: finalResponse });
+          this._persist(tabId);
+          break;
+        }
+        // Second empty in a row: give up with a transparent message.
         finalResponse = '[Agent emitted no output and no tool call, even after a recovery nudge. This usually means the task exceeded the current model\'s capability or context budget. Try a stronger model, raise the step limit in settings, or break the task into smaller parts.]';
         _traceStatus = 'empty_output';
         messages.push({ role: 'assistant', content: finalResponse });
@@ -9572,6 +9673,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     let steps = 0;
     // See processMessage — used to break the empty-response→nudge cycle.
     let emptyOutputRecoveryAttempted = false;
+    let compressionPlaceholderRecoveryAttempted = false;
 
     while (steps < this.maxSteps) {
       if (this._checkAbort(tabId)) {
@@ -9685,7 +9787,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
         // No tool calls — final response. Detect the "empty output"
         // failure mode (no text + no tool call after non-trivial reasoning)
-        // and recover once via a summary-nudge before giving up.
+        // and recover once via a mode-aware nudge before giving up.
         this._logDebug({ type: 'llm_stream_response', step: steps, content: fullText, toolCalls: null });
         if ((!fullText || !fullText.trim()) && costStopMessage) {
           messages.push({ role: 'assistant', content: costStopMessage });
@@ -9698,16 +9800,46 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             emptyOutputRecoveryAttempted = true;
             messages.push({
               role: 'user',
-              content: '[System nudge: your previous response had neither text nor a tool call. You may have run out of output budget on internal reasoning. In ONE short message, summarize what you accomplished, what you tried, and what blocked you — then stop. Do not start any new tool calls.]',
+              content: this._emptyOutputRecoveryNudge(mode),
             });
             this._persist(tabId);
             continue;
+          }
+          const scheduledResume = await this._scheduleAutoProgressResume(tabId, onUpdate);
+          if (scheduledResume) {
+            messages.push({ role: 'assistant', content: scheduledResume.message });
+            this._persist(tabId);
+            return finish(scheduledResume.message, 'scheduled_resume');
           }
           const failMsg = '[Agent emitted no output and no tool call, even after a recovery nudge. This usually means the task exceeded the current model\'s capability or context budget. Try a stronger model, raise the step limit in settings, or break the task into smaller parts.]';
           messages.push({ role: 'assistant', content: failMsg });
           onUpdate('warning', { message: failMsg });
           this._persist(tabId);
           return finish(failMsg, 'empty_output');
+        }
+        if (mode === 'act' && this._isCompressionPlaceholderResponse(fullText)) {
+          if (!compressionPlaceholderRecoveryAttempted) {
+            compressionPlaceholderRecoveryAttempted = true;
+            messages.push({ role: 'assistant', content: fullText });
+            messages.push({
+              role: 'user',
+              content: '[System nudge: your previous response was a context-compression placeholder, not a real final answer or tool call. Continue the active browser task with tool calls. Do not output "[compressed]".]',
+            });
+            onUpdate('warning', { message: 'Model returned a compression placeholder; continuing.' });
+            this._persist(tabId);
+            continue;
+          }
+          const scheduledResume = await this._scheduleAutoProgressResume(tabId, onUpdate);
+          if (scheduledResume) {
+            messages.push({ role: 'assistant', content: scheduledResume.message });
+            this._persist(tabId);
+            return finish(scheduledResume.message, 'scheduled_resume');
+          }
+          const failMsg = '[Agent stopped because the model returned a context-compression placeholder instead of a tool call or real final answer, even after a recovery nudge.]';
+          messages.push({ role: 'assistant', content: failMsg });
+          onUpdate('warning', { message: failMsg });
+          this._persist(tabId);
+          return finish(failMsg, 'placeholder_output');
         }
         emptyOutputRecoveryAttempted = false;
         const progressFinalBlock = this._plainFinalProgressBlock(tabId);
