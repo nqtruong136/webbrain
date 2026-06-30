@@ -28,6 +28,24 @@ function packagedFreeSkillzRecord(prefix) {
   };
 }
 
+function skillContentWithTool(name, endpoint) {
+  return `# Test Skill
+Use this test skill.
+
+\`\`\`webbrain-tools
+[
+  {
+    "name": "${name}",
+    "description": "Read test data.",
+    "endpoint": "${endpoint}",
+    "method": "GET",
+    "parameters": { "type": "object", "properties": {}, "required": [] }
+  }
+]
+\`\`\`
+`;
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Module loading
 // ────────────────────────────────────────────────────────────────────────
@@ -231,8 +249,11 @@ const {
   DEFAULT_SKILL_SOURCES: DEFAULT_SKILL_SOURCES_CH,
   DEFAULT_SKILLS_REMOVED_STORAGE_KEY: DEFAULT_SKILLS_REMOVED_STORAGE_KEY_CH,
   DEFAULT_SKILLS_SEEDED_STORAGE_KEY: DEFAULT_SKILLS_SEEDED_STORAGE_KEY_CH,
+  MAX_CUSTOM_SKILL_IMPORT_BYTES: MAX_CUSTOM_SKILL_IMPORT_BYTES_CH,
   normalizeCustomSkills: normalizeCustomSkillsCh,
   normalizeDefaultSkillRemovalIds: normalizeDefaultSkillRemovalIdsCh,
+  refreshBuiltInSkillRecord: refreshBuiltInSkillRecordCh,
+  readSkillImportText: readSkillImportTextCh,
   buildCustomSkillsPrompt: buildCustomSkillsPromptCh,
   buildSkillToolDefinitions: buildSkillToolDefinitionsCh,
   buildSkillToolRegistry: buildSkillToolRegistryCh,
@@ -244,8 +265,11 @@ const {
   DEFAULT_SKILL_SOURCES: DEFAULT_SKILL_SOURCES_FX,
   DEFAULT_SKILLS_REMOVED_STORAGE_KEY: DEFAULT_SKILLS_REMOVED_STORAGE_KEY_FX,
   DEFAULT_SKILLS_SEEDED_STORAGE_KEY: DEFAULT_SKILLS_SEEDED_STORAGE_KEY_FX,
+  MAX_CUSTOM_SKILL_IMPORT_BYTES: MAX_CUSTOM_SKILL_IMPORT_BYTES_FX,
   normalizeCustomSkills: normalizeCustomSkillsFx,
   normalizeDefaultSkillRemovalIds: normalizeDefaultSkillRemovalIdsFx,
+  refreshBuiltInSkillRecord: refreshBuiltInSkillRecordFx,
+  readSkillImportText: readSkillImportTextFx,
   buildCustomSkillsPrompt: buildCustomSkillsPromptFx,
   buildSkillToolDefinitions: buildSkillToolDefinitionsFx,
   buildSkillToolRegistry: buildSkillToolRegistryFx,
@@ -2965,6 +2989,88 @@ test('custom skills parse tool manifests without injecting manifest JSON into pr
     const defs = buildDefs(skills, { mode: 'ask' });
     assert.equal(defs.length, 1, `${label}: skill tool definition missing`);
     assert.equal(defs[0].function.name, 'read_youtube_transcript', `${label}: wrong tool definition name`);
+  }
+});
+
+test('default built-in skill refresh reparses tools from current packaged content', () => {
+  for (const [label, normalizeSkills, refreshRecord] of [
+    ['chrome', normalizeCustomSkillsCh, refreshBuiltInSkillRecordCh],
+    ['firefox', normalizeCustomSkillsFx, refreshBuiltInSkillRecordFx],
+  ]) {
+    const currentContent = skillContentWithTool('new_tool', 'https://example.com/new');
+    const stale = normalizeSkills([{
+      id: 'freeskillz-xyz',
+      name: 'FreeSkillz.xyz',
+      sourceType: 'built-in',
+      sourceUrl: 'skills/freeskillz-xyz.md',
+      content: currentContent,
+      tools: [{
+        name: 'old_tool',
+        description: 'Stale tool from an older built-in skill manifest.',
+        endpoint: 'https://example.com/old',
+        method: 'GET',
+        parameters: { type: 'object', properties: {}, required: [] },
+      }],
+      createdAt: 123,
+    }])[0];
+    assert.equal(stale.tools[0].name, 'old_tool', `${label}: setup should preserve stale stored tools`);
+
+    const current = {
+      id: 'freeskillz-xyz',
+      name: 'FreeSkillz.xyz',
+      sourceType: 'built-in',
+      sourceUrl: 'skills/freeskillz-xyz.md',
+      content: currentContent,
+      createdAt: 0,
+    };
+    const result = refreshRecord(stale, current);
+    assert.equal(result.changed, true, `${label}: stale tools should trigger a refresh`);
+    assert.equal(Object.prototype.hasOwnProperty.call(result.skill, 'tools'), false, `${label}: refreshed raw record must not keep stale tools`);
+    const refreshed = normalizeSkills([result.skill])[0];
+    assert.equal(refreshed.tools.length, 1, `${label}: refreshed manifest should expose one tool`);
+    assert.equal(refreshed.tools[0].name, 'new_tool', `${label}: current manifest tool was not reparsed`);
+    assert.equal(refreshed.createdAt, 123, `${label}: refresh should preserve stored creation time`);
+  }
+});
+
+function streamResponse(chunks, headers = {}) {
+  const encoder = new TextEncoder();
+  return {
+    headers: {
+      get(name) {
+        return headers[String(name).toLowerCase()] ?? null;
+      },
+    },
+    body: new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    }),
+  };
+}
+
+test('skill URL import reader enforces byte caps while streaming', async () => {
+  for (const [label, readText, maxBytes] of [
+    ['chrome', readSkillImportTextCh, MAX_CUSTOM_SKILL_IMPORT_BYTES_CH],
+    ['firefox', readSkillImportTextFx, MAX_CUSTOM_SKILL_IMPORT_BYTES_FX],
+  ]) {
+    assert.equal(maxBytes, 500000, `${label}: import byte cap changed unexpectedly`);
+    assert.equal(
+      await readText(streamResponse(['hello'], { 'content-length': '1' }), { maxBytes: 5 }),
+      'hello',
+      `${label}: reader should not reject just because Content-Length is smaller than the decoded body`,
+    );
+    await assert.rejects(
+      readText(streamResponse(['abc', 'def'], { 'content-length': '2' }), { maxBytes: 5 }),
+      /too large/i,
+      `${label}: streaming body over the cap should reject even with a small Content-Length`,
+    );
+    await assert.rejects(
+      readText(streamResponse(['ok'], { 'content-length': '6' }), { maxBytes: 5 }),
+      /too large/i,
+      `${label}: large Content-Length should reject before reading`,
+    );
   }
 });
 

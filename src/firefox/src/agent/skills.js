@@ -3,6 +3,7 @@ export const DEFAULT_SKILLS_SEEDED_STORAGE_KEY = 'defaultSkillsSeeded';
 export const DEFAULT_SKILLS_REMOVED_STORAGE_KEY = 'defaultSkillsRemoved';
 export const MAX_CUSTOM_SKILLS = 20;
 export const MAX_CUSTOM_SKILL_CHARS = 20000;
+export const MAX_CUSTOM_SKILL_IMPORT_BYTES = 500000;
 export const MAX_CUSTOM_SKILLS_PROMPT_CHARS = 50000;
 export const MAX_CUSTOM_SKILL_TOOLS = 8;
 export const MAX_CUSTOM_SKILL_TOOL_NAME_CHARS = 64;
@@ -225,6 +226,71 @@ function normalizeSkills(value, { maxSkills = MAX_CUSTOM_SKILLS } = {}) {
 
 export function normalizeCustomSkills(value) {
   return normalizeSkills(value);
+}
+
+export function refreshBuiltInSkillRecord(existingSkill, currentSkill) {
+  if (!existingSkill || !currentSkill || existingSkill.sourceType !== 'built-in') {
+    return { skill: existingSkill, changed: false };
+  }
+  if (existingSkill.sourceUrl && existingSkill.sourceUrl !== currentSkill.sourceUrl) {
+    return { skill: existingSkill, changed: false };
+  }
+
+  const refreshed = {
+    id: existingSkill.id,
+    name: currentSkill.name,
+    sourceType: 'built-in',
+    sourceUrl: currentSkill.sourceUrl,
+    content: currentSkill.content,
+    createdAt: Number.isFinite(Number(existingSkill.createdAt)) ? Number(existingSkill.createdAt) : 0,
+  };
+  const currentNormalized = normalizeSkills([refreshed])[0];
+  const existingNormalized = normalizeSkills([existingSkill])[0];
+  const changed = !currentNormalized || !existingNormalized
+    ? !!currentNormalized
+    : existingNormalized.name !== currentNormalized.name
+      || existingNormalized.sourceUrl !== currentNormalized.sourceUrl
+      || existingNormalized.content !== currentNormalized.content
+      || JSON.stringify(existingNormalized.tools || []) !== JSON.stringify(currentNormalized.tools || []);
+
+  return { skill: changed ? refreshed : existingSkill, changed };
+}
+
+function skillImportTooLargeError(message) {
+  const error = new Error(message || 'Skill content is too large.');
+  error.code = 'skill_import_too_large';
+  return error;
+}
+
+export async function readSkillImportText(response, opts = {}) {
+  const maxBytes = Number.isFinite(Number(opts.maxBytes)) ? Number(opts.maxBytes) : MAX_CUSTOM_SKILL_IMPORT_BYTES;
+  const contentLength = Number(response?.headers?.get?.('content-length') || 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw skillImportTooLargeError(opts.tooLargeMessage);
+  }
+
+  const reader = response?.body?.getReader?.();
+  if (!reader) {
+    const error = new Error('Skill response body is not stream-readable.');
+    error.code = 'skill_import_unreadable';
+    throw error;
+  }
+
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let text = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytesRead += value?.byteLength ?? value?.length ?? 0;
+    if (bytesRead > maxBytes) {
+      try { await reader.cancel(); } catch {}
+      throw skillImportTooLargeError(opts.tooLargeMessage);
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();
+  return text;
 }
 
 export function normalizeDefaultSkillRemovalIds(value) {

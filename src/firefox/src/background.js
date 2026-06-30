@@ -8,6 +8,7 @@ import {
   MAX_CUSTOM_SKILLS,
   normalizeCustomSkills,
   normalizeDefaultSkillRemovalIds,
+  refreshBuiltInSkillRecord,
 } from './agent/skills.js';
 import { ScheduledJobManager } from './agent/scheduler.js';
 import {
@@ -163,10 +164,9 @@ async function refreshDefaultSkillRecords(skills) {
   const refreshed = skills.map((skill) => {
     const current = defaults.get(skill.id);
     if (!current || skill.sourceType !== 'built-in') return skill;
-    if (skill.sourceUrl && skill.sourceUrl !== current.sourceUrl) return skill;
-    if (skill.name === current.name && skill.content === current.content && skill.sourceUrl === current.sourceUrl) return skill;
-    changed = true;
-    return { ...skill, name: current.name, sourceUrl: current.sourceUrl, content: current.content };
+    const result = refreshBuiltInSkillRecord(skill, current);
+    if (result.changed) changed = true;
+    return result.skill;
   });
   return { skills: changed ? normalizeCustomSkills(refreshed) : skills, changed };
 }
