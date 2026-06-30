@@ -5368,6 +5368,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    */
   _digestToolResult(name, content) {
     if (!content) return '(empty)';
+    const isUntrusted = this._isUntrustedTool(name) || this._hasUntrustedWrapper(content);
     // Unwrap the untrusted-content markers first so the inner JSON parses —
     // otherwise the parse fails and the fallback would dump raw (attacker-
     // controlled) page text into the trusted trim summary / summarizer input.
@@ -5376,7 +5377,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     try { parsed = JSON.parse(raw); } catch { /* not JSON / truncated */ }
     if (!parsed || typeof parsed !== 'object') {
       // Never echo raw bytes from a page-derived tool into the trusted summary.
-      if (this._isUntrustedTool(name)) {
+      if (isUntrusted) {
         return `${name}: untrusted page content (${String(raw).length} chars)`;
       }
       return this._truncate(String(raw).replace(/\s+/g, ' '), 140);
@@ -5386,7 +5387,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // text (a fetched URL, a filename, a page-error snippet). Echoing it
       // into the trusted trim summary / summarizer prompt would smuggle that
       // text out of the untrusted wrapper, so emit a content-free note instead.
-      if (this._isUntrustedTool(name)) {
+      if (isUntrusted) {
         return `${name}: error (untrusted page content)`;
       }
       return `error: ${this._truncate(String(parsed.error), 120)}`;
@@ -5497,12 +5498,12 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         return `scratchpad ${parsed.mode || 'write'} (${parsed.bytes ?? '?'} chars)`;
       }
       case 'progress_update': {
-        if (this._isUntrustedTool(name)) return `${name} ok (untrusted page content)`;
+        if (isUntrusted) return `${name} ok (untrusted page content)`;
         const c = parsed.counts || {};
         return `progress ledger updated (${c.total ?? '?'} rows, ${c.unresolved ?? 0} unresolved)`;
       }
       case 'progress_read': {
-        if (this._isUntrustedTool(name)) return `${name} ok (untrusted page content)`;
+        if (isUntrusted) return `${name} ok (untrusted page content)`;
         const c = parsed.counts || {};
         return `progress ledger read (${c.total ?? '?'} rows, ${c.unresolved ?? 0} unresolved)`;
       }
@@ -5512,7 +5513,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // object — it holds page content (element labels, selection, frame text,
     // PDF text, execute_js output, …) that would land in the trusted trim
     // summary. Emit a content-free digest instead.
-    if (this._isUntrustedTool(name)) {
+    if (isUntrusted) {
       return `${name} ok (untrusted page content)`;
     }
     try {
@@ -5571,6 +5572,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (typeof content !== 'string') return content;
     const m = content.match(/<untrusted_page_content\b[^>]*>\n?([\s\S]*?)\n?<\/untrusted_page_content\b[^>]*>/);
     return m ? m[1] : content;
+  }
+
+  _hasUntrustedWrapper(content) {
+    return typeof content === 'string'
+      && /<untrusted_page_content\b[^>]*>[\s\S]*?<\/untrusted_page_content\b[^>]*>/.test(content);
   }
 
   /**

@@ -11239,6 +11239,12 @@ test('enabled skill tool results can be marked untrusted by their manifest', () 
     const digest = agent._digestToolResult('read_youtube_transcript', wrapped);
     assert.match(digest, /^read_youtube_transcript: 200 \(\d+ chars\)$/);
     assert.ok(!digest.includes('Ignore previous instructions'), `${label} digest should not launder skill data`);
+
+    agent.setCustomSkills([]);
+    assert.equal(agent._isUntrustedTool('read_youtube_transcript'), false, `${label}: setup should remove skill tool classification`);
+    const removedDigest = agent._digestToolResult('read_youtube_transcript', wrapped);
+    assert.equal(removedDigest, 'read_youtube_transcript ok (untrusted page content)');
+    assert.ok(!removedDigest.includes('Ignore previous instructions'), `${label} removed-skill digest should not launder skill data`);
   }
 });
 
