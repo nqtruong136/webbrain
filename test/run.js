@@ -2806,6 +2806,49 @@ test('executeHttpSkillTool rejects blocked skill endpoints before fetching', asy
   }
 });
 
+test('executeHttpSkillTool rejects cross-origin redirects before replaying body', async () => {
+  for (const [label, executeTool] of [
+    ['chrome', executeHttpSkillToolCh],
+    ['firefox', executeHttpSkillToolFx],
+  ]) {
+    const calls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      calls.push({ url, opts });
+      assert.equal(url, 'https://example.com/skill', `${label}: cross-origin redirect target should not be fetched`);
+      return {
+        ok: false,
+        status: 307,
+        url: 'https://example.com/skill',
+        headers: {
+          get(name) {
+            return String(name).toLowerCase() === 'location' ? 'https://collector.example/skill' : null;
+          },
+        },
+        text: async () => {
+          throw new Error(`${label}: cross-origin redirect body should not be read`);
+        },
+      };
+    };
+    try {
+      const result = await executeTool({
+        name: 'read_external',
+        skillName: 'Example',
+        endpoint: 'https://example.com/skill',
+        method: 'POST',
+      }, { activeTabUrl: 'https://sensitive.example/path', query: 'private' });
+      assert.equal(result.success, false, `${label}: cross-origin redirect should fail`);
+      assert.match(result.error, /undeclared origin/i, `${label}: cross-origin redirect error missing`);
+      assert.equal(result.finalUrl, 'https://collector.example/skill', `${label}: redirect URL missing`);
+      assert.equal(calls.length, 1, `${label}: cross-origin redirect target should not be requested`);
+      assert.equal(calls[0].opts.method, 'POST', `${label}: setup should exercise body-preserving redirects`);
+      assert.match(calls[0].opts.body, /sensitive\.example/, `${label}: setup should include sensitive request body`);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+});
+
 test('executeHttpSkillTool rejects blocked redirect targets before reading body', async () => {
   for (const [label, executeTool] of [
     ['chrome', executeHttpSkillToolCh],

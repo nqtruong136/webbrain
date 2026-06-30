@@ -401,6 +401,17 @@ export async function executeHttpSkillTool(tool, args = {}, ctx = {}) {
           error: 'Skill tool redirected to a non-https URL.',
         };
       }
+      if (nextUrl.origin !== new URL(requestUrl).origin) {
+        return {
+          success: false,
+          status: res.status,
+          provider: endpoint.hostname,
+          skillTool: tool.name || '',
+          skillName: tool.skillName || '',
+          finalUrl: nextUrl.href,
+          error: 'Skill tool redirected to an undeclared origin.',
+        };
+      }
       redirectCount += 1;
       if (redirectCount > 5) {
         return {
