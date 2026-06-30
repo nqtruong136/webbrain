@@ -250,6 +250,7 @@ const {
   DEFAULT_SKILLS_REMOVED_STORAGE_KEY: DEFAULT_SKILLS_REMOVED_STORAGE_KEY_CH,
   DEFAULT_SKILLS_SEEDED_STORAGE_KEY: DEFAULT_SKILLS_SEEDED_STORAGE_KEY_CH,
   MAX_CUSTOM_SKILL_IMPORT_BYTES: MAX_CUSTOM_SKILL_IMPORT_BYTES_CH,
+  fetchSkillImportResponse: fetchSkillImportResponseCh,
   normalizeCustomSkills: normalizeCustomSkillsCh,
   normalizeDefaultSkillRemovalIds: normalizeDefaultSkillRemovalIdsCh,
   refreshBuiltInSkillRecord: refreshBuiltInSkillRecordCh,
@@ -266,6 +267,7 @@ const {
   DEFAULT_SKILLS_REMOVED_STORAGE_KEY: DEFAULT_SKILLS_REMOVED_STORAGE_KEY_FX,
   DEFAULT_SKILLS_SEEDED_STORAGE_KEY: DEFAULT_SKILLS_SEEDED_STORAGE_KEY_FX,
   MAX_CUSTOM_SKILL_IMPORT_BYTES: MAX_CUSTOM_SKILL_IMPORT_BYTES_FX,
+  fetchSkillImportResponse: fetchSkillImportResponseFx,
   normalizeCustomSkills: normalizeCustomSkillsFx,
   normalizeDefaultSkillRemovalIds: normalizeDefaultSkillRemovalIdsFx,
   refreshBuiltInSkillRecord: refreshBuiltInSkillRecordFx,
@@ -3049,6 +3051,86 @@ function streamResponse(chunks, headers = {}) {
     }),
   };
 }
+
+function responseHeaders(headers = {}) {
+  return {
+    get(name) {
+      return headers[String(name).toLowerCase()] ?? null;
+    },
+  };
+}
+
+function redirectResponse(location, url = 'https://example.com/skill.md') {
+  return {
+    ok: false,
+    status: 302,
+    url,
+    headers: responseHeaders({ location }),
+  };
+}
+
+function okSkillResponse(url = 'https://example.com/skill.md') {
+  return {
+    ok: true,
+    status: 200,
+    url,
+    headers: responseHeaders({ 'content-type': 'text/markdown' }),
+    body: streamResponse(['# Skill']).body,
+  };
+}
+
+test('skill URL import fetch validates redirects before fetching redirected bodies', async () => {
+  const validateUrl = (raw) => {
+    const url = new URL(String(raw || '').trim());
+    if (url.protocol !== 'https:') throw new Error('invalid skill URL');
+    return url.href;
+  };
+
+  for (const [label, fetchImport] of [
+    ['chrome', fetchSkillImportResponseCh],
+    ['firefox', fetchSkillImportResponseFx],
+  ]) {
+    const downgradedCalls = [];
+    await assert.rejects(
+      fetchImport('https://example.com/skill.md', {
+        validateUrl,
+        fetchImpl: async (url, init) => {
+          downgradedCalls.push({ url, init });
+          return redirectResponse('http://127.0.0.1/skill.md', url);
+        },
+      }),
+      /invalid skill URL|blocked URL/i,
+      `${label}: HTTPS-to-local/plain-HTTP redirect should reject`,
+    );
+    assert.equal(downgradedCalls.length, 1, `${label}: blocked redirect must not be fetched`);
+    assert.equal(downgradedCalls[0].init.redirect, 'manual', `${label}: import fetch must not auto-follow redirects`);
+
+    const crossOriginCalls = [];
+    await assert.rejects(
+      fetchImport('https://example.com/skill.md', {
+        validateUrl,
+        fetchImpl: async (url) => {
+          crossOriginCalls.push(url);
+          return redirectResponse('https://evil.example/skill.md', url);
+        },
+      }),
+      /blocked URL/i,
+      `${label}: cross-origin import redirect should reject`,
+    );
+    assert.equal(crossOriginCalls.length, 1, `${label}: cross-origin redirect must not be fetched`);
+
+    const sameOriginResponses = [
+      redirectResponse('/skills/next.md'),
+      okSkillResponse('https://example.com/skills/next.md'),
+    ];
+    const result = await fetchImport('https://example.com/skill.md', {
+      validateUrl,
+      fetchImpl: async () => sameOriginResponses.shift(),
+    });
+    assert.equal(result.response.ok, true, `${label}: same-origin redirect should be allowed`);
+    assert.equal(result.url, 'https://example.com/skills/next.md', `${label}: final URL should be validated and returned`);
+  }
+});
 
 test('skill URL import reader enforces byte caps while streaming', async () => {
   for (const [label, readText, maxBytes] of [

@@ -11,6 +11,7 @@ import {
   DEFAULT_SKILLS_REMOVED_STORAGE_KEY,
   MAX_CUSTOM_SKILL_IMPORT_BYTES,
   MAX_CUSTOM_SKILLS,
+  fetchSkillImportResponse,
   normalizeCustomSkills,
   normalizeDefaultSkillRemovalIds,
   readSkillImportText,
@@ -628,7 +629,10 @@ async function addSkillFromUrl() {
   showSkillsResult('', t('st.skills.loading_url'), 'var(--text2)');
 
   try {
-    const response = await fetch(url, { credentials: 'omit', cache: 'no-store' });
+    const { response, url: finalUrl } = await fetchSkillImportResponse(url, {
+      validateUrl: normalizeSkillUrl,
+      redirectMessage: t('st.skills.error.url'),
+    });
     if (!response.ok) throw new Error(t('st.skills.error.fetch', { status: response.status }));
     const content = extractSkillText(
       await readSkillImportText(response, {
@@ -642,7 +646,7 @@ async function addSkillFromUrl() {
       id: makeSkillId(),
       name: skillNameInput?.value || '',
       sourceType: 'url',
-      sourceUrl: url,
+      sourceUrl: finalUrl,
       content,
       createdAt: Date.now(),
     });
