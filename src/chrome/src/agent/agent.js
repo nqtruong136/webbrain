@@ -42,6 +42,7 @@ import {
 } from './planner.js';
 import { extractFirstJsonObject } from './json-extract.js';
 import { sanitizeText as sanitizePlannerText } from './text-sanitize.js';
+import { buildCustomSkillsPrompt, normalizeCustomSkills } from './skills.js';
 
 const DEFAULT_CLOUD_COST_ALLOWANCE_USD = 10;
 const COST_ALLOWANCE_SESSION_KEY = 'costAllowanceSessionUsd';
@@ -140,6 +141,7 @@ export class Agent {
     // UI. Loaded in background.js alongside other settings.
     this.profileEnabled = false;
     this.profileText = '';
+    this.customSkills = [];
 
     // CapSolver integration. Off by default. When enabled AND an API key
     // is set, the system prompt grows a "[CAPTCHA SOLVER]" note that
@@ -3817,7 +3819,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   /**
    * Compose the full system prompt: base (ASK or ACT) + optional universal
-   * cookie/paywall guidance + optional user profile block.
+   * cookie/paywall guidance + optional user-added skills + optional user
+   * profile block.
    *
    * Everything past the base prompt is appended, NOT prepended — this keeps
    * the cache-stable prefix (base prompt) at the front so providers that
@@ -3833,6 +3836,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // since it's just a few dozen cached tokens.
     if (this.useSiteAdapters) {
       prompt += `\n\n${UNIVERSAL_PREAMBLE.trim()}`;
+    }
+
+    const skillsPrompt = buildCustomSkillsPrompt(this.customSkills);
+    if (skillsPrompt) {
+      prompt += `\n\n${skillsPrompt}`;
     }
 
     // Profile auto-fill. Only injected when the user has both enabled the
@@ -3855,11 +3863,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return prompt;
   }
 
+  setCustomSkills(skills) {
+    this.customSkills = normalizeCustomSkills(skills);
+    this._refreshSystemPrompts();
+  }
+
   /**
    * Rewrite the system prompt on every live conversation — called when the
-   * user toggles `useSiteAdapters` or edits their profile in settings, so
-   * the change takes effect on the next turn without forcing a conversation
-   * reset.
+   * user toggles `useSiteAdapters`, edits their profile, or changes custom
+   * skills in settings, so the change takes effect on the next turn without
+   * forcing a conversation reset.
    */
   _refreshSystemPrompts() {
     for (const [tabId, messages] of this.conversations) {

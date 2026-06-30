@@ -1,5 +1,6 @@
 import { ProviderManager } from './providers/manager.js';
 import { Agent } from './agent/agent.js';
+import { CUSTOM_SKILLS_STORAGE_KEY, normalizeCustomSkills } from './agent/skills.js';
 import { ScheduledJobManager } from './agent/scheduler.js';
 import {
   startClaudeOAuth,
@@ -126,6 +127,12 @@ async function loadProfile() {
 }
 loadProfile();
 
+async function loadCustomSkills() {
+  const stored = await chrome.storage.local.get(CUSTOM_SKILLS_STORAGE_KEY);
+  agent.customSkills = normalizeCustomSkills(stored[CUSTOM_SKILLS_STORAGE_KEY]);
+}
+const customSkillsReady = loadCustomSkills();
+
 // CapSolver opt-in. We only need the toggle here — the API key is read at
 // call time inside the agent's solve_captcha handler so rotating it via
 // the settings page is picked up without a restart.
@@ -210,6 +217,10 @@ chrome.storage.onChanged.addListener((changes) => {
   }
   if (changes.profileText) {
     agent.profileText = changes.profileText.newValue || '';
+    refreshPrompts = true;
+  }
+  if (changes[CUSTOM_SKILLS_STORAGE_KEY]) {
+    agent.customSkills = normalizeCustomSkills(changes[CUSTOM_SKILLS_STORAGE_KEY].newValue);
     refreshPrompts = true;
   }
   if (changes.captchaSolverEnabled) {
@@ -821,10 +832,10 @@ async function handleMessage(msg, sender) {
   if (providerManager.providers.size === 0) {
     await providerManager.load();
   }
-  // Agent toggles (planBeforeAct, etc.) hydrate once at SW boot — await that
-  // single promise so the first chat can't race ahead of hydration, without a
+  // Agent toggles and prompt add-ons hydrate once at SW boot — await those
+  // promises so the first chat can't race ahead of hydration, without a
   // storage round-trip on every message.
-  await planBeforeActReady;
+  await Promise.all([planBeforeActReady, customSkillsReady]);
 
   switch (msg.action) {
     // --- Chat / Agent ---

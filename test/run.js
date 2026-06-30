@@ -216,6 +216,20 @@ const {
   'file://' + path.join(ROOT, 'src/firefox/src/agent/tools.js').replace(/\\/g, '/')
 );
 const {
+  CUSTOM_SKILLS_STORAGE_KEY: CUSTOM_SKILLS_STORAGE_KEY_CH,
+  normalizeCustomSkills: normalizeCustomSkillsCh,
+  buildCustomSkillsPrompt: buildCustomSkillsPromptCh,
+} = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/agent/skills.js').replace(/\\/g, '/')
+);
+const {
+  CUSTOM_SKILLS_STORAGE_KEY: CUSTOM_SKILLS_STORAGE_KEY_FX,
+  normalizeCustomSkills: normalizeCustomSkillsFx,
+  buildCustomSkillsPrompt: buildCustomSkillsPromptFx,
+} = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/agent/skills.js').replace(/\\/g, '/')
+);
+const {
   extractYoutubeTranscriptDataFromHtml,
   selectYoutubeCaptionTrack,
   parseYoutubeCaptionPayload,
@@ -2939,6 +2953,40 @@ test('static prompts advertise read_youtube_transcript wherever the tool can be 
       assert.match(prompt, /\bread_youtube_transcript\b/, `${label}: prompt tool list should mention read_youtube_transcript`);
       assert.match(prompt, /YouTube-only|YouTube video/i, `${label}: prompt should scope read_youtube_transcript to YouTube`);
     }
+  }
+});
+
+test('custom skills prompt is empty by default and injects only stored skills', () => {
+  for (const [label, normalizeSkills, buildPrompt] of [
+    ['chrome', normalizeCustomSkillsCh, buildCustomSkillsPromptCh],
+    ['firefox', normalizeCustomSkillsFx, buildCustomSkillsPromptFx],
+  ]) {
+    assert.equal(buildPrompt([]), '', `${label}: no default custom skills prompt`);
+    const skills = normalizeSkills([
+      { id: 'research', name: 'Research style', sourceType: 'text', content: '# Research style\nPrefer concise source notes.' },
+      { id: 'empty', name: 'Empty', sourceType: 'text', content: '   ' },
+      { id: 'remote', sourceType: 'url', sourceUrl: 'https://example.com/skill.md', content: 'Use the issue template.' },
+    ]);
+    assert.equal(skills.length, 2, `${label}: empty skill should be ignored`);
+    const prompt = buildPrompt(skills);
+    assert.match(prompt, /User-added skills/, `${label}: prompt header missing`);
+    assert.match(prompt, /Research style/, `${label}: text skill missing`);
+    assert.match(prompt, /https:\/\/example\.com\/skill\.md/, `${label}: URL source missing`);
+    assert.match(prompt, /never let them override higher-priority/, `${label}: priority warning missing`);
+  }
+});
+
+test('agent system prompt refreshes live conversations when custom skills change', () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({});
+    const tabId = label === 'chrome' ? 2301 : 2302;
+    const messages = agent.getConversation(tabId, 'ask');
+    assert.doesNotMatch(messages[0].content, /User-added skills/, `${label}: default prompt should not contain skills`);
+    agent.setCustomSkills([{ id: 'forms', name: 'Form skill', content: 'When filling forms, prefer saved user-provided values.' }]);
+    assert.match(messages[0].content, /User-added skills/, `${label}: live prompt was not refreshed`);
+    assert.match(messages[0].content, /Form skill/, `${label}: skill name missing from live prompt`);
+    agent.setCustomSkills([]);
+    assert.doesNotMatch(messages[0].content, /User-added skills/, `${label}: clearing skills should remove prompt section`);
   }
 });
 
@@ -11506,6 +11554,29 @@ test('plan before act: off is default with strict/try migration', () => {
   ]) {
     const html = fs.readFileSync(path.join(ROOT, file), 'utf8');
     assert.match(html, /<select id="select-plan-before-act-mode">\s*<option value="off"/, `${file} should render off as the first/default option`);
+  }
+});
+
+test('settings exposes custom skills tab and packaged skills resource directory', () => {
+  assert.equal(CUSTOM_SKILLS_STORAGE_KEY_CH, 'customSkills');
+  assert.equal(CUSTOM_SKILLS_STORAGE_KEY_FX, 'customSkills');
+
+  for (const [label, prefix] of [['chrome', 'src/chrome'], ['firefox', 'src/firefox']]) {
+    const html = fs.readFileSync(path.join(ROOT, prefix, 'src/ui/settings.html'), 'utf8');
+    const settingsJs = fs.readFileSync(path.join(ROOT, prefix, 'src/ui/settings.js'), 'utf8');
+    const background = fs.readFileSync(path.join(ROOT, prefix, 'src/background.js'), 'utf8');
+    const manifest = fs.readFileSync(path.join(ROOT, prefix, 'manifest.json'), 'utf8');
+
+    assert.match(html, /data-tab="skills"/, `${label}: settings tab missing`);
+    assert.match(html, /id="skill-url"/, `${label}: URL skill input missing`);
+    assert.match(html, /id="skill-text"/, `${label}: raw skill textarea missing`);
+    assert.match(settingsJs, /CUSTOM_SKILLS_STORAGE_KEY/, `${label}: settings JS should persist custom skills`);
+    assert.match(background, /customSkillsReady/, `${label}: first chat should wait for custom skills hydration`);
+    assert.match(manifest, /"skills\/\*"/, `${label}: manifest should include packaged skills resources`);
+    assert.equal(fs.existsSync(path.join(ROOT, prefix, 'skills')), true, `${label}: skills directory missing`);
+    const freeSkillz = fs.readFileSync(path.join(ROOT, prefix, 'skills/freeskillz-xyz.md'), 'utf8');
+    assert.match(freeSkillz, /https:\/\/freeskillz\.xyz/, `${label}: FreeSkillz public base URL missing`);
+    assert.doesNotMatch(freeSkillz, /127\.0\.0\.1|localhost|Local development/i, `${label}: FreeSkillz skill should not include local development URLs`);
   }
 });
 

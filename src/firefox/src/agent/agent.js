@@ -36,6 +36,7 @@ import {
 } from './planner.js';
 import { extractFirstJsonObject } from './json-extract.js';
 import { sanitizeText as sanitizePlannerText } from './text-sanitize.js';
+import { buildCustomSkillsPrompt, normalizeCustomSkills } from './skills.js';
 
 const DEFAULT_CLOUD_COST_ALLOWANCE_USD = 10;
 const COST_ALLOWANCE_SESSION_KEY = 'costAllowanceSessionUsd';
@@ -104,6 +105,7 @@ export class Agent {
     // signup forms). Loaded in background.js and refreshed live on change.
     this.profileEnabled = false;
     this.profileText = '';
+    this.customSkills = [];
     // CapSolver opt-in. Off by default. When enabled AND an API key is
     // set, the system prompt gets a "[CAPTCHA SOLVER]" note telling the
     // model to try `solve_captcha` once before falling back to asking
@@ -3040,13 +3042,18 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   /**
    * Compose the full system prompt: base (ASK or ACT) + optional universal
-   * cookie/paywall guidance + optional user profile block. Base goes
-   * first so prompt-cache prefixes stay stable when user toggles settings.
+   * cookie/paywall guidance + optional user-added skills + optional user
+   * profile block. Base goes first so prompt-cache prefixes stay stable when
+   * user toggles settings.
    */
   _buildSystemPrompt(mode) {
     let prompt = mode === 'act' ? this._getActPrompt() : SYSTEM_PROMPT_ASK;
     if (this.useSiteAdapters) {
       prompt += `\n\n${UNIVERSAL_PREAMBLE.trim()}`;
+    }
+    const skillsPrompt = buildCustomSkillsPrompt(this.customSkills);
+    if (skillsPrompt) {
+      prompt += `\n\n${skillsPrompt}`;
     }
     if (this.profileEnabled && this.profileText && this.profileText.trim()) {
       prompt +=
@@ -3057,6 +3064,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       prompt += `\n\n[CAPTCHA SOLVER — the user has configured CapSolver. When a CAPTCHA blocks a step, call \`solve_captcha\` once (with no arguments — it auto-detects reCAPTCHA v2/v3, hCaptcha, and Cloudflare Turnstile). On success, click the form's submit button and continue. On failure, ask the user to solve it manually — do not retry solve_captcha repeatedly.]`;
     }
     return prompt;
+  }
+
+  setCustomSkills(skills) {
+    this.customSkills = normalizeCustomSkills(skills);
+    this._refreshSystemPrompts();
   }
 
   _refreshSystemPrompts() {

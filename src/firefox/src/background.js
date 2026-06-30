@@ -1,5 +1,6 @@
 import { ProviderManager } from './providers/manager.js';
 import { Agent } from './agent/agent.js';
+import { CUSTOM_SKILLS_STORAGE_KEY, normalizeCustomSkills } from './agent/skills.js';
 import { ScheduledJobManager } from './agent/scheduler.js';
 import {
   startClaudeOAuth,
@@ -126,6 +127,12 @@ async function loadProfile() {
 }
 loadProfile();
 
+async function loadCustomSkills() {
+  const stored = await browser.storage.local.get(CUSTOM_SKILLS_STORAGE_KEY);
+  agent.customSkills = normalizeCustomSkills(stored[CUSTOM_SKILLS_STORAGE_KEY]);
+}
+const customSkillsReady = loadCustomSkills();
+
 // CapSolver opt-in. API key itself is read at solve time so rotating
 // keys via Settings doesn't need a restart.
 async function loadCaptchaSolver() {
@@ -203,6 +210,10 @@ browser.storage.onChanged.addListener((changes) => {
   }
   if (changes.profileText) {
     agent.profileText = changes.profileText.newValue || '';
+    refreshPrompts = true;
+  }
+  if (changes[CUSTOM_SKILLS_STORAGE_KEY]) {
+    agent.customSkills = normalizeCustomSkills(changes[CUSTOM_SKILLS_STORAGE_KEY].newValue);
     refreshPrompts = true;
   }
   if (changes.captchaSolverEnabled) {
@@ -675,9 +686,9 @@ async function handleMessage(msg, sender) {
   if (providerManager.providers.size === 0) {
     await providerManager.load();
   }
-  // Hydrate planBeforeAct once at boot (not per message); onChanged keeps it
-  // in sync afterward.
-  await planBeforeActReady;
+  // Hydrate agent toggles and prompt add-ons once at boot (not per message);
+  // onChanged keeps them in sync afterward.
+  await Promise.all([planBeforeActReady, customSkillsReady]);
 
   switch (msg.action) {
     case 'chat': {

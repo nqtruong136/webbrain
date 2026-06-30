@@ -5,6 +5,7 @@
 import { t, getLocale, setLocale, LANGUAGES } from './i18n.js';
 import { THEME_MODES, applyMode, loadMode, watch } from './theme.js';
 import { CAPABILITY_LABEL } from '../agent/permission-gate.js';
+import { CUSTOM_SKILLS_STORAGE_KEY, MAX_CUSTOM_SKILLS, normalizeCustomSkills } from '../agent/skills.js';
 
 // Version shown in the subtitle. Kept here so it only needs one update per
 // release; the subtitle string itself is translated.
@@ -40,6 +41,14 @@ const visionBaseUrlInput = document.getElementById('vision-base-url');
 const visionApiKeyInput = document.getElementById('vision-api-key');
 const visionModelInput = document.getElementById('vision-model');
 const btnSaveVision = document.getElementById('btn-save-vision');
+const skillNameInput = document.getElementById('skill-name');
+const skillUrlInput = document.getElementById('skill-url');
+const skillTextArea = document.getElementById('skill-text');
+const btnAddSkillUrl = document.getElementById('btn-add-skill-url');
+const btnAddSkillText = document.getElementById('btn-add-skill-text');
+const btnClearSkillForm = document.getElementById('btn-clear-skill-form');
+const skillsResult = document.getElementById('skills-result');
+const skillsList = document.getElementById('skills-list');
 const btnTestVision = document.getElementById('btn-test-vision');
 const btnClearVision = document.getElementById('btn-clear-vision');
 const visionTestResult = document.getElementById('test-vision');
@@ -181,6 +190,7 @@ if (languageSelect) {
     renderSubtitle();
     filterGeneralSettings();
     if (providersContainer) renderProviders();
+    renderSkills();
     renderPermissions();
   });
 }
@@ -251,6 +261,7 @@ function boundedMaxAgentSteps(value) {
 // for the rationale.
 let providerFilter = 'all';     // 'all' | 'local' | 'cloud' | 'router'
 const expandedProviders = new Set();
+let customSkills = [];
 
 // --- Init ---
 
@@ -325,6 +336,8 @@ async function init() {
   const captchaStored = await browser.storage.local.get(['captchaSolverEnabled', 'capsolverApiKey']);
   if (captchaEnabledToggle) captchaEnabledToggle.checked = !!captchaStored.captchaSolverEnabled;
   if (captchaApiKeyInput) captchaApiKeyInput.value = captchaStored.capsolverApiKey || '';
+
+  await loadCustomSkills();
 
   // Load site permissions (capability × origin grants) + the master switch
   await initPermissionGateToggle();
@@ -432,6 +445,186 @@ function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
+}
+
+// --- Skills ---
+
+function makeSkillId() {
+  return `skill_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function showSkillsResult(className, text, color = '') {
+  if (!skillsResult) return null;
+  skillsResult.className = `test-result show${className ? ` ${className}` : ''}`;
+  skillsResult.textContent = text;
+  skillsResult.style.color = color || '';
+  return skillsResult;
+}
+
+function flashSkillsResult(className, text) {
+  const resultEl = showSkillsResult(className, text);
+  if (resultEl) setTimeout(() => resultEl.classList.remove('show'), 3000);
+}
+
+function normalizeSkillUrl(raw) {
+  let url;
+  try {
+    url = new URL(String(raw || '').trim());
+  } catch {
+    throw new Error(t('st.skills.error.url'));
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(t('st.skills.error.url'));
+  }
+  return url.href;
+}
+
+function extractSkillText(raw, contentType = '') {
+  const text = String(raw || '');
+  if (/html/i.test(contentType)) {
+    const doc = new DOMParser().parseFromString(text, 'text/html');
+    doc.querySelectorAll('script, style, noscript').forEach((el) => el.remove());
+    const body = (doc.body?.innerText || doc.body?.textContent || '').trim();
+    const title = (doc.title || '').trim();
+    return [title ? `# ${title}` : '', body].filter(Boolean).join('\n\n').trim();
+  }
+  return text.trim();
+}
+
+async function loadCustomSkills() {
+  if (!skillsList) return;
+  const stored = await browser.storage.local.get(CUSTOM_SKILLS_STORAGE_KEY);
+  customSkills = normalizeCustomSkills(stored[CUSTOM_SKILLS_STORAGE_KEY]);
+  renderSkills();
+}
+
+async function saveCustomSkills(nextSkills) {
+  customSkills = normalizeCustomSkills(nextSkills);
+  await browser.storage.local.set({ [CUSTOM_SKILLS_STORAGE_KEY]: customSkills });
+  renderSkills();
+}
+
+function renderSkills() {
+  if (!skillsList) return;
+  if (customSkills.length === 0) {
+    skillsList.innerHTML = `<div class="setting-desc">${escapeHtml(t('st.skills.empty'))}</div>`;
+    return;
+  }
+
+  skillsList.innerHTML = customSkills.map((skill) => {
+    const source = skill.sourceType === 'url' && skill.sourceUrl ? skill.sourceUrl : t('st.skills.source.raw');
+    return `
+      <div class="setting-row" style="align-items:center;">
+        <div class="setting-info">
+          <div class="setting-label">${escapeHtml(skill.name)}</div>
+          <div class="setting-desc skill-source">${escapeHtml(source)} · ${escapeHtml(t('st.skills.item.chars', { count: skill.content.length }))}</div>
+        </div>
+        <button class="btn-secondary" data-skill-id="${escapeHtml(skill.id)}">${escapeHtml(t('st.skills.remove'))}</button>
+      </div>`;
+  }).join('');
+
+  skillsList.querySelectorAll('button[data-skill-id]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await saveCustomSkills(customSkills.filter((skill) => skill.id !== btn.dataset.skillId));
+      flashSkillsResult('ok', t('st.skills.removed'));
+    });
+  });
+}
+
+async function addCustomSkill(record) {
+  if (customSkills.length >= MAX_CUSTOM_SKILLS) {
+    throw new Error(t('st.skills.error.limit', { count: MAX_CUSTOM_SKILLS }));
+  }
+  const next = normalizeCustomSkills([...customSkills, record]);
+  if (next.length <= customSkills.length) {
+    throw new Error(t('st.skills.error.empty_content'));
+  }
+  await saveCustomSkills(next);
+}
+
+async function addSkillFromText() {
+  const content = (skillTextArea?.value || '').trim();
+  if (!content) {
+    flashSkillsResult('fail', t('st.skills.error.empty_text'));
+    return;
+  }
+  try {
+    await addCustomSkill({
+      id: makeSkillId(),
+      name: skillNameInput?.value || '',
+      sourceType: 'text',
+      content,
+      createdAt: Date.now(),
+    });
+    if (skillNameInput) skillNameInput.value = '';
+    if (skillTextArea) skillTextArea.value = '';
+    flashSkillsResult('ok', t('st.skills.added'));
+  } catch (e) {
+    flashSkillsResult('fail', e.message || t('st.skills.error.add_failed'));
+  }
+}
+
+async function addSkillFromUrl() {
+  let url;
+  try {
+    url = normalizeSkillUrl(skillUrlInput?.value);
+  } catch (e) {
+    flashSkillsResult('fail', e.message);
+    return;
+  }
+
+  const previousText = btnAddSkillUrl?.textContent;
+  if (btnAddSkillUrl) {
+    btnAddSkillUrl.disabled = true;
+    btnAddSkillUrl.textContent = t('st.skills.loading_url');
+  }
+  showSkillsResult('', t('st.skills.loading_url'), 'var(--text2)');
+
+  try {
+    const response = await fetch(url, { credentials: 'omit', cache: 'no-store' });
+    if (!response.ok) throw new Error(t('st.skills.error.fetch', { status: response.status }));
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    if (Number.isFinite(contentLength) && contentLength > 500000) {
+      throw new Error(t('st.skills.error.too_large'));
+    }
+    const content = extractSkillText(await response.text(), response.headers.get('content-type') || '');
+    if (!content) throw new Error(t('st.skills.error.empty_content'));
+    await addCustomSkill({
+      id: makeSkillId(),
+      name: skillNameInput?.value || '',
+      sourceType: 'url',
+      sourceUrl: url,
+      content,
+      createdAt: Date.now(),
+    });
+    if (skillNameInput) skillNameInput.value = '';
+    if (skillUrlInput) skillUrlInput.value = '';
+    flashSkillsResult('ok', t('st.skills.added'));
+  } catch (e) {
+    flashSkillsResult('fail', e.message || t('st.skills.error.add_failed'));
+  } finally {
+    if (btnAddSkillUrl) {
+      btnAddSkillUrl.disabled = false;
+      btnAddSkillUrl.textContent = previousText || t('st.skills.add_url');
+    }
+  }
+}
+
+btnAddSkillText?.addEventListener('click', addSkillFromText);
+btnAddSkillUrl?.addEventListener('click', addSkillFromUrl);
+btnClearSkillForm?.addEventListener('click', () => {
+  if (skillNameInput) skillNameInput.value = '';
+  if (skillUrlInput) skillUrlInput.value = '';
+  if (skillTextArea) skillTextArea.value = '';
+  flashSkillsResult('ok', t('st.skills.form_cleared'));
+});
+
+if (globalThis.browser?.storage?.onChanged) {
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes[CUSTOM_SKILLS_STORAGE_KEY]) return;
+    customSkills = normalizeCustomSkills(changes[CUSTOM_SKILLS_STORAGE_KEY].newValue);
+    renderSkills();
+  });
 }
 
 // --- Display Settings ---
