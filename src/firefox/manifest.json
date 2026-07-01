@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "WebBrain",
-  "version": "18.3.5",
+  "version": "19.0.2",
   "description": "Open-source AI browser agent — chat with pages, automate tasks, multi-provider LLM support.",
   "permissions": [
     "activeTab",
@@ -77,7 +77,8 @@
     "vendor/pdfjs/pdf.mjs",
     "vendor/pdfjs/pdf.worker.mjs",
     "src/agent/social-media-downloader.js",
-    "vendor/turkish-deasciifier-patterns.json"
+    "vendor/turkish-deasciifier-patterns.json",
+    "skills/*"
   ],
   "browser_specific_settings": {
     "gecko": {
