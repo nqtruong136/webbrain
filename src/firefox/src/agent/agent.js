@@ -1244,7 +1244,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // anchor). Read-only tools map to null and pass straight through.
       // A call may require MORE THAN ONE capability — e.g. set_field({submit})
       // both types AND submits, so it needs a TYPE grant and a CLICK grant.
+      const skillCallTool = this._skillToolForName(fnName);
       const capabilities = capabilitiesFor(fnName, fnArgs);
+      if (skillCallTool?.requiresDownloadPermission && !capabilities.includes(Capability.DOWNLOAD)) {
+        capabilities.push(Capability.DOWNLOAD);
+      }
       await this._ensureGateSetting();
       const skillEndpointRedirect = this._skillEndpointToolRedirect(fnName, fnArgs);
       if (skillEndpointRedirect) {
@@ -1283,7 +1287,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           if (capability === Capability.NETWORK && isNetworkMutation(fnName, fnArgs) && this.apiAllowedTabs.has(tabId)) continue;
           // Every distinct host the call touches must be granted. Usually one,
           // but download_files takes a urls[] array that can span many hosts.
-          const hosts = requiredHosts(capability, fnArgs, curUrl, fnName);
+          const gateArgs = this._skillPermissionArgsForCapability(skillCallTool, capability, fnArgs);
+          const hosts = requiredHosts(capability, gateArgs, curUrl, fnName);
           if (hosts.length === 0) { failClosed = true; break; }
           for (const host of hosts) {
             const verdict = this.permissions.check(host, capability, tabId);
@@ -3100,6 +3105,15 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return this._skillToolRegistry().get(name) || null;
   }
 
+  _skillPermissionArgsForCapability(skillTool, capability, args) {
+    if (capability !== Capability.DOWNLOAD || !skillTool?.requiresDownloadPermission) return args;
+    const inputUrlArg = skillTool.inputUrlArg || 'url';
+    if (!inputUrlArg || inputUrlArg === 'url') return args;
+    const inputUrl = args?.[inputUrlArg];
+    if (typeof inputUrl !== 'string' || !inputUrl.trim()) return args;
+    return { ...args, url: inputUrl };
+  }
+
   _skillToolForEndpoint(url) {
     if (!url) return null;
     let target;
@@ -3111,7 +3125,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
     const normalizePath = (value) => String(value || '/').replace(/\/+$/, '') || '/';
     for (const tool of this._skillToolRegistry().values()) {
-      if (!tool || tool.kind !== 'http' || !tool.endpoint) continue;
+      if (!tool || !tool.endpoint) continue;
       try {
         const endpoint = new URL(tool.endpoint);
         endpoint.hash = '';
@@ -3141,7 +3155,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       wrongTool: true,
       useTool: skillTool.name,
       requiresApiAllow: false,
-      error: `This URL is the HTTPS endpoint for the enabled ${skillTool.name} skill tool. Do not call ${name} against enabled skill endpoints; call ${skillTool.name} directly with the user-visible arguments instead. Ask mode can call read-only skill tools, and ${skillTool.name} does not require /allow-api. /allow-api only applies to mutating fetch_url/research_url API calls.`,
+      error: `This URL is the HTTPS endpoint for the enabled ${skillTool.name} skill tool. Do not call ${name} against enabled skill endpoints; call ${skillTool.name} directly with the user-visible arguments instead. Skill tools do not require /allow-api; read-only skill tools can run in Ask mode, and download-job skill tools require Act mode plus download permission. /allow-api only applies to mutating fetch_url/research_url API calls.`,
     };
   }
 
@@ -3395,9 +3409,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   /**
    * After any download-producing tool returns, pin the durable handle(s) it
    * yielded so a later read survives context compaction. Centralized here so
-   * download_files, download_resource_from_page, and download_social_media are
-   * covered uniformly, and so social media — which exposes no per-file id —
-   * degrades to a list_downloads pointer instead of an invented id.
+   * core download tools and download skill tools are covered uniformly, and so
+   * social media — which exposes no per-file id — degrades to a list_downloads
+   * pointer instead of an invented id.
    * Best-effort. (Tab recording is Chrome-only, so no stop_recording branch.)
    */
   _pinDownloadHandles(tabId, name, result) {
@@ -3412,6 +3426,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       } else if (name === 'download_social_media') {
         const n = Number(result.completedCount || 0);
         if (n > 0) this._autoScratchpadNote(tabId, `[auto] download_social_media saved ${n} file(s) — find their ids/paths via list_downloads.`);
+      } else if (this._skillToolForName(name)?.requiresDownloadPermission) {
+        this._pinDownloadId(tabId, result.downloadId);
       }
     } catch { /* best-effort */ }
   }

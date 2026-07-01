@@ -92,15 +92,22 @@ the page already made so repeated UI mutations can be diagnosed.
 
 A built-in "FreeSkillz.xyz" skill (`skills/freeskillz-xyz.md`) is seeded into
 Settings → Skills on first run, enabled by default, and can be removed there.
-It declares a `read_youtube_transcript` tool that, when the model calls it,
-sends the YouTube URL (current tab or model-provided) to
-`https://freeskillz.xyz/v1/youtube/transcript` over HTTPS — a first-party
+It declares `read_youtube_transcript`, `resolve_public_media`, and
+`download_public_media` tools. When the model calls one of those tools,
+WebBrain sends only the current or model-provided URL, plus declared options
+such as transcript language, media kind, maximum height, or filename hint, to
+the declared `https://freeskillz.xyz` endpoint over HTTPS — a first-party
 service operated by the extension's developer, separate from the user's
-configured LLM provider. This call does not require `/allow-api` because the
-tool is read-only (see "Which provider receives the data?" above for how the
-LLM-provider data flow is configured independently). Users can remove this
-skill, or any user-imported skill tool, from Settings → Skills to stop this
-data flow entirely.
+configured LLM provider. The transcript tool is limited to YouTube/youtu.be
+URLs, while the media tools are limited to public media hosts declared in the
+skill manifest. The read-only transcript and resolver tools do not require
+`/allow-api`; `download_public_media` is available only in Act mode and
+requires download permission because it creates a short-lived provider job,
+saves the completed file through the browser Downloads API, and then asks the
+provider to delete the job. These calls do not send page content, chat history,
+or browsing history beyond the URL and declared tool arguments. Users can
+remove this skill, or any user-imported skill tool, from Settings → Skills to
+stop this data flow entirely.
 
 ---
 
