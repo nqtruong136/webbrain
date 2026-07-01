@@ -9890,6 +9890,62 @@ test('agent prefers download_public_media before download_social_media when avai
     const fallbackResult = JSON.parse(fallbackAgent._unwrapUntrusted(failedPublicMessages.at(-1).content));
     assert.equal(fallbackResult.completedCount, 1, `${label}: fallback result missing`);
 
+    const failedReadOnlyAgent = new AgentClass({ getVisionProvider: async () => null });
+    failedReadOnlyAgent.setCustomSkills([packagedFreeSkillzRecord(prefix)]);
+    failedReadOnlyAgent._ensureGateSetting = async () => {};
+    failedReadOnlyAgent._skipPermissionGate = true;
+    let failedReadOnlyExecutedName = '';
+    failedReadOnlyAgent.executeTool = async (_tabId, name) => {
+      failedReadOnlyExecutedName = name;
+      return { success: true, completedCount: 1 };
+    };
+    const failedThenReadOnlyMessages = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'public_failed_before_read',
+          function: { name: 'download_public_media', arguments: '{"kind":"video"}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'public_failed_before_read',
+        content: failedReadOnlyAgent._wrapUntrusted('download_public_media', JSON.stringify({ success: false, downloadId: 40, error: 'provider failed' })),
+      },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'read_after_public_failure',
+          function: { name: 'read_page', arguments: '{}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'read_after_public_failure',
+        content: failedReadOnlyAgent._wrapUntrusted('read_page', 'still on the same media page'),
+      },
+    ];
+
+    await failedReadOnlyAgent._executeToolBatch(
+      label === 'chrome' ? 4919 : 4920,
+      [{
+        id: 'social_after_failed_read',
+        function: { name: 'download_social_media', arguments: '{"target":"video"}' },
+      }],
+      failedThenReadOnlyMessages,
+      () => {},
+      { supportsVision: false },
+      '',
+      allowedTools,
+      7,
+    );
+
+    assert.equal(failedReadOnlyExecutedName, 'download_social_media', `${label}: read-only tools should not erase a failed public attempt before fallback`);
+    const failedReadOnlyFallback = JSON.parse(failedReadOnlyAgent._unwrapUntrusted(failedThenReadOnlyMessages.at(-1).content));
+    assert.equal(failedReadOnlyFallback.completedCount, 1, `${label}: read-only failure fallback result missing`);
+
     const successAgent = new AgentClass({ getVisionProvider: async () => null });
     successAgent.setCustomSkills([packagedFreeSkillzRecord(prefix)]);
     successAgent._ensureGateSetting = async () => {};
@@ -9934,6 +9990,62 @@ test('agent prefers download_public_media before download_social_media when avai
     assert.equal(skipped.skipped, true, `${label}: duplicate fallback should be marked skipped`);
     assert.equal(skipped.skippedBecause, 'download_public_media_already_succeeded', `${label}: duplicate skip reason mismatch`);
 
+    const successReadOnlyAgent = new AgentClass({ getVisionProvider: async () => null });
+    successReadOnlyAgent.setCustomSkills([packagedFreeSkillzRecord(prefix)]);
+    successReadOnlyAgent._ensureGateSetting = async () => {};
+    successReadOnlyAgent._skipPermissionGate = true;
+    let successReadOnlyExecuted = false;
+    successReadOnlyAgent.executeTool = async () => {
+      successReadOnlyExecuted = true;
+      return { success: true, completedCount: 1 };
+    };
+    const successThenReadOnlyMessages = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'public_success_before_verify',
+          function: { name: 'download_public_media', arguments: '{"kind":"video"}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'public_success_before_verify',
+        content: successReadOnlyAgent._wrapUntrusted('download_public_media', JSON.stringify({ success: true, downloadId: 50 })),
+      },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'list_after_public_success',
+          function: { name: 'list_downloads', arguments: '{}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'list_after_public_success',
+        content: JSON.stringify({ success: true, downloads: [{ id: 50, state: 'complete' }] }),
+      },
+    ];
+
+    await successReadOnlyAgent._executeToolBatch(
+      label === 'chrome' ? 4921 : 4922,
+      [{
+        id: 'social_after_success_read',
+        function: { name: 'download_social_media', arguments: '{"target":"video"}' },
+      }],
+      successThenReadOnlyMessages,
+      () => {},
+      { supportsVision: false },
+      '',
+      allowedTools,
+      8,
+    );
+
+    assert.equal(successReadOnlyExecuted, false, `${label}: read-only tools should not erase a successful public attempt`);
+    const successReadOnlySkipped = JSON.parse(successThenReadOnlyMessages.at(-1).content);
+    assert.equal(successReadOnlySkipped.skipped, true, `${label}: verified public success should still skip duplicate fallback`);
+
     const explicitUrlAgent = new AgentClass({ getVisionProvider: async () => null });
     explicitUrlAgent.setCustomSkills([packagedFreeSkillzRecord(prefix)]);
     explicitUrlAgent._ensureGateSetting = async () => {};
@@ -9976,6 +10088,50 @@ test('agent prefers download_public_media before download_social_media when avai
     assert.equal(explicitUrlExecutedName, 'download_social_media', `${label}: explicit URL public download should not skip a later current-tab download`);
     const explicitUrlFallbackResult = JSON.parse(explicitUrlAgent._unwrapUntrusted(explicitUrlPublicMessages.at(-1).content));
     assert.equal(explicitUrlFallbackResult.completedCount, 1, `${label}: explicit URL follow-up fallback result missing`);
+
+    const explicitCurrentAgent = new AgentClass({ getVisionProvider: async () => null });
+    explicitCurrentAgent.setCustomSkills([packagedFreeSkillzRecord(prefix)]);
+    explicitCurrentAgent._ensureGateSetting = async () => {};
+    explicitCurrentAgent._skipPermissionGate = true;
+    explicitCurrentAgent._currentUrl = async () => 'https://www.instagram.com/reel/abc/';
+    let explicitCurrentExecuted = false;
+    explicitCurrentAgent.executeTool = async () => {
+      explicitCurrentExecuted = true;
+      return { success: true, completedCount: 1 };
+    };
+    const explicitCurrentMessages = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'explicit_current_public_success',
+          function: { name: 'download_public_media', arguments: '{"url":"https://www.instagram.com/reel/abc","kind":"video"}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'explicit_current_public_success',
+        content: explicitCurrentAgent._wrapUntrusted('download_public_media', JSON.stringify({ success: true, downloadId: 51 })),
+      },
+    ];
+
+    await explicitCurrentAgent._executeToolBatch(
+      label === 'chrome' ? 4923 : 4924,
+      [{
+        id: 'social_after_explicit_current_success',
+        function: { name: 'download_social_media', arguments: '{"target":"video"}' },
+      }],
+      explicitCurrentMessages,
+      () => {},
+      { supportsVision: false },
+      '',
+      allowedTools,
+      9,
+    );
+
+    assert.equal(explicitCurrentExecuted, false, `${label}: explicit current-page public success should skip duplicate fallback`);
+    const explicitCurrentSkipped = JSON.parse(explicitCurrentMessages.at(-1).content);
+    assert.equal(explicitCurrentSkipped.skipped, true, `${label}: explicit current-page success skip missing`);
 
     const latestAttemptAgent = new AgentClass({ getVisionProvider: async () => null });
     latestAttemptAgent.setCustomSkills([packagedFreeSkillzRecord(prefix)]);
