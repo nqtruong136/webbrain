@@ -489,6 +489,10 @@ function markUnsafeSkillDownload(info, expectedUrl) {
   };
 }
 
+function isHeadUnsupportedStatus(status) {
+  return status === 405 || status === 501;
+}
+
 async function validateSkillDownloadStartUrl(url, expectedUrl) {
   const initialUrlCheck = validateSkillDownloadFinalUrl(url, expectedUrl);
   if (!initialUrlCheck.ok) {
@@ -520,6 +524,9 @@ async function validateSkillDownloadStartUrl(url, expectedUrl) {
         finalUrl: responseUrl,
         error: responseUrlCheck.error,
       };
+    }
+    if (!res.ok && isHeadUnsupportedStatus(res.status)) {
+      return { success: true, status: res.status, finalUrl: responseUrl, preflightUnsupported: true };
     }
     if (!res.ok) {
       return {

@@ -3464,6 +3464,115 @@ test('executeHttpSkillTool rejects failed skill download preflights before brows
   }
 });
 
+test('executeHttpSkillTool falls back when skill download HEAD preflight is unsupported', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = globalThis.chrome;
+  const originalBrowser = globalThis.browser;
+  try {
+    for (const [label, prefix, executeTool, normalizeSkills, buildRegistry] of [
+      ['chrome', 'src/chrome', executeHttpSkillToolCh, normalizeCustomSkillsCh, buildSkillToolRegistryCh],
+      ['firefox', 'src/firefox', executeHttpSkillToolFx, normalizeCustomSkillsFx, buildSkillToolRegistryFx],
+    ]) {
+      const skills = normalizeSkills([packagedFreeSkillzRecord(prefix)]);
+      const tool = buildRegistry(skills).get('download_public_media');
+      assert.ok(tool, `${label}: download_public_media manifest tool missing`);
+
+      const providerCalls = [];
+      const downloadCalls = [];
+      const jsonResponse = (status, body) => ({
+        ok: status >= 200 && status < 300,
+        status,
+        text: async () => JSON.stringify(body),
+      });
+      globalThis.fetch = async (url, opts = {}) => {
+        providerCalls.push({ url, opts });
+        if (url === 'https://freeskillz.xyz/v1/media/jobs' && opts.method === 'POST') {
+          return jsonResponse(200, { job_id: 'job_head_unsupported' });
+        }
+        if (url === 'https://freeskillz.xyz/v1/media/jobs/job_head_unsupported' && opts.method === 'GET') {
+          return jsonResponse(200, { status: 'complete' });
+        }
+        if (url === 'https://freeskillz.xyz/v1/media/jobs/job_head_unsupported/file' && opts.method === 'HEAD') {
+          return jsonResponse(405, { error: 'method not allowed' });
+        }
+        if (url === 'https://freeskillz.xyz/v1/media/jobs/job_head_unsupported' && opts.method === 'DELETE') {
+          return jsonResponse(204, {});
+        }
+        throw new Error(`unexpected provider call: ${opts.method || 'GET'} ${url}`);
+      };
+
+      if (label === 'chrome') {
+        delete globalThis.browser;
+        globalThis.chrome = {
+          runtime: { lastError: null },
+          downloads: {
+            download(opts, cb) {
+              downloadCalls.push(opts);
+              cb(7701);
+            },
+            search(_query, cb) {
+              cb([{
+                id: 7701,
+                filename: '/Users/x/Downloads/head-unsupported.mp4',
+                state: 'complete',
+                bytesReceived: 11,
+                totalBytes: 11,
+                url: 'https://freeskillz.xyz/v1/media/jobs/job_head_unsupported/file',
+                finalUrl: 'https://freeskillz.xyz/v1/media/jobs/job_head_unsupported/file',
+              }]);
+            },
+          },
+        };
+      } else {
+        delete globalThis.chrome;
+        globalThis.browser = {
+          downloads: {
+            async download(opts) {
+              downloadCalls.push(opts);
+              return 8701;
+            },
+            async search() {
+              return [{
+                id: 8701,
+                filename: '/Users/x/Downloads/head-unsupported.mp4',
+                state: 'complete',
+                bytesReceived: 11,
+                totalBytes: 11,
+                url: 'https://freeskillz.xyz/v1/media/jobs/job_head_unsupported/file',
+                finalUrl: 'https://freeskillz.xyz/v1/media/jobs/job_head_unsupported/file',
+              }];
+            },
+          },
+        };
+      }
+
+      const result = await executeTool(tool, { url: 'https://www.instagram.com/reel/abc/' });
+      assert.equal(result.success, true, `${label}: HEAD-unsupported preflight should fall back to browser download`);
+      assert.equal(result.downloadId, label === 'chrome' ? 7701 : 8701, `${label}: download id missing`);
+      assert.equal(result.cleanup?.success, true, `${label}: provider job should be cleaned up after fallback download`);
+      assert.equal(downloadCalls.length, 1, `${label}: browser download should run once after HEAD fallback`);
+      assert.equal(downloadCalls[0].url, 'https://freeskillz.xyz/v1/media/jobs/job_head_unsupported/file', `${label}: wrong browser download URL`);
+      assert.deepEqual(
+        providerCalls.map(call => `${call.opts.method || 'GET'} ${call.url}`),
+        [
+          'POST https://freeskillz.xyz/v1/media/jobs',
+          'GET https://freeskillz.xyz/v1/media/jobs/job_head_unsupported',
+          'HEAD https://freeskillz.xyz/v1/media/jobs/job_head_unsupported/file',
+          'DELETE https://freeskillz.xyz/v1/media/jobs/job_head_unsupported',
+        ],
+        `${label}: HEAD-unsupported fallback lifecycle mismatch`,
+      );
+    }
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+    if (originalChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = originalChrome;
+    if (originalBrowser === undefined) delete globalThis.browser;
+    else globalThis.browser = originalBrowser;
+  }
+});
+
 test('executeHttpSkillTool cleans up provider jobs on pre-download failures', async () => {
   const originalFetch = globalThis.fetch;
   const originalChrome = globalThis.chrome;
