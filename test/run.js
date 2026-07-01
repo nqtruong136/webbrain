@@ -9805,6 +9805,165 @@ test('agent redirects fetch_url calls for enabled skill endpoints to the skill t
   }
 });
 
+test('agent prefers download_public_media before download_social_media when available', async () => {
+  for (const [label, prefix, AgentClass] of [
+    ['chrome', 'src/chrome', AgentCh],
+    ['firefox', 'src/firefox', AgentFx],
+  ]) {
+    const allowedTools = new Set(['download_social_media', 'download_public_media']);
+
+    const redirectAgent = new AgentClass({ getVisionProvider: async () => null });
+    redirectAgent.setCustomSkills([packagedFreeSkillzRecord(prefix)]);
+    redirectAgent._ensureGateSetting = async () => {};
+    redirectAgent._skipPermissionGate = true;
+    let redirectedExecuted = false;
+    redirectAgent.executeTool = async () => {
+      redirectedExecuted = true;
+      return { success: true };
+    };
+    const redirectMessages = [];
+    const redirectUpdates = [];
+
+    await redirectAgent._executeToolBatch(
+      label === 'chrome' ? 4901 : 4902,
+      [{
+        id: 'social_first',
+        function: { name: 'download_social_media', arguments: '{"target":"video","filename":"clip.mp4"}' },
+      }],
+      redirectMessages,
+      (type, data) => redirectUpdates.push({ type, data }),
+      { supportsVision: false },
+      '',
+      allowedTools,
+      1,
+    );
+
+    assert.equal(redirectedExecuted, false, `${label}: browser fallback ran before download_public_media`);
+    assert.equal(redirectMessages.length, 1, `${label}: expected redirect tool result`);
+    const redirect = JSON.parse(redirectMessages[0].content);
+    assert.equal(redirect.wrongTool, true, `${label}: redirect should mark wrong tool`);
+    assert.equal(redirect.useTool, 'download_public_media', `${label}: redirect should point at skill downloader`);
+    assert.equal(redirect.fallbackTool, 'download_social_media', `${label}: redirect should name fallback tool`);
+    assert.deepEqual(redirect.suggestedArgs, { kind: 'video', filename: 'clip.mp4' }, `${label}: redirect should carry compatible args`);
+    assert.ok(redirectUpdates.some(update => /download_public_media before download_social_media/.test(update.data?.message || '')), `${label}: missing redirect warning`);
+
+    const fallbackAgent = new AgentClass({ getVisionProvider: async () => null });
+    fallbackAgent.setCustomSkills([packagedFreeSkillzRecord(prefix)]);
+    fallbackAgent._ensureGateSetting = async () => {};
+    fallbackAgent._skipPermissionGate = true;
+    let fallbackExecutedName = '';
+    fallbackAgent.executeTool = async (_tabId, name) => {
+      fallbackExecutedName = name;
+      return { success: true, completedCount: 1 };
+    };
+    const failedPublicMessages = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'public_failed',
+          function: { name: 'download_public_media', arguments: '{"kind":"video"}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'public_failed',
+        content: fallbackAgent._wrapUntrusted('download_public_media', JSON.stringify({ success: false, error: 'provider failed' })),
+      },
+    ];
+
+    await fallbackAgent._executeToolBatch(
+      label === 'chrome' ? 4903 : 4904,
+      [{
+        id: 'social_after_fail',
+        function: { name: 'download_social_media', arguments: '{"target":"video"}' },
+      }],
+      failedPublicMessages,
+      () => {},
+      { supportsVision: false },
+      '',
+      allowedTools,
+      2,
+    );
+
+    assert.equal(fallbackExecutedName, 'download_social_media', `${label}: failed public downloader should allow browser fallback`);
+    const fallbackResult = JSON.parse(fallbackAgent._unwrapUntrusted(failedPublicMessages.at(-1).content));
+    assert.equal(fallbackResult.completedCount, 1, `${label}: fallback result missing`);
+
+    const successAgent = new AgentClass({ getVisionProvider: async () => null });
+    successAgent.setCustomSkills([packagedFreeSkillzRecord(prefix)]);
+    successAgent._ensureGateSetting = async () => {};
+    successAgent._skipPermissionGate = true;
+    let duplicateExecuted = false;
+    successAgent.executeTool = async () => {
+      duplicateExecuted = true;
+      return { success: true };
+    };
+    const successfulPublicMessages = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'public_success',
+          function: { name: 'download_public_media', arguments: '{"kind":"video"}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'public_success',
+        content: successAgent._wrapUntrusted('download_public_media', JSON.stringify({ success: true, downloadId: 42 })),
+      },
+    ];
+
+    await successAgent._executeToolBatch(
+      label === 'chrome' ? 4905 : 4906,
+      [{
+        id: 'social_after_success',
+        function: { name: 'download_social_media', arguments: '{"target":"video"}' },
+      }],
+      successfulPublicMessages,
+      () => {},
+      { supportsVision: false },
+      '',
+      allowedTools,
+      3,
+    );
+
+    assert.equal(duplicateExecuted, false, `${label}: browser fallback should not run after public downloader succeeds`);
+    const skipped = JSON.parse(successfulPublicMessages.at(-1).content);
+    assert.equal(skipped.skipped, true, `${label}: duplicate fallback should be marked skipped`);
+    assert.equal(skipped.skippedBecause, 'download_public_media_already_succeeded', `${label}: duplicate skip reason mismatch`);
+
+    const noSkillAgent = new AgentClass({ getVisionProvider: async () => null });
+    noSkillAgent._ensureGateSetting = async () => {};
+    noSkillAgent._skipPermissionGate = true;
+    let noSkillExecutedName = '';
+    noSkillAgent.executeTool = async (_tabId, name) => {
+      noSkillExecutedName = name;
+      return { success: true, completedCount: 1 };
+    };
+    const noSkillMessages = [];
+
+    await noSkillAgent._executeToolBatch(
+      label === 'chrome' ? 4907 : 4908,
+      [{
+        id: 'social_without_skill',
+        function: { name: 'download_social_media', arguments: '{"target":"image"}' },
+      }],
+      noSkillMessages,
+      () => {},
+      { supportsVision: false },
+      '',
+      allowedTools,
+      4,
+    );
+
+    assert.equal(noSkillExecutedName, 'download_social_media', `${label}: removed skill should not block browser fallback`);
+    const noSkillResult = JSON.parse(noSkillAgent._unwrapUntrusted(noSkillMessages.at(-1).content));
+    assert.equal(noSkillResult.completedCount, 1, `${label}: no-skill fallback result missing`);
+  }
+});
+
 test('agent gates download-job skill tools with download permission', async () => {
   for (const [label, prefix, AgentClass] of [
     ['chrome', 'src/chrome', AgentCh],

@@ -945,6 +945,62 @@ export class Agent {
     return count;
   }
 
+  _downloadPublicMediaAttempt(messages) {
+    const toolNameById = new Map();
+    let attempted = false;
+    let succeeded = false;
+    for (const msg of messages || []) {
+      if (msg?.role === 'assistant' && Array.isArray(msg.tool_calls)) {
+        for (const tc of msg.tool_calls) {
+          if (tc?.id) toolNameById.set(tc.id, tc.function?.name || tc.name || '');
+        }
+        continue;
+      }
+      if (msg?.role !== 'tool' || toolNameById.get(msg.tool_call_id) !== 'download_public_media') continue;
+      attempted = true;
+      let parsed = null;
+      try { parsed = JSON.parse(this._unwrapUntrusted(msg.content)); } catch { /* malformed result still counts as an attempt */ }
+      if (parsed && typeof parsed === 'object' && (parsed.success === true || parsed.downloadId != null)) {
+        succeeded = true;
+      }
+    }
+    return { attempted, succeeded };
+  }
+
+  _downloadPublicMediaArgsFromSocialArgs(args) {
+    const out = {};
+    if (args?.target === 'image' || args?.target === 'video') out.kind = args.target;
+    if (typeof args?.filename === 'string' && args.filename.trim()) out.filename = args.filename.trim();
+    return out;
+  }
+
+  _downloadPublicMediaRedirectForSocial(fnName, fnArgs, allowedToolNames, messages) {
+    if (fnName !== 'download_social_media') return null;
+    if (!allowedToolNames?.has?.('download_public_media')) return null;
+    if (!this._skillToolForName('download_public_media')) return null;
+    if (fnArgs?.scroll === true || fnArgs?.mode === 'all' || Number(fnArgs?.limit || 0) > 1) return null;
+
+    const publicAttempt = this._downloadPublicMediaAttempt(messages);
+    if (publicAttempt.succeeded) {
+      return {
+        success: true,
+        skipped: true,
+        skippedBecause: 'download_public_media_already_succeeded',
+        error: 'Skipped download_social_media because download_public_media already succeeded. Do not run the browser-side fallback unless the user asks for an additional download.',
+      };
+    }
+    if (publicAttempt.attempted) return null;
+
+    return {
+      success: false,
+      wrongTool: true,
+      useTool: 'download_public_media',
+      fallbackTool: 'download_social_media',
+      suggestedArgs: this._downloadPublicMediaArgsFromSocialArgs(fnArgs),
+      error: 'download_social_media is the browser-side fallback. Because download_public_media is available, call download_public_media first for this public media download. If download_public_media fails, then call download_social_media.',
+    };
+  }
+
   /**
    * Synthesize a transparent summary when the agent hits the step limit
    * without producing a final answer. Walks the conversation to count
@@ -1664,6 +1720,19 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           content: JSON.stringify(skillEndpointRedirect),
         });
         onUpdate('warning', { message: `Use ${skillEndpointRedirect.useTool} instead of ${fnName} for this skill endpoint.` });
+        continue;
+      }
+      const mediaDownloadRedirect = this._downloadPublicMediaRedirectForSocial(fnName, fnArgs, allowedToolNames, messages);
+      if (mediaDownloadRedirect) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: JSON.stringify(mediaDownloadRedirect),
+        });
+        const message = mediaDownloadRedirect.skipped
+          ? 'Skipped download_social_media because download_public_media already succeeded.'
+          : 'Use download_public_media before download_social_media for this media download.';
+        onUpdate('warning', { message });
         continue;
       }
       if (isNetworkMutation(fnName, fnArgs) && !this.apiAllowedTabs.has(tabId)) {
