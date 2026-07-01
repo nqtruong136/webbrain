@@ -9,9 +9,12 @@ import {
   CUSTOM_SKILLS_STORAGE_KEY,
   DEFAULT_SKILL_SOURCES,
   DEFAULT_SKILLS_REMOVED_STORAGE_KEY,
+  MAX_CUSTOM_SKILL_IMPORT_BYTES,
   MAX_CUSTOM_SKILLS,
+  fetchSkillImportResponse,
   normalizeCustomSkills,
   normalizeDefaultSkillRemovalIds,
+  readSkillImportText,
 } from '../agent/skills.js';
 
 // Version shown in the subtitle. Kept here so it only needs one update per
@@ -474,6 +477,10 @@ function flashSkillsResult(className, text) {
   if (resultEl) setTimeout(() => resultEl.classList.remove('show'), 3000);
 }
 
+function isLoopbackHostname(hostname) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
+}
+
 function normalizeSkillUrl(raw) {
   let url;
   try {
@@ -481,7 +488,8 @@ function normalizeSkillUrl(raw) {
   } catch {
     throw new Error(t('st.skills.error.url'));
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+  const isHttpLoopback = url.protocol === 'http:' && isLoopbackHostname(url.hostname);
+  if (url.protocol !== 'https:' && !isHttpLoopback) {
     throw new Error(t('st.skills.error.url'));
   }
   return url.href;
@@ -607,19 +615,24 @@ async function addSkillFromUrl() {
   showSkillsResult('', t('st.skills.loading_url'), 'var(--text2)');
 
   try {
-    const response = await fetch(url, { credentials: 'omit', cache: 'no-store' });
+    const { response, url: finalUrl } = await fetchSkillImportResponse(url, {
+      validateUrl: normalizeSkillUrl,
+      redirectMessage: t('st.skills.error.url'),
+    });
     if (!response.ok) throw new Error(t('st.skills.error.fetch', { status: response.status }));
-    const contentLength = Number(response.headers.get('content-length') || 0);
-    if (Number.isFinite(contentLength) && contentLength > 500000) {
-      throw new Error(t('st.skills.error.too_large'));
-    }
-    const content = extractSkillText(await response.text(), response.headers.get('content-type') || '');
+    const content = extractSkillText(
+      await readSkillImportText(response, {
+        maxBytes: MAX_CUSTOM_SKILL_IMPORT_BYTES,
+        tooLargeMessage: t('st.skills.error.too_large'),
+      }),
+      response.headers.get('content-type') || '',
+    );
     if (!content) throw new Error(t('st.skills.error.empty_content'));
     await addCustomSkill({
       id: makeSkillId(),
       name: skillNameInput?.value || '',
       sourceType: 'url',
-      sourceUrl: url,
+      sourceUrl: finalUrl,
       content,
       createdAt: Date.now(),
     });

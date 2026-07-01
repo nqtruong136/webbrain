@@ -315,6 +315,21 @@ function applySkillResponseLimits(value, limits = {}) {
   return out;
 }
 
+function isHttpRedirectStatus(status) {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function filterArgsToDeclaredParameters(args, tool) {
+  const properties = tool?.parameters?.properties;
+  if (!properties || typeof properties !== 'object') return {};
+  const allowed = new Set(Object.keys(properties));
+  const out = {};
+  for (const [key, value] of Object.entries(args || {})) {
+    if (allowed.has(key)) out[key] = value;
+  }
+  return out;
+}
+
 function fillSkillJobEndpoint(template, jobId, baseEndpoint, label) {
   if (!template) return { ok: false, error: `Skill download job is missing ${label}.` };
   let url;
@@ -339,38 +354,70 @@ function safeDownloadFilename(value) {
 }
 
 async function fetchSkillJson(url, init, endpoint, tool) {
-  const res = await fetch(url, {
-    credentials: 'omit',
-    redirect: 'follow',
-    ...init,
-  });
-  const rawText = await res.text();
-  let data = null;
-  try { data = rawText ? JSON.parse(rawText) : null; } catch (_) {}
-  if (!res.ok) {
+  const urlCheck = validateFetchUrl(url, { allowLocalNetwork: getAllowLocalNetwork() });
+  if (!urlCheck.ok) {
     return {
       success: false,
-      status: res.status,
       provider: endpoint.hostname,
       skillTool: tool.name || '',
       skillName: tool.skillName || '',
-      error: providerError(res.status, data, rawText),
+      finalUrl: url,
+      error: `Skill tool endpoint is blocked: ${urlCheck.error}`,
     };
   }
-  return { success: true, status: res.status, data: data && typeof data === 'object' ? data : { text: rawText } };
-}
-
-async function cleanupSkillDownloadJob(url, endpoint, tool) {
   try {
-    const res = await fetch(url, { method: 'DELETE', credentials: 'omit', redirect: 'follow' });
-    if (res.ok) return { success: true, status: res.status };
+    const res = await fetch(url, {
+      credentials: 'omit',
+      redirect: 'manual',
+      ...init,
+    });
+    if (res?.type === 'opaqueredirect' || isHttpRedirectStatus(res?.status)) {
+      return {
+        success: false,
+        status: res.status,
+        provider: endpoint.hostname,
+        skillTool: tool.name || '',
+        skillName: tool.skillName || '',
+        finalUrl: url,
+        error: 'Skill tool redirects are not allowed because browser manual redirects cannot be validated before following.',
+      };
+    }
+    const responseUrl = res.url || url;
+    const responseUrlCheck = validateFetchUrl(responseUrl, { allowLocalNetwork: getAllowLocalNetwork() });
+    if (!responseUrlCheck.ok) {
+      return {
+        success: false,
+        status: res.status,
+        provider: endpoint.hostname,
+        skillTool: tool.name || '',
+        skillName: tool.skillName || '',
+        finalUrl: responseUrl,
+        error: `Skill tool redirected to blocked URL: ${responseUrlCheck.error}`,
+      };
+    }
     const rawText = await res.text();
     let data = null;
     try { data = rawText ? JSON.parse(rawText) : null; } catch (_) {}
-    return { success: false, status: res.status, error: providerError(res.status, data, rawText) };
+    if (!res.ok) {
+      return {
+        success: false,
+        status: res.status,
+        provider: endpoint.hostname,
+        skillTool: tool.name || '',
+        skillName: tool.skillName || '',
+        error: providerError(res.status, data, rawText),
+      };
+    }
+    return { success: true, status: res.status, data: data && typeof data === 'object' ? data : { text: rawText } };
   } catch (e) {
-    return { success: false, error: `Cleanup failed for ${tool.name || 'skill tool'} on ${endpoint.hostname}: ${e.message}` };
+    return { success: false, provider: endpoint.hostname, skillTool: tool.name || '', skillName: tool.skillName || '', error: `Skill tool request failed: ${e.message}` };
   }
+}
+
+async function cleanupSkillDownloadJob(url, endpoint, tool) {
+  const result = await fetchSkillJson(url, { method: 'DELETE' }, endpoint, tool);
+  if (result.success) return { success: true, status: result.status };
+  return { success: false, status: result.status, error: result.error };
 }
 
 async function downloadSkillFile(url, filename, waitMs = 60000) {
@@ -502,7 +549,7 @@ export async function executeHttpSkillTool(tool, args = {}, ctx = {}) {
   }
 
   const method = String(tool.method || 'GET').toUpperCase() === 'POST' ? 'POST' : 'GET';
-  const payload = { ...(tool.defaultArgs || {}), ...(args || {}) };
+  const payload = { ...(tool.defaultArgs || {}), ...filterArgsToDeclaredParameters(args, tool) };
   if (tool.activeTabUrlArg && !payload[tool.activeTabUrlArg]) {
     payload[tool.activeTabUrlArg] = await currentTabUrl(ctx.tabId);
   }
@@ -518,7 +565,7 @@ export async function executeHttpSkillTool(tool, args = {}, ctx = {}) {
     method,
     headers: {},
     credentials: 'omit',
-    redirect: 'follow',
+    redirect: 'manual',
   };
   const finalUrl = new URL(endpoint.href);
   if (method === 'POST') {
@@ -530,9 +577,48 @@ export async function executeHttpSkillTool(tool, args = {}, ctx = {}) {
       finalUrl.searchParams.set(key, typeof value === 'string' ? value : JSON.stringify(value));
     }
   }
+  const endpointUrlCheck = validateFetchUrl(finalUrl.href, { allowLocalNetwork: getAllowLocalNetwork() });
+  if (!endpointUrlCheck.ok) {
+    return {
+      success: false,
+      provider: endpoint.hostname,
+      skillTool: tool.name || '',
+      skillName: tool.skillName || '',
+      finalUrl: finalUrl.href,
+      error: `Skill tool endpoint is blocked: ${endpointUrlCheck.error}`,
+    };
+  }
 
   try {
-    const res = await fetch(finalUrl.href, init);
+    let requestUrl = finalUrl.href;
+    const res = await fetch(requestUrl, init);
+    // Browser manual redirects are opaqueredirect responses without an
+    // inspectable Location header. Reject instead of replaying skill inputs.
+    if (res?.type === 'opaqueredirect' || isHttpRedirectStatus(res?.status)) {
+      return {
+        success: false,
+        status: res.status,
+        provider: endpoint.hostname,
+        skillTool: tool.name || '',
+        skillName: tool.skillName || '',
+        finalUrl: requestUrl,
+        error: 'Skill tool redirects are not allowed because browser manual redirects cannot be validated before following.',
+      };
+    }
+
+    const responseUrl = res.url || requestUrl;
+    const responseUrlCheck = validateFetchUrl(responseUrl, { allowLocalNetwork: getAllowLocalNetwork() });
+    if (!responseUrlCheck.ok) {
+      return {
+        success: false,
+        status: res.status,
+        provider: endpoint.hostname,
+        skillTool: tool.name || '',
+        skillName: tool.skillName || '',
+        finalUrl: responseUrl,
+        error: `Skill tool redirected to blocked URL: ${responseUrlCheck.error}`,
+      };
+    }
     const rawText = await res.text();
     let data = null;
     try { data = rawText ? JSON.parse(rawText) : null; } catch (_) {}
@@ -553,7 +639,7 @@ export async function executeHttpSkillTool(tool, args = {}, ctx = {}) {
       provider: endpoint.hostname,
       skillTool: tool.name || '',
       skillName: tool.skillName || '',
-      ...applySkillResponseLimits(body, tool.responseLimits || {}),
+      data: applySkillResponseLimits(body, tool.responseLimits || {}),
     };
   } catch (e) {
     return { success: false, provider: endpoint.hostname, skillTool: tool.name || '', skillName: tool.skillName || '', error: `Skill tool request failed: ${e.message}` };
