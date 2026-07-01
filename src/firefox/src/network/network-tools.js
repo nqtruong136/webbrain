@@ -221,6 +221,178 @@ export function getAllowLocalNetwork() {
   return _allowLocalNetwork;
 }
 
+async function currentTabUrl(tabId) {
+  if (tabId == null) return '';
+  try {
+    const tab = await browser.tabs.get(tabId);
+    return tab?.url || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function providerError(status, data, rawText) {
+  const detail = data?.detail || data?.error || data?.message || rawText || `HTTP ${status}`;
+  return typeof detail === 'string' ? detail.slice(0, 1000) : JSON.stringify(detail).slice(0, 1000);
+}
+
+function inputUrlAllowed(rawUrl, rules = []) {
+  if (!rules.length) return true;
+  let u;
+  try { u = new URL(rawUrl); } catch (_) { return false; }
+  const host = u.hostname.toLowerCase();
+  const path = u.pathname || '/';
+  return rules.some((rule) => {
+    const ruleHost = String(rule.host || '').toLowerCase();
+    if (!ruleHost) return false;
+    const hostMatches = host === ruleHost || host.endsWith(`.${ruleHost}`);
+    if (!hostMatches) return false;
+    const paths = Array.isArray(rule.paths) && rule.paths.length ? rule.paths : ['/'];
+    return paths.some((prefix) => path.startsWith(String(prefix || '/')));
+  });
+}
+
+function applySkillResponseLimits(value, limits = {}) {
+  if (!value || typeof value !== 'object') return value;
+  const maxTextChars = Number.isFinite(Number(limits.maxTextChars)) ? Math.max(1000, Number(limits.maxTextChars)) : 160000;
+  const arrayLimits = limits.maxArrayItems && typeof limits.maxArrayItems === 'object' ? limits.maxArrayItems : {};
+  const out = Array.isArray(value) ? [...value] : { ...value };
+  for (const [key, item] of Object.entries(out)) {
+    if (typeof item === 'string' && item.length > maxTextChars) {
+      out[key] = item.slice(0, maxTextChars);
+      out.truncated = true;
+      out.originalLength = out.originalLength ?? item.length;
+    } else if (Array.isArray(item)) {
+      const limit = Number(arrayLimits[key]);
+      if (Number.isFinite(limit) && limit >= 0 && item.length > limit) {
+        out[key] = item.slice(0, limit);
+        out.truncated = true;
+      }
+    }
+  }
+  return out;
+}
+
+function isHttpRedirectStatus(status) {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function filterArgsToDeclaredParameters(args, tool) {
+  const properties = tool?.parameters?.properties;
+  if (!properties || typeof properties !== 'object') return {};
+  const allowed = new Set(Object.keys(properties));
+  const out = {};
+  for (const [key, value] of Object.entries(args || {})) {
+    if (allowed.has(key)) out[key] = value;
+  }
+  return out;
+}
+
+export async function executeHttpSkillTool(tool, args = {}, ctx = {}) {
+  let endpoint;
+  try {
+    endpoint = new URL(tool?.endpoint || '');
+  } catch {
+    return { success: false, error: 'Skill tool has an invalid endpoint.' };
+  }
+  if (endpoint.protocol !== 'https:') {
+    return { success: false, error: 'Skill tools currently require an https endpoint.' };
+  }
+
+  const method = String(tool.method || 'GET').toUpperCase() === 'POST' ? 'POST' : 'GET';
+  const payload = { ...(tool.defaultArgs || {}), ...filterArgsToDeclaredParameters(args, tool) };
+  if (tool.activeTabUrlArg && !payload[tool.activeTabUrlArg]) {
+    payload[tool.activeTabUrlArg] = await currentTabUrl(ctx.tabId);
+  }
+  if (tool.inputUrlArg && payload[tool.inputUrlArg] && !inputUrlAllowed(payload[tool.inputUrlArg], tool.allowedInputUrls || [])) {
+    return { success: false, error: `Skill tool input URL is outside its declared allowlist: ${tool.inputUrlArg}`, provider: endpoint.hostname };
+  }
+
+  const init = {
+    method,
+    headers: {},
+    credentials: 'omit',
+    redirect: 'manual',
+  };
+  const finalUrl = new URL(endpoint.href);
+  if (method === 'POST') {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(payload);
+  } else {
+    for (const [key, value] of Object.entries(payload)) {
+      if (value == null) continue;
+      finalUrl.searchParams.set(key, typeof value === 'string' ? value : JSON.stringify(value));
+    }
+  }
+  const endpointUrlCheck = validateFetchUrl(finalUrl.href, { allowLocalNetwork: getAllowLocalNetwork() });
+  if (!endpointUrlCheck.ok) {
+    return {
+      success: false,
+      provider: endpoint.hostname,
+      skillTool: tool.name || '',
+      skillName: tool.skillName || '',
+      finalUrl: finalUrl.href,
+      error: `Skill tool endpoint is blocked: ${endpointUrlCheck.error}`,
+    };
+  }
+
+  try {
+    let requestUrl = finalUrl.href;
+    const res = await fetch(requestUrl, init);
+    // Browser manual redirects are opaqueredirect responses without an
+    // inspectable Location header. Reject instead of replaying skill inputs.
+    if (res?.type === 'opaqueredirect' || isHttpRedirectStatus(res?.status)) {
+      return {
+        success: false,
+        status: res.status,
+        provider: endpoint.hostname,
+        skillTool: tool.name || '',
+        skillName: tool.skillName || '',
+        finalUrl: requestUrl,
+        error: 'Skill tool redirects are not allowed because browser manual redirects cannot be validated before following.',
+      };
+    }
+
+    const responseUrl = res.url || requestUrl;
+    const responseUrlCheck = validateFetchUrl(responseUrl, { allowLocalNetwork: getAllowLocalNetwork() });
+    if (!responseUrlCheck.ok) {
+      return {
+        success: false,
+        status: res.status,
+        provider: endpoint.hostname,
+        skillTool: tool.name || '',
+        skillName: tool.skillName || '',
+        finalUrl: responseUrl,
+        error: `Skill tool redirected to blocked URL: ${responseUrlCheck.error}`,
+      };
+    }
+    const rawText = await res.text();
+    let data = null;
+    try { data = rawText ? JSON.parse(rawText) : null; } catch (_) {}
+    if (!res.ok) {
+      return {
+        success: false,
+        status: res.status,
+        provider: endpoint.hostname,
+        skillTool: tool.name || '',
+        skillName: tool.skillName || '',
+        error: providerError(res.status, data, rawText),
+      };
+    }
+    const body = data && typeof data === 'object' ? data : { text: rawText };
+    return {
+      success: true,
+      status: res.status,
+      provider: endpoint.hostname,
+      skillTool: tool.name || '',
+      skillName: tool.skillName || '',
+      data: applySkillResponseLimits(body, tool.responseLimits || {}),
+    };
+  } catch (e) {
+    return { success: false, provider: endpoint.hostname, skillTool: tool.name || '', skillName: tool.skillName || '', error: `Skill tool request failed: ${e.message}` };
+  }
+}
+
 function apiReplayOptionsForFetch(rawUrl, opts = {}, ctx = {}) {
   const replayRequestId = opts.replayRequestId || opts.apiReplayRequestId;
   if (!replayRequestId) return { ok: true, opts };

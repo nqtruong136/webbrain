@@ -81,11 +81,26 @@ The only outbound HTTP requests are:
 1. **LLM provider API calls** (to URLs the user configured)
 2. **CapSolver API calls** (if the user enables CAPTCHA solving)
 3. **Content fetches** via `fetch_url` / `research_url` tools (to URLs the agent is asked to fetch)
-4. **Tab recording** creates no outbound traffic (the .webm is saved to the Downloads folder via `chrome.downloads.download`)
+4. **Skill tool calls** (to the HTTPS endpoint(s) declared by enabled skills — see "Bundled Skills" below for the one enabled by default)
+5. **Tab recording** creates no outbound traffic (the .webm is saved to the Downloads folder via `chrome.downloads.download`)
 
 The opt-in `webRequest` API shortcut observer is off by default and does not
 create outbound requests; when enabled, it observes replay metadata for requests
 the page already made so repeated UI mutations can be diagnosed.
+
+### Bundled Skills
+
+A built-in "FreeSkillz.xyz" skill (`skills/freeskillz-xyz.md`) is seeded into
+Settings → Skills on first run, enabled by default, and can be removed there.
+It declares a `read_youtube_transcript` tool that, when the model calls it,
+sends the YouTube URL (current tab or model-provided) to
+`https://freeskillz.xyz/v1/youtube/transcript` over HTTPS — a first-party
+service operated by the extension's developer, separate from the user's
+configured LLM provider. This call does not require `/allow-api` because the
+tool is read-only (see "Which provider receives the data?" above for how the
+LLM-provider data flow is configured independently). Users can remove this
+skill, or any user-imported skill tool, from Settings → Skills to stop this
+data flow entirely.
 
 ---
 

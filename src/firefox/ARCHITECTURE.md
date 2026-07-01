@@ -1,6 +1,6 @@
 # WebBrain Firefox Extension — Architecture
 
-> Version 18.3.5 · Manifest V2 · Background Page
+> Version 18.3.10 · Manifest V2 · Background Page
 
 ## How Firefox Differs from Chrome
 
@@ -55,6 +55,7 @@ src/firefox/
 │   ├── agent/
 │   │   ├── agent.js                # Core agent loop
 │   │   ├── tools.js                # Tool schemas + system prompts (incl. 4 AX tools)
+│   │   ├── skills.js               # Settings skills + dynamic skill tool manifests
 │   │   ├── planner.js              # Plan-before-Act structured planner
 │   │   ├── permission-gate.js      # Capability x origin permission gate
 │   │   ├── adapters.js             # Per-site guidance (identical to Chrome)
@@ -63,7 +64,7 @@ src/firefox/
 │   │   ├── accessibility-tree.js   # AX tree builder + ref_id registry (NEW in 3.6.8)
 │   │   └── content.js              # DOM reader / typer / clicker + AX handlers
 │   ├── network/
-│   │   └── network-tools.js        # fetch_url, research_url
+│   │   └── network-tools.js        # fetch_url, research_url, skill HTTP tools
 │   ├── providers/
 │   │   ├── base.js                 # Provider interface
 │   │   ├── manager.js              # Provider lifecycle
@@ -79,6 +80,7 @@ src/firefox/
 │       ├── settings.js
 │       ├── traces.html
 │       └── traces.js
+├── skills/                         # Packaged default skills (removable after seeding)
 └── icons/
 ```
 
@@ -182,6 +184,32 @@ Brought to Chrome parity in v4.0.1 — same three layers, synthetic-event-safe s
 **`blockedDone` heuristic (ported in v4.0.1).** Firefox's `done` now probes open dialogs, visible forms, and live-region messages via `browser.tabs.executeScript` (MV2 equivalent of Chrome's CDP probe). If the summary claims completion while a modal or form is still visible, returns `{blockedDone: true}` up to 2× per tab before letting `done` through with a loud verification note. Block count cleared on `clearConversation`.
 
 System prompt has a new "MODALS & DIALOGS" section describing the intended flow and the "dialog still open" failure pattern.
+
+---
+
+## Skills and Dynamic Skill Tools
+
+Settings -> Skills stores enabled skills under `customSkills`. On first run,
+`background.js` seeds packaged skills from `skills/*`; FreeSkillz.xyz is enabled
+by default but is just a stored built-in skill, so the user can remove it. If a
+packaged built-in skill changes and the user still has it enabled, startup
+refreshes the stored copy without re-adding deleted skills.
+
+`agent/skills.js` splits each skill into two surfaces:
+
+- prompt instructions appended by `buildCustomSkillsPrompt()`;
+- optional tool schemas declared in fenced `webbrain-tools` JSON blocks.
+
+The manifest fence is stripped before prompt injection. Declared skill tools are
+appended to `getToolsForMode(...)` at LLM-call time and executed through
+`executeHttpSkillTool()` in `network-tools.js`. Current skill tools are read-only
+HTTP integrations: HTTPS only, GET/POST only, `credentials: "omit"`, optional
+URL input allowlists, and optional response limits.
+
+Importing/enabling a skill is the trust boundary. After import, the declared
+tool can run without a per-call permission prompt. Third-party results should
+use `resultPolicy: "untrusted"` so the agent wraps and digests them like page
+content instead of trusted instructions.
 
 ---
 

@@ -1,6 +1,6 @@
 # WebBrain Chrome/Edge Extension — Architecture
 
-> Version 18.3.5 · Manifest V3 · Service Worker background
+> Version 18.3.10 · Manifest V3 · Service Worker background
 
 ## High-Level Overview
 
@@ -41,6 +41,7 @@ src/chrome/
 │   ├── agent/
 │   │   ├── agent.js            # Core agent loop + tool dispatch
 │   │   ├── tools.js            # Tool schemas + system prompts
+│   │   ├── skills.js           # Settings skills + dynamic skill tool manifests
 │   │   ├── planner.js          # Plan-before-Act structured planner
 │   │   ├── permission-gate.js  # Capability x origin permission gate
 │   │   ├── adapters.js         # Per-site guidance
@@ -51,7 +52,7 @@ src/chrome/
 │   │   ├── accessibility-tree.js  # AX tree builder + ref_id registry
 │   │   └── content.js          # Injected DOM reader / typer / clicker
 │   ├── network/
-│   │   └── network-tools.js    # fetch_url, research_url, downloads
+│   │   └── network-tools.js    # fetch_url, research_url, downloads, skill HTTP tools
 │   ├── offscreen/
 │   │   ├── offscreen.html      # Offscreen document host
 │   │   └── offscreen.js        # HTTP fetch proxy (localhost/PNA fallback)
@@ -71,6 +72,7 @@ src/chrome/
 │       ├── settings.js         # Provider + display settings
 │       ├── traces.html
 │       └── traces.js           # Trace viewer / model comparison UI
+├── skills/                     # Packaged default skills (removable after seeding)
 └── icons/
 ```
 
@@ -119,6 +121,32 @@ Planner prompts keep optional policy text mechanically gated. The base planner
 prompt includes general repeated-task pacing, but API replay guidance is appended
 only when the tab conversation already has `/allow-api`; unavailable paths should
 not bloat every planner request.
+
+---
+
+## Skills and Dynamic Skill Tools
+
+Settings -> Skills stores enabled skills under `customSkills`. On first run,
+`background.js` seeds packaged skills from `skills/*`; FreeSkillz.xyz is enabled
+by default but is just a stored built-in skill, so the user can remove it. If a
+packaged built-in skill changes and the user still has it enabled, startup
+refreshes the stored copy without re-adding deleted skills.
+
+`agent/skills.js` splits each skill into two surfaces:
+
+- prompt instructions appended by `buildCustomSkillsPrompt()`;
+- optional tool schemas declared in fenced `webbrain-tools` JSON blocks.
+
+The manifest fence is stripped before prompt injection. Declared skill tools are
+appended to `getToolsForMode(...)` at LLM-call time and executed through
+`executeHttpSkillTool()` in `network-tools.js`. Current skill tools are read-only
+HTTP integrations: HTTPS only, GET/POST only, `credentials: "omit"`, optional
+URL input allowlists, and optional response limits.
+
+Importing/enabling a skill is the trust boundary. After import, the declared
+tool can run without a per-call permission prompt. Third-party results should
+use `resultPolicy: "untrusted"` so the agent wraps and digests them like page
+content instead of trusted instructions.
 
 ---
 

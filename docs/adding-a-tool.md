@@ -6,13 +6,98 @@ This guide walks through adding a new tool to the WebBrain agent — from schema
 
 ## Overview
 
-Each tool requires changes in three layers:
+There are two ways to add a model-callable tool:
+
+- **Core tool**: product-owned browser, DOM, network, download, scheduler, or
+  privileged behavior implemented in WebBrain source. Use the full checklist
+  below.
+- **Skill HTTP tool**: user-importable, removable, read-only HTTP integration
+  declared in a skill's `webbrain-tools` manifest. Use this when the tool is
+  best treated as a trusted third-party extension rather than a WebBrain core
+  primitive.
+
+A core tool requires changes in three layers:
 
 1. **Tool schema** — define the name, description, and parameters in `tools.js`
 2. **Tool execution** — add a handler in `agent.js`'s `executeTool()` or in a content script
 3. **UI labels** (optional) — add localized display names in `locales/*.js`
 
 Most tools also need to be mirrored to both the Chrome and Firefox builds.
+
+---
+
+## Option 0: Expose a Read-Only HTTP Tool from a Skill
+
+If the integration is a trusted third-party HTTP service, prefer a skill tool
+before hard-coding a core tool. Skill tools are removable from Settings -> Skills
+and can be renamed or replaced by editing the manifest.
+
+Add a fenced `webbrain-tools` JSON block to the skill markdown:
+
+````markdown
+# Example Skill
+
+Use this skill when...
+
+```webbrain-tools
+{
+  "tools": [
+    {
+      "id": "example_lookup",
+      "name": "example_lookup",
+      "description": "Read public metadata from Example. Use this before downloading media.",
+      "kind": "http",
+      "readOnly": true,
+      "method": "POST",
+      "endpoint": "https://api.example.com/v1/lookup",
+      "defaultArgs": {},
+      "activeTabUrlArg": "url",
+      "inputUrlArg": "url",
+      "inputUrlAllowlist": [
+        { "host": "example.com", "paths": ["/"] }
+      ],
+      "resultPolicy": "untrusted",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Optional URL. Omit to use the active tab."
+          }
+        },
+        "required": []
+      }
+    }
+  ]
+}
+```
+````
+
+How it is wired:
+
+- `agent/skills.js` parses manifests from enabled skills and builds tool schemas
+  at LLM-call time.
+- The manifest block is stripped from the prompt instructions, so endpoint JSON
+  is not copied into the main system prompt.
+- `agent.js` routes declared skill tool calls through
+  `executeHttpSkillTool()` in `network-tools.js`.
+- Skill HTTP tools currently require HTTPS, GET or POST, `readOnly: true`, and
+  `credentials: "omit"`.
+
+Security model:
+
+- Importing/enabling the skill is the trust boundary. After import, declared
+  skill tools can send their declared inputs to their declared HTTPS endpoints
+  without per-call confirmation.
+- Mark any third-party/page/document response as `resultPolicy: "untrusted"` so
+  the result is wrapped in `<untrusted_page_content>` and cannot become trusted
+  instructions during summarization.
+- Use `inputUrlAllowlist` when the service should only receive specific public
+  URL families.
+
+Use a core tool instead when the tool needs browser privileges, cookies,
+downloads, content-script DOM access, mutation permissions, a custom permission
+gate, or non-HTTP execution.
 
 ---
 

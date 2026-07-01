@@ -8,6 +8,7 @@ import { cdpClient } from '../cdp/cdp-client.js';
 import { getActiveAdapter, UNIVERSAL_PREAMBLE } from './adapters.js';
 import {
   fetchUrl,
+  executeHttpSkillTool,
   readPageSource,
   researchUrl,
   listDownloads,
@@ -41,6 +42,7 @@ import {
 } from './planner.js';
 import { extractFirstJsonObject } from './json-extract.js';
 import { sanitizeText as sanitizePlannerText } from './text-sanitize.js';
+import { buildCustomSkillsPrompt, buildSkillToolDefinitions, buildSkillToolRegistry, normalizeCustomSkills } from './skills.js';
 
 const DEFAULT_CLOUD_COST_ALLOWANCE_USD = 10;
 const COST_ALLOWANCE_SESSION_KEY = 'costAllowanceSessionUsd';
@@ -139,6 +141,7 @@ export class Agent {
     // UI. Loaded in background.js alongside other settings.
     this.profileEnabled = false;
     this.profileText = '';
+    this.customSkills = [];
 
     // CapSolver integration. Off by default. When enabled AND an API key
     // is set, the system prompt grows a "[CAPTCHA SOLVER]" note that
@@ -1649,6 +1652,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // both types AND submits, so it needs a TYPE grant and a CLICK grant.
       const capabilities = capabilitiesFor(fnName, fnArgs);
       await this._ensureGateSetting();
+      const skillEndpointRedirect = this._skillEndpointToolRedirect(fnName, fnArgs);
+      if (skillEndpointRedirect) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: JSON.stringify(skillEndpointRedirect),
+        });
+        onUpdate('warning', { message: `Use ${skillEndpointRedirect.useTool} instead of ${fnName} for this skill endpoint.` });
+        continue;
+      }
       if (isNetworkMutation(fnName, fnArgs) && !this.apiAllowedTabs.has(tabId)) {
         messages.push({
           role: 'tool',
@@ -3816,7 +3829,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   /**
    * Compose the full system prompt: base (ASK or ACT) + optional universal
-   * cookie/paywall guidance + optional user profile block.
+   * cookie/paywall guidance + optional enabled skills + optional user
+   * profile block.
    *
    * Everything past the base prompt is appended, NOT prepended — this keeps
    * the cache-stable prefix (base prompt) at the front so providers that
@@ -3832,6 +3846,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // since it's just a few dozen cached tokens.
     if (this.useSiteAdapters) {
       prompt += `\n\n${UNIVERSAL_PREAMBLE.trim()}`;
+    }
+
+    const skillsPrompt = buildCustomSkillsPrompt(this.customSkills);
+    if (skillsPrompt) {
+      prompt += `\n\n${skillsPrompt}`;
     }
 
     // Profile auto-fill. Only injected when the user has both enabled the
@@ -3854,11 +3873,84 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return prompt;
   }
 
+  setCustomSkills(skills) {
+    this.customSkills = normalizeCustomSkills(skills);
+    this._refreshSystemPrompts();
+  }
+
+  _skillToolDefinitions(mode, tier) {
+    return buildSkillToolDefinitions(this.customSkills, {
+      mode,
+      tier: tier || 'full',
+      excludeNames: AGENT_TOOL_NAMES,
+    });
+  }
+
+  _skillToolRegistry() {
+    return buildSkillToolRegistry(this.customSkills, {
+      excludeNames: AGENT_TOOL_NAMES,
+    });
+  }
+
+  _skillToolForName(name) {
+    if (!name) return null;
+    return this._skillToolRegistry().get(name) || null;
+  }
+
+  _skillToolForEndpoint(url) {
+    if (!url) return null;
+    let target;
+    try {
+      target = new URL(String(url));
+      target.hash = '';
+    } catch (_) {
+      return null;
+    }
+    const normalizePath = (value) => String(value || '/').replace(/\/+$/, '') || '/';
+    for (const tool of this._skillToolRegistry().values()) {
+      if (!tool || tool.kind !== 'http' || !tool.endpoint) continue;
+      try {
+        const endpoint = new URL(tool.endpoint);
+        endpoint.hash = '';
+        if (
+          endpoint.protocol === target.protocol &&
+          endpoint.hostname === target.hostname &&
+          endpoint.port === target.port &&
+          normalizePath(endpoint.pathname) === normalizePath(target.pathname) &&
+          endpoint.search === target.search
+        ) {
+          return tool;
+        }
+      } catch (_) {
+        // Ignore malformed skill endpoint records.
+      }
+    }
+    return null;
+  }
+
+  _skillEndpointToolRedirect(name, args) {
+    if (name !== 'fetch_url' && name !== 'research_url') return null;
+    const skillTool = this._skillToolForEndpoint(args?.url);
+    if (!skillTool) return null;
+    return {
+      success: false,
+      denied: true,
+      wrongTool: true,
+      useTool: skillTool.name,
+      requiresApiAllow: false,
+      error: `This URL is the HTTPS endpoint for the enabled ${skillTool.name} skill tool. Do not call ${name} against enabled skill endpoints; call ${skillTool.name} directly with the user-visible arguments instead. Ask mode can call read-only skill tools, and ${skillTool.name} does not require /allow-api. /allow-api only applies to mutating fetch_url/research_url API calls.`,
+    };
+  }
+
+  _isUntrustedTool(name) {
+    return UNTRUSTED_CONTENT_TOOLS.has(name) || this._skillToolForName(name)?.resultPolicy === 'untrusted';
+  }
+
   /**
    * Rewrite the system prompt on every live conversation — called when the
-   * user toggles `useSiteAdapters` or edits their profile in settings, so
-   * the change takes effect on the next turn without forcing a conversation
-   * reset.
+   * user toggles `useSiteAdapters`, edits their profile, or changes custom
+   * skills in settings, so the change takes effect on the next turn without
+   * forcing a conversation reset.
    */
   _refreshSystemPrompts() {
     for (const [tabId, messages] of this.conversations) {
@@ -3883,17 +3975,19 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         this.conversationIds.set(tabId, `conv_${tabId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
       }
     }
-    // If mode changed, update the system prompt
+    // Rebuild the system prompt on reuse so hydrated conversations pick up
+    // skills/settings loaded after the service worker restarted.
+    const messages = this.conversations.get(tabId);
     const lastMode = this.conversationModes.get(tabId);
     if (lastMode !== mode) {
-      const messages = this.conversations.get(tabId);
-      if (messages[0]?.role === 'system') {
-        messages[0].content = this._buildSystemPrompt(mode);
-      }
       this.conversationModes.set(tabId, mode);
       this._conversationMode = mode;
     }
-    return this.conversations.get(tabId);
+    if (messages[0]?.role === 'system') {
+      const nextPrompt = this._buildSystemPrompt(mode);
+      if (messages[0].content !== nextPrompt) messages[0].content = nextPrompt;
+    }
+    return messages;
   }
 
   /**
@@ -5019,6 +5113,30 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    * would silently drop it. Clears the cached input-token count so the next
    * call re-measures the smaller size.
    */
+  /**
+   * Truncate `content` to `limit` chars, but if it's wrapped in an
+   * <untrusted_page_content> box, keep the closing tag intact instead of
+   * slicing it off. A naive slice can drop the close tag (and its nonce id),
+   * which makes _hasUntrustedWrapper() return false on a later pass — e.g.
+   * when the digest/summarizer runs after the skill that produced it was
+   * removed or renamed, so _isUntrustedTool() no longer recognizes it either.
+   * That combination would launder attacker-controlled page text into the
+   * trusted trim summary. Re-appending the matching close tag keeps the
+   * wrapper detectable regardless of skill registry state.
+   */
+  _truncatePreservingUntrustedWrapper(content, limit) {
+    const openMatch = content.match(/^<untrusted_page_content\b([^>]*)>\n?/);
+    if (!openMatch) {
+      return content.slice(0, limit) + '\n[...truncated to fit context]';
+    }
+    const closeMatch = content.match(/\n?<\/untrusted_page_content\b[^>]*>\s*$/);
+    const closeTag = closeMatch ? closeMatch[0] : `\n</untrusted_page_content${openMatch[1]}>`;
+    const openTag = openMatch[0];
+    const innerLimit = Math.max(0, limit - openTag.length - closeTag.length);
+    const inner = content.slice(openTag.length, openTag.length + innerLimit);
+    return `${openTag}${inner}\n[...truncated to fit context]${closeTag}`;
+  }
+
   _truncateOversizedMessages(tabId, messages) {
     const taskIdx = this._findOriginalTaskIndex(messages);
     const scheduledResumeIdx = this._findLatestScheduledResumeIndex(messages);
@@ -5030,10 +5148,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       if (this._isPinnedAgentStateMessage(m)) continue;
       if (typeof m.content !== 'string') continue; // image/array content handled by _pruneOldImages
       if (m.role === 'tool' && m.content.length > 2000) {
-        m.content = m.content.slice(0, 2000) + '\n[...truncated to fit context]';
+        m.content = this._truncatePreservingUntrustedWrapper(m.content, 2000);
         trimmed = true;
       } else if (m.content.length > 5000) {
-        m.content = m.content.slice(0, 5000) + '\n[...truncated to fit context]';
+        m.content = this._truncatePreservingUntrustedWrapper(m.content, 5000);
         trimmed = true;
       }
     }
@@ -5365,6 +5483,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    */
   _digestToolResult(name, content) {
     if (!content) return '(empty)';
+    const isUntrusted = this._isUntrustedTool(name) || this._hasUntrustedWrapper(content);
     // Unwrap the untrusted-content markers first so the inner JSON parses —
     // otherwise the parse fails and the fallback would dump raw (attacker-
     // controlled) page text into the trusted trim summary / summarizer input.
@@ -5373,7 +5492,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     try { parsed = JSON.parse(raw); } catch { /* not JSON / truncated */ }
     if (!parsed || typeof parsed !== 'object') {
       // Never echo raw bytes from a page-derived tool into the trusted summary.
-      if (UNTRUSTED_CONTENT_TOOLS.has(name)) {
+      if (isUntrusted) {
         return `${name}: untrusted page content (${String(raw).length} chars)`;
       }
       return this._truncate(String(raw).replace(/\s+/g, ' '), 140);
@@ -5383,10 +5502,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // text (a fetched URL, a filename, a page-error snippet). Echoing it
       // into the trusted trim summary / summarizer prompt would smuggle that
       // text out of the untrusted wrapper, so emit a content-free note instead.
-      if (UNTRUSTED_CONTENT_TOOLS.has(name)) {
+      if (isUntrusted) {
         return `${name}: error (untrusted page content)`;
       }
       return `error: ${this._truncate(String(parsed.error), 120)}`;
+    }
+
+    const skillTool = this._skillToolForName(name);
+    if (skillTool) {
+      const len = parsed.originalLength ?? (typeof parsed.text === 'string' ? parsed.text.length : JSON.stringify(parsed).length);
+      return `${name}: ${parsed.status ?? 200} (${len} chars)`;
     }
 
     switch (name) {
@@ -5488,12 +5613,12 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         return `scratchpad ${parsed.mode || 'write'} (${parsed.bytes ?? '?'} chars)`;
       }
       case 'progress_update': {
-        if (UNTRUSTED_CONTENT_TOOLS.has(name)) return `${name} ok (untrusted page content)`;
+        if (isUntrusted) return `${name} ok (untrusted page content)`;
         const c = parsed.counts || {};
         return `progress ledger updated (${c.total ?? '?'} rows, ${c.unresolved ?? 0} unresolved)`;
       }
       case 'progress_read': {
-        if (UNTRUSTED_CONTENT_TOOLS.has(name)) return `${name} ok (untrusted page content)`;
+        if (isUntrusted) return `${name} ok (untrusted page content)`;
         const c = parsed.counts || {};
         return `progress ledger read (${c.total ?? '?'} rows, ${c.unresolved ?? 0} unresolved)`;
       }
@@ -5503,7 +5628,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // object — it holds page content (element labels, selection, frame text,
     // PDF text, execute_js output, …) that would land in the trusted trim
     // summary. Emit a content-free digest instead.
-    if (UNTRUSTED_CONTENT_TOOLS.has(name)) {
+    if (isUntrusted) {
       return `${name} ok (untrusted page content)`;
     }
     try {
@@ -5529,6 +5654,34 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       if (json.length <= maxResultChars) return json;
     }
 
+    if (result && result.data && typeof result.data === 'object' && !Array.isArray(result.data)) {
+      const originalData = result.data;
+      const originalText = typeof originalData.text === 'string' ? originalData.text : null;
+      const originalSegments = Array.isArray(originalData.segments) ? originalData.segments : null;
+      if (originalText || originalSegments) {
+        const textLimits = originalText ? [4000, 3000, 2000, 1000] : [null];
+        const segmentLimits = originalSegments ? [80, 40, 20, 10, 5, 0] : [null];
+        for (const textLimit of textLimits) {
+          for (const segmentLimit of segmentLimits) {
+            const data = { ...originalData };
+            if (originalText && originalText.length > textLimit) {
+              data.text = `${originalText.slice(0, textLimit)}\n[...tool data text truncated]`;
+              data.truncated = true;
+              data.originalLength = data.originalLength ?? originalText.length;
+            }
+            if (originalSegments && originalSegments.length > segmentLimit) {
+              data.segments = originalSegments.slice(0, segmentLimit);
+              data.segmentsTruncated = true;
+              data.originalSegmentCount = data.originalSegmentCount ?? originalSegments.length;
+            }
+            const trimmed = { ...result, data };
+            json = JSON.stringify(trimmed);
+            if (json.length <= maxResultChars) return json;
+          }
+        }
+      }
+    }
+
     // If still too big, just chop the JSON
     return json.slice(0, maxResultChars) + '\n[...result truncated]';
   }
@@ -5546,7 +5699,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    * page, so it cannot be guessed and spoofed.
    */
   _wrapUntrusted(name, content) {
-    if (!UNTRUSTED_CONTENT_TOOLS.has(name)) return content;
+    if (!this._isUntrustedTool(name)) return content;
     const nonce = Math.random().toString(36).slice(2, 10);
     const safe = String(content).replace(/<\/?untrusted_page_content\b[^>]*>/gi, '[markup stripped]');
     return `<untrusted_page_content id="${nonce}">\n${safe}\n</untrusted_page_content id="${nonce}">`;
@@ -5562,6 +5715,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (typeof content !== 'string') return content;
     const m = content.match(/<untrusted_page_content\b[^>]*>\n?([\s\S]*?)\n?<\/untrusted_page_content\b[^>]*>/);
     return m ? m[1] : content;
+  }
+
+  _hasUntrustedWrapper(content) {
+    return typeof content === 'string'
+      && /<untrusted_page_content\b[^>]*>[\s\S]*?<\/untrusted_page_content\b[^>]*>/.test(content);
   }
 
   /**
@@ -6385,6 +6543,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // cookie & redirect policy. They don't touch the active tab DOM, so
     // they're safe to call any time.
 
+    const skillTool = this._skillToolForName(name);
+    if (skillTool) {
+      return await executeHttpSkillTool(skillTool, args, { tabId });
+    }
+    const skillEndpointRedirect = this._skillEndpointToolRedirect(name, args);
+    if (skillEndpointRedirect) {
+      return skillEndpointRedirect;
+    }
     if (name === 'fetch_url') {
       return await fetchUrl(args.url, args, { tabId });
     }
@@ -9345,7 +9511,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       await this._ensureProgressSessionForCurrentTask(tabId, { provider, costState });
     }
     const visionAvailable = !!(provider?.supportsVision) || !!(await this.providerManager.getVisionProvider());
-    const tools = getToolsForMode(mode, { strictSecretMode: this.strictSecretMode, tier: provider.promptTier, visionAvailable });
+    const tier = provider.promptTier;
+    const skillTools = this._skillToolDefinitions(mode, tier);
+    const tools = getToolsForMode(mode, { strictSecretMode: this.strictSecretMode, tier, visionAvailable, skillTools });
     const allowedToolNames = new Set(tools.map(t => t.function.name));
     const plannerTemperature = mode === 'act' ? 0.15 : 0.3;
     let steps = 0;
@@ -9707,7 +9875,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       await this._ensureProgressSessionForCurrentTask(tabId, { provider, costState });
     }
     const visionAvailable = !!(provider?.supportsVision) || !!(await this.providerManager.getVisionProvider());
-    const tools = getToolsForMode(mode, { strictSecretMode: this.strictSecretMode, tier: provider.promptTier, visionAvailable });
+    const tier = provider.promptTier;
+    const skillTools = this._skillToolDefinitions(mode, tier);
+    const tools = getToolsForMode(mode, { strictSecretMode: this.strictSecretMode, tier, visionAvailable, skillTools });
     const allowedToolNames = new Set(tools.map(t => t.function.name));
     const plannerTemperature = mode === 'act' ? 0.15 : 0.3;
     let steps = 0;
