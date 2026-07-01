@@ -297,7 +297,11 @@ function inputUrlAllowed(rawUrl, rules = []) {
 
 function applySkillResponseLimits(value, limits = {}) {
   if (!value || typeof value !== 'object') return value;
-  const maxTextChars = Number.isFinite(Number(limits.maxTextChars)) ? Math.max(1000, Number(limits.maxTextChars)) : 160000;
+  const rawMaxTextChars = limits.maxTextChars;
+  const unlimitedText = rawMaxTextChars === 'unlimited';
+  const maxTextChars = unlimitedText
+    ? Number.POSITIVE_INFINITY
+    : Number.isFinite(Number(rawMaxTextChars)) ? Math.max(1000, Number(rawMaxTextChars)) : 160000;
   const arrayLimits = limits.maxArrayItems && typeof limits.maxArrayItems === 'object' ? limits.maxArrayItems : {};
   const out = Array.isArray(value) ? [...value] : { ...value };
   for (const [key, item] of Object.entries(out)) {

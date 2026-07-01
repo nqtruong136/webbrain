@@ -2757,11 +2757,17 @@ test('getToolsForMode: skill tools are exposed only when enabled skills declare 
     assert.ok(downloadTool, `${label}: FreeSkillz media download tool missing`);
     assert.equal(transcriptTool.endpoint, 'https://freeskillz.xyz/v1/youtube/transcript', `${label}: wrong transcript endpoint`);
     assert.equal(transcriptTool.resultPolicy, 'untrusted', `${label}: transcript output should be untrusted`);
-      assert.equal(resolveTool.kind, 'http', `${label}: resolver should be read-only HTTP`);
-      assert.equal(resolveTool.readOnly, true, `${label}: resolver should be read-only`);
-      assert.equal(resolveTool.endpoint, 'https://freeskillz.xyz/v1/media/resolve', `${label}: wrong resolver endpoint`);
-      assert.equal(resolveTool.activeTabUrlArg, '', `${label}: resolver must not auto-send the active tab URL in Ask mode`);
-      assert.equal(downloadTool.kind, 'httpDownloadJob', `${label}: downloader should use job execution`);
+    assert.deepEqual(
+      transcriptTool.defaultArgs,
+      { timestamps: true, text_limit: 6000, include_segments: false },
+      `${label}: transcript defaults should request compact text windows`,
+    );
+    assert.equal(transcriptTool.responseLimits.maxTextChars, 'unlimited', `${label}: transcript provider text should not be pre-capped`);
+    assert.equal(resolveTool.kind, 'http', `${label}: resolver should be read-only HTTP`);
+    assert.equal(resolveTool.readOnly, true, `${label}: resolver should be read-only`);
+    assert.equal(resolveTool.endpoint, 'https://freeskillz.xyz/v1/media/resolve', `${label}: wrong resolver endpoint`);
+    assert.equal(resolveTool.activeTabUrlArg, '', `${label}: resolver must not auto-send the active tab URL in Ask mode`);
+    assert.equal(downloadTool.kind, 'httpDownloadJob', `${label}: downloader should use job execution`);
     assert.equal(downloadTool.readOnly, false, `${label}: downloader should not be read-only`);
     assert.equal(downloadTool.requiresDownloadPermission, true, `${label}: downloader should require download permission`);
     assert.equal(downloadTool.endpoint, 'https://freeskillz.xyz/v1/media/jobs', `${label}: wrong download job endpoint`);
@@ -2786,7 +2792,11 @@ test('getToolsForMode: skill tools are exposed only when enabled skills declare 
       assert.ok(transcript.function.parameters.properties.url, `${label} ${mode}: url param missing`);
       assert.ok(transcript.function.parameters.properties.lang, `${label} ${mode}: lang param missing`);
       assert.ok(transcript.function.parameters.properties.timestamps, `${label} ${mode}: timestamps param missing`);
+      assert.ok(transcript.function.parameters.properties.text_offset, `${label} ${mode}: text_offset param missing`);
+      assert.ok(transcript.function.parameters.properties.text_limit, `${label} ${mode}: text_limit param missing`);
+      assert.ok(transcript.function.parameters.properties.include_segments, `${label} ${mode}: include_segments param missing`);
       assert.match(transcript.function.description, /Use this first/i, `${label} ${mode}: description should steer first use`);
+      assert.match(transcript.function.description, /next_text_offset/i, `${label} ${mode}: description should explain transcript continuation`);
       assert.match(transcript.function.description, /does not require \/allow-api/i, `${label} ${mode}: read-only skill tool should not ask for /allow-api`);
       assert.match(transcript.function.description, /FreeSkillz\.xyz/, `${label} ${mode}: provider missing`);
 
@@ -2901,7 +2911,46 @@ test('executeHttpSkillTool uses skill manifest endpoint for supported YouTube UR
       assert.equal(calls[0].opts.method, 'POST', `${label}: wrong method`);
       assert.equal(calls[0].opts.credentials, 'omit', `${label}: provider call should not send cookies`);
       assert.equal(calls[0].opts.redirect, 'manual', `${label}: provider redirects should be validated before following`);
-      assert.deepEqual(JSON.parse(calls[0].opts.body), { url: youtubeUrl, timestamps: false, lang: 'tr' }, `${label}: wrong request body`);
+      assert.deepEqual(
+        JSON.parse(calls[0].opts.body),
+        { timestamps: false, text_limit: 6000, include_segments: false, url: youtubeUrl, lang: 'tr' },
+        `${label}: wrong request body`,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+});
+
+test('executeHttpSkillTool honors unlimited FreeSkillz transcript response text limit', async () => {
+  const youtubeUrl = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+  const longText = 'x'.repeat(170_500);
+  for (const [label, prefix, executeTool, normalizeSkills, buildRegistry] of [
+    ['chrome', 'src/chrome', executeHttpSkillToolCh, normalizeCustomSkillsCh, buildSkillToolRegistryCh],
+    ['firefox', 'src/firefox', executeHttpSkillToolFx, normalizeCustomSkillsFx, buildSkillToolRegistryFx],
+  ]) {
+    const skills = normalizeSkills([packagedFreeSkillzRecord(prefix)]);
+    const tool = buildRegistry(skills).get('read_youtube_transcript');
+    assert.ok(tool, `${label}: manifest tool missing`);
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        video_id: 'dQw4w9WgXcQ',
+        selected_language: 'en',
+        text: longText,
+        segments: [],
+        text_length: longText.length,
+        has_more_text: false,
+      }),
+    });
+    try {
+      const result = await executeTool(tool, { url: youtubeUrl });
+      assert.equal(result.success, true, `${label}: supported YouTube URL should succeed`);
+      assert.equal(result.data.text.length, longText.length, `${label}: transcript text should not be capped before agent paging`);
+      assert.equal(result.data.truncated, undefined, `${label}: unlimited transcript response should not be marked truncated`);
     } finally {
       globalThis.fetch = originalFetch;
     }
