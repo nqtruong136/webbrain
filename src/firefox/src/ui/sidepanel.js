@@ -378,7 +378,7 @@ const BUSY_SLASH_NOTICE_COOLDOWN_MS = 3000;
 let currentTabId = null;
 let renderedTabId = null;
 let pendingTabSwitch = null; // tab the user switched to while isProcessing was true
-const pendingAttachmentsByTab = new Map(); // tabId -> [{ kind: 'image'|'document', name, dataUrl }]
+const pendingAttachmentsByTab = new Map(); // tabId -> [{ kind: 'image'|'document'|'text', name, dataUrl?, textContent? }]
 const attachmentReadCountsByTab = new Map();
 const attachmentGenerationByTab = new Map();
 let tabSwitchTransitionId = null;
@@ -3764,7 +3764,7 @@ function startListening() {
   if (!SpeechRecognitionImpl || !inputEl) return;
   const recognition = new SpeechRecognitionImpl();
   speechRecognition = recognition;
-  recognition.lang = navigator.language || 'en-US';
+  recognition.lang = getLocale();
   recognition.continuous = true;
   recognition.interimResults = true;
   micInterimText = '';
@@ -3947,6 +3947,15 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
 async function handleAttachedFiles(fileList, tabId = currentTabId) {
   const numericTabId = normalizeAttachmentTabId(tabId);
   if (numericTabId == null) return;
@@ -3964,16 +3973,23 @@ async function handleAttachedFiles(fileList, tabId = currentTabId) {
       }
       const isImage = file.type.startsWith('image/');
       const isPdf = file.type === 'application/pdf';
-      if (!isImage && !isPdf) {
+      const isJson = file.type === 'application/json';
+      if (!isImage && !isPdf && !isJson) {
         if (normalizeAttachmentTabId() === numericTabId) {
           addMessage('system', systemHtml(tSystemHtml('sp.attach.unsupported_type', { name: file.name })));
         }
         continue;
       }
       try {
-        const dataUrl = await readFileAsDataUrl(file);
-        if (generation !== getAttachmentGeneration(numericTabId)) continue;
-        getPendingAttachmentsForTab(numericTabId).push({ kind: isImage ? 'image' : 'document', name: file.name, dataUrl });
+        if (isJson) {
+          const textContent = await readFileAsText(file);
+          if (generation !== getAttachmentGeneration(numericTabId)) continue;
+          getPendingAttachmentsForTab(numericTabId).push({ kind: 'text', name: file.name, textContent });
+        } else {
+          const dataUrl = await readFileAsDataUrl(file);
+          if (generation !== getAttachmentGeneration(numericTabId)) continue;
+          getPendingAttachmentsForTab(numericTabId).push({ kind: isImage ? 'image' : 'document', name: file.name, dataUrl });
+        }
       } catch {
         if (generation === getAttachmentGeneration(numericTabId) && normalizeAttachmentTabId() === numericTabId) {
           addMessage('system', systemHtml(tSystemHtml('sp.attach.read_failed', { name: file.name })));
