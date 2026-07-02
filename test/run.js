@@ -2432,6 +2432,11 @@ test('submissionZipRemoveCommand tolerates missing first Edge artifact', () => {
   );
 });
 
+test('firefox manifest uses the AMO extension id', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/firefox/manifest.json'), 'utf8'));
+  assert.equal(manifest.browser_specific_settings?.gecko?.id, 'webbrain@esokullu.com');
+});
+
 // ────────────────────────────────────────────────────────────────────────
 // Context-aware recommended actions
 // ────────────────────────────────────────────────────────────────────────
