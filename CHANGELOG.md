@@ -7,7 +7,7 @@ This changelog was generated from the repository Git history and release tags. V
 ## [20.0.0] - 2026-07-03
 
 ### Added
-- Added Chrome-only `/record-full-screen` as a slash-only screen/window recording flow that uses Chrome's picker from the offscreen recorder context and records without the live WebBrain recording banner.
+- Added Chrome-only `/record-full-screen` as a slash-only screen/window recording flow that uses the offscreen recorder's `getDisplayMedia()` picker and records without the live WebBrain recording banner.
 - Added double-Escape recording stop handling on Chrome WebBrain/browser surfaces, with hidden recordings covered by a background-owned 2-hour safety cap.
 - Added `--transcribe` for `/record` and `/record-full-screen` so user-driven recordings can still save a Whisper transcript after stop.
 

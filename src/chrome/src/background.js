@@ -934,7 +934,6 @@ async function handleMessage(msg, sender) {
     case 'start_display_recording': {
       return await startDisplayRecording({
         ...(msg.options || {}),
-        streamId: msg.streamId || null,
         tabId: msg.tabId || sender.tab?.id || null,
       });
     }

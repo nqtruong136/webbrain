@@ -161,7 +161,7 @@ captures the active tab's video + audio + (optionally) microphone into a single
 webm file and shows the red side-panel banner/timer. Add `--transcribe` to
 `/record` or `/record-full-screen` to run Whisper transcription after stop.
 `/record-full-screen` opens Chrome's screen/window picker from the offscreen
-recorder context through `desktopCapture`, records without showing the WebBrain
+recorder context through `getDisplayMedia()`, records without showing the WebBrain
 recording banner, and can be stopped by double Escape on WebBrain or browser
 pages. Chrome's picker decides what can be captured: the user must choose the
 browser window or whole screen if they want the WebBrain panel in the video.
@@ -185,8 +185,8 @@ background.js
                       │
                       ▼
 offscreen/recorder.js
-      ├─ chrome.desktopCapture.chooseDesktopMedia(['screen','window','audio'])
-      ├─ navigator.mediaDevices.getUserMedia(chromeMediaSource:'tab'|'desktop', streamId)
+      ├─ display: navigator.mediaDevices.getDisplayMedia({audio:true, video:true})
+      ├─ tab: navigator.mediaDevices.getUserMedia(chromeMediaSource:'tab', streamId)
       ├─ navigator.mediaDevices.getUserMedia({audio:true})       (mic, best-effort)
       ├─ AudioContext:
       │     captured audio ─→ mixDestination
@@ -239,8 +239,8 @@ localhost-fetch proxy already needs one for Private Network Access
 workarounds. Rather than fight over it, `offscreen/offscreen.html` loads
 both `offscreen.js` (fetch proxy) and `recorder.js` (tab recorder).
 `src/offscreen/ensure.js` is the single creation helper, declaring all
-reasons up front: `LOCAL_STORAGE` (fetch), `DISPLAY_MEDIA` (tabCapture),
-`USER_MEDIA` (mic). Each script binds its own `runtime.onMessage` filter
+reasons up front: `LOCAL_STORAGE` (fetch), `DISPLAY_MEDIA` (tab/display
+capture), `USER_MEDIA` (mic). Each script binds its own `runtime.onMessage` filter
 (`offscreen-fetch` vs `recorder-*`) so they don't collide.
 
 ### Transcription provider selection

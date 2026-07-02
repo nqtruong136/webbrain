@@ -397,7 +397,7 @@ MV3 service workers can die between turns. Conversations are persisted to `chrom
 | Shadow DOM piercing | CDP for closed roots | Open roots only |
 | Localhost CORS | Offscreen proxy fallback | Server must set CORS headers |
 | API shortcut observer | `chrome.webRequest` URL/method buffer | `browser.webRequest` URL/method buffer |
-| Slash-driven tab/screen recording | `chrome.tabCapture` / `chrome.desktopCapture` + offscreen | Not available |
+| Slash-driven tab/screen recording | `chrome.tabCapture` / `getDisplayMedia()` + offscreen | Not available |
 | Side panel | `sidePanel` API (MV3) | `sidebar_action` (MV2) |
 | File upload | CDP-powered | Manual dispatch |
 

@@ -20,7 +20,6 @@
     "offscreen",
     "privateNetworkAccess",
     "tabCapture",
-    "desktopCapture",
     "clipboardWrite",
     "clipboardRead"
   ],

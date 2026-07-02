@@ -4835,7 +4835,7 @@ test('chrome /record-full-screen is slash-only, Chrome-only, and hidden from the
   const slashList = panel.slice(panel.indexOf('const SLASH_COMMANDS = ['), panel.indexOf('const OUT_OF_BAND_SLASH_COMMANDS'));
   assert.match(slashList, /\/record-full-screen/, 'chrome: slash autocomplete should advertise /record-full-screen');
   assert.match(locale, /sp\.slash\.record_full_screen/, 'chrome: missing /record-full-screen slash label');
-  assert.match(manifest, /"desktopCapture"/, 'chrome: full-screen recording needs desktopCapture permission');
+  assert.doesNotMatch(manifest, /"desktopCapture"/, 'chrome: full-screen recording should use getDisplayMedia without desktopCapture permission');
 
   const fullScreenIdx = panel.indexOf("// /record-full-screen");
   const recordIdx = panel.indexOf("// /record — start recording");
@@ -4853,8 +4853,8 @@ test('chrome /record-full-screen is slash-only, Chrome-only, and hidden from the
   assert.match(background, /prepare_recording_host[\s\S]*?start_display_recording/, 'chrome: background should keep recorder routes for slash commands');
   assert.match(host, /export async function startDisplayRecording\(options = \{\}/, 'chrome: recorder host should expose display recording for slash command routing');
   assert.match(host, /function scheduleRecordingSafetyWatchdog[\s\S]*?chrome\.alarms\?\.create/, 'chrome: hidden recordings should have a background-owned safety cap');
-  assert.match(offscreen, /function chooseDesktopMediaSource\(\)[\s\S]*?chrome\.desktopCapture\.chooseDesktopMedia\(\['screen', 'window', 'audio'\]/, 'chrome: offscreen recorder should open the screen/window picker itself');
-  assert.match(offscreen, /context-bound and cannot be ferried from the side panel/, 'chrome: display capture should document same-context stream id consumption');
+  assert.match(offscreen, /navigator\.mediaDevices\.getDisplayMedia\(\{[\s\S]*?audio: audio !== false,[\s\S]*?video: true,[\s\S]*?\}\)/, 'chrome: offscreen recorder should open the screen/window picker through getDisplayMedia');
+  assert.doesNotMatch(offscreen, /chrome\.desktopCapture/, 'chrome: offscreen recorder cannot use extension APIs beyond chrome.runtime');
 
   const firefoxSlashList = firefoxPanel.slice(firefoxPanel.indexOf('const SLASH_COMMANDS = ['), firefoxPanel.indexOf('const OUT_OF_BAND_SLASH_COMMANDS'));
   assert.doesNotMatch(firefoxSlashList, /\/record-full-screen/, 'firefox: autocomplete should not advertise /record-full-screen');

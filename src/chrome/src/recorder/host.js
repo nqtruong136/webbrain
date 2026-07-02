@@ -3,7 +3,7 @@
  *
  * Two user-driven flows share this:
  *   • `/record` — current-tab capture via chrome.tabCapture.
- *   • `/record-full-screen` — screen/window capture via chrome.desktopCapture.
+ *   • `/record-full-screen` — screen/window capture via getDisplayMedia().
  *
  * Without this shared module, the two paths would either duplicate the
  * orchestration or have to round-trip messages through each other. Both
@@ -16,9 +16,8 @@
  *   • startTabRecording(tabId, options) — gets tabCapture streamId,
  *     boots the offscreen recorder, persists state, broadcasts a
  *     `recording_update` event:'started' to sidepanels.
- *   • startDisplayRecording(options) — prompts for a display/window stream
- *     inside the offscreen recorder and records it with the same stop/download
- *     path.
+ *   • startDisplayRecording(options) — prompts for a display/window stream via
+ *     the offscreen recorder and records it with the same stop/download path.
  *   • stopTabRecording()         — halts the offscreen recorder, saves
  *     the .webm to Downloads, broadcasts event:'stopped', kicks off
  *     transcription if it was requested.
@@ -226,9 +225,7 @@ async function reconcileStaleRecordingState({ finalizeInactiveSession = false } 
  * @param {object} spec
  *   • source      "tab" or "display"
  *   • tabId       source tab for tab capture, optional origin tab for display
- *   • streamId    optional pre-acquired stream id; display capture normally
- *                 omits this so the offscreen recorder can choose and consume
- *                 the stream in one context
+ *   • streamId    tabCapture stream id; only used for source:"tab"
  *   • options     video/audio/mic/transcribe/showBanner/mimeType
  */
 async function startRecordingSession({ source, tabId = null, streamId = null, options = {} }) {
@@ -332,7 +329,6 @@ export async function startDisplayRecording(options = {}) {
   return startRecordingSession({
     source: 'display',
     tabId: options.tabId || null,
-    streamId: options.streamId || null,
     options,
   });
 }
