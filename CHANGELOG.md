@@ -4,6 +4,20 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / browser manifest versions.
 
+## [19.3.0] - 2026-07-02
+
+### Added
+- Added Chrome and Firefox side-panel microphone dictation controls with per-browser permission handling, interim transcript cleanup, and clear disabled states when speech recognition is unavailable or turned off.
+- Added Chrome and Firefox side-panel file attachments for images, PDFs, JSON, and text files, including attachment preview chips, remove controls, tab-scoped pending attachments, and send-button gating while file reads are still in flight.
+
+### Fixed
+- Fixed attachment rejection handling so unsupported attachments are restored to the correct tab without scraping assistant text, while uploaded user attachments carry an explicit untrusted-content boundary before being sent to the model.
+- Fixed Chrome microphone denial handling so the mic icon returns to its idle state and permission-denied state does not spam repeated system messages.
+- Fixed Anthropic Claude Opus 4.8 requests by omitting unsupported non-default `temperature` parameters while keeping temperature for Claude Sonnet 4.6.
+
+### Tests
+- Added Chrome and Firefox regression coverage for tab-scoped attachment state, pending-read send gating, rejected-attachment restoration, text-attachment size limits, uploaded image/document boundaries, microphone icon reset, and Anthropic Opus 4.8 temperature handling.
+
 ## [19.2.0] - 2026-07-02
 
 ### Added

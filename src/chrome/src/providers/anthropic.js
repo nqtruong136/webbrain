@@ -31,6 +31,11 @@ export class AnthropicProvider extends BaseLLMProvider {
     return /claude-(3|sonnet-4|opus-4|haiku-4|4)/.test(this.config.model || '');
   }
 
+  get supportsDocuments() {
+    // PDF passthrough as a {type:'document'} content block — Anthropic-only.
+    return true;
+  }
+
   _headers() {
     return {
       'Content-Type': 'application/json',
@@ -156,7 +161,7 @@ export class AnthropicProvider extends BaseLLMProvider {
     };
 
     if (system) body.system = system;
-    if (options.temperature != null) body.temperature = options.temperature;
+    this._addTemperature(body, options);
     if (options.tools && options.tools.length > 0) {
       body.tools = this._convertTools(options.tools);
     }
@@ -221,7 +226,7 @@ export class AnthropicProvider extends BaseLLMProvider {
     };
 
     if (system) body.system = system;
-    if (options.temperature != null) body.temperature = options.temperature;
+    this._addTemperature(body, options);
     if (options.tools && options.tools.length > 0) {
       body.tools = this._convertTools(options.tools);
     }
@@ -307,6 +312,21 @@ export class AnthropicProvider extends BaseLLMProvider {
     const usage = usageChunk();
     if (usage) yield { type: 'usage', usage };
     yield { type: 'done', content: '' };
+  }
+
+  _supportsTemperatureParameter() {
+    const model = String(this.model || '').toLowerCase();
+    if (/^claude-opus-4-(?:[7-9]|[1-9]\d)(?:$|[-_.])/.test(model)) return false;
+    if (/^claude-(?:sonnet|fable|mythos)-5(?:$|[-_.])/.test(model)) return false;
+    return true;
+  }
+
+  _addTemperature(body, options = {}) {
+    if (options.temperature == null) return;
+    // Anthropic rejects non-default sampling parameters on Opus 4.7+ / 4.8.
+    // Omit the field entirely for those models and let the API default apply.
+    if (!this._supportsTemperatureParameter()) return;
+    body.temperature = options.temperature;
   }
 }
 

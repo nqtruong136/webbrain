@@ -19,7 +19,7 @@ import {
 
 // Version shown in the subtitle. Kept here so it only needs one update per
 // release; the subtitle string itself is translated.
-const EXT_VERSION = '19.2.2';
+const EXT_VERSION = '19.3.0';
 
 const providersContainer = document.getElementById('providers');
 const displaySettings = document.getElementById('display-settings');
@@ -38,6 +38,7 @@ const costSpentValueLabel = document.getElementById('cost-spent-value');
 const btnResetCostSpend = document.getElementById('btn-reset-cost-spend');
 const autoScreenshotSelect = document.getElementById('select-auto-screenshot');
 const siteAdaptersToggle = document.getElementById('toggle-site-adapters');
+const voiceInputToggle = document.getElementById('toggle-voice-input');
 const apiMutationObserverToggle = document.getElementById('toggle-api-mutation-observer');
 const planBeforeActModeSelect = document.getElementById('select-plan-before-act-mode');
 const notifySoundToggle = document.getElementById('toggle-notify-sound');
@@ -283,7 +284,7 @@ async function init() {
   browser.storage.local.remove(['authToken', 'authEmail', 'authDefaultModel']).catch(() => {});
 
   // Load display settings
-  const stored = await browser.storage.local.get(['verboseMode', 'screenshotFallback', 'maxAgentSteps', 'autoScreenshot', 'useSiteAdapters', 'apiMutationObserverEnabled', 'planBeforeActMode', 'planBeforeAct', 'notifySound', 'completionConfetti', 'tracingEnabled', 'strictSecretMode', 'agentAllowLocalNetwork', 'scheduledTasksEnabled', 'scheduledRequireConsequentialConfirmation', 'providerFilter', 'requestTimeoutMs', 'costAllowanceSessionUsd', 'costAllowanceTotalUsd', 'cloudCostSpentUsd']);
+  const stored = await browser.storage.local.get(['verboseMode', 'screenshotFallback', 'maxAgentSteps', 'autoScreenshot', 'useSiteAdapters', 'voiceInputEnabled', 'apiMutationObserverEnabled', 'planBeforeActMode', 'planBeforeAct', 'notifySound', 'completionConfetti', 'tracingEnabled', 'strictSecretMode', 'agentAllowLocalNetwork', 'scheduledTasksEnabled', 'scheduledRequireConsequentialConfirmation', 'providerFilter', 'requestTimeoutMs', 'costAllowanceSessionUsd', 'costAllowanceTotalUsd', 'cloudCostSpentUsd']);
   if (typeof stored.providerFilter === 'string' && ['all','local','cloud','router'].includes(stored.providerFilter)) {
     providerFilter = stored.providerFilter;
   }
@@ -307,6 +308,7 @@ async function init() {
   }
   if (autoScreenshotSelect) autoScreenshotSelect.value = stored.autoScreenshot || 'state_change';
   if (siteAdaptersToggle) siteAdaptersToggle.checked = stored.useSiteAdapters ?? true;
+  if (voiceInputToggle) voiceInputToggle.checked = stored.voiceInputEnabled ?? true;
   if (apiMutationObserverToggle) apiMutationObserverToggle.checked = stored.apiMutationObserverEnabled === true;
   if (planBeforeActModeSelect) planBeforeActModeSelect.value = normalizePlanBeforeActMode(stored);
   if (notifySoundToggle) notifySoundToggle.checked = stored.notifySound ?? true;
@@ -704,6 +706,10 @@ autoScreenshotSelect?.addEventListener('change', async () => {
 
 siteAdaptersToggle?.addEventListener('change', async () => {
   await browser.storage.local.set({ useSiteAdapters: siteAdaptersToggle.checked }).catch(() => {});
+});
+
+voiceInputToggle?.addEventListener('change', async () => {
+  await browser.storage.local.set({ voiceInputEnabled: voiceInputToggle.checked }).catch(() => {});
 });
 
 apiMutationObserverToggle?.addEventListener('change', async () => {
@@ -1264,9 +1270,6 @@ function renderProviders() {
   const entries = Object.entries(providersData);
   let visibleCount = 0;
   for (const [id, config] of entries) {
-    // Claude Pro/Max subscription OAuth flow is broken — hide until fixed.
-    if (id === 'claude_subscription') continue;
-
     const isActive = id === activeProviderId;
     const fieldDefs = providerConfigs[id]?.fields || [];
 
