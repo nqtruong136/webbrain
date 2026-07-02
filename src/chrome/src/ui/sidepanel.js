@@ -344,6 +344,7 @@ const SLASH_COMMANDS = [
   { value: '/reset', descriptionKey: 'sp.slash.reset' },
   { value: '/screenshot', descriptionKey: 'sp.slash.screenshot' },
   { value: '/full-page-screenshot', descriptionKey: 'sp.slash.full_page_screenshot' },
+  { value: '/record-full-screen', descriptionKey: 'sp.slash.record_full_screen' },
   { value: '/record', descriptionKey: 'sp.slash.record' },
   { value: '/export', descriptionKey: 'sp.slash.export' },
   { value: '/profile', descriptionKey: 'sp.slash.profile' },
@@ -399,10 +400,10 @@ const SLASH_COMMAND_OPTION_ID_PREFIX = 'slash-command-option-';
 const BUSY_SLASH_NOTICE_COOLDOWN_MS = 3000;
 let placeholderRotationIndex = 0;
 let placeholderRotationTimer = null;
-// Tab Recorder (v7.4) — recording is started entirely via the agent's
-// `record_tab` tool (prompt-driven). The live red banner that appears
-// during a recording carries its own Stop button; that's the only UI
-// surface. No toolbar button — keeping one was duplicate UI.
+// Tab Recorder (v7.4) — recording is user-driven via slash commands. The
+// `/record` tab-capture path shows this live red banner; `/record-full-screen`
+// deliberately does not, so the selected browser window is less likely to
+// include WebBrain UI in the recording.
 const recordingBanner = document.getElementById('recording-banner');
 const recordingTimerEl = document.getElementById('recording-timer');
 const recordingStopBtn = document.getElementById('btn-recording-stop');
@@ -2531,12 +2532,26 @@ async function parseSlashCommands(text, tabId = currentTabId) {
     return '';
   }
 
+  // /record-full-screen — start a screen/window recording without LLM involvement
+  const mRecordFullScreen = text.match(/^\/record-full-screen(?:\s|$)/i);
+  if (mRecordFullScreen) {
+    await startFullScreenRecording(tabId, parseRecordingSlashOptions(text, mRecordFullScreen));
+    return '';
+  }
+
   // /record — start recording the current tab without LLM involvement
-  if (/^\/record(?:\s|$)/i.test(text)) {
+  const mRecord = text.match(/^\/record(?:\s|$)/i);
+  if (mRecord) {
+    const recordOptions = parseRecordingSlashOptions(text, mRecord);
     try {
       const res = await sendToBackground('start_tab_recording', {
         tabId,
-        options: { video: true, mic: true },
+        options: {
+          video: true,
+          mic: true,
+          showBanner: true,
+          transcribeAfter: recordOptions.transcribeAfter,
+        },
       });
       if (currentTabId !== tabId) return '';
       if (!res?.ok) {
@@ -2635,6 +2650,47 @@ async function parseSlashCommands(text, tabId = currentTabId) {
   }
 
   return text;
+}
+
+function parseRecordingSlashOptions(text, commandMatch) {
+  const args = text.slice(commandMatch?.[0]?.length || 0);
+  return {
+    transcribeAfter: /(?:^|\s)--transcribe(?:\s|$)/i.test(args),
+  };
+}
+
+async function startFullScreenRecording(tabId = currentTabId, recordOptions = {}) {
+  try {
+    const prep = await sendToBackground('prepare_recording_host');
+    if (!prep?.ok) {
+      addMessage('system', systemHtml(tSystemHtml('sp.record.error', { error: prep?.error || 'unknown' })));
+      return;
+    }
+    const res = await sendToBackground('start_display_recording', {
+      tabId,
+      options: {
+        video: true,
+        audio: true,
+        mic: true,
+        showBanner: false,
+        transcribeAfter: !!recordOptions.transcribeAfter,
+      },
+    });
+    if (currentTabId !== tabId) return;
+    if (!res?.ok) {
+      addMessage('system', systemHtml(tSystemHtml('sp.record.error', { error: res?.error || 'unknown' })));
+      return;
+    }
+    recordingStartedAt = res.state?.startedAt || Date.now();
+    setRecordingUI(true, res.state || { source: 'display', showBanner: false });
+    addMessage('system', systemHtml(t('sp.record.full_screen_started_html')));
+    if (res.state?.hasMic === false && res.state?.micError) {
+      addMessage('system', systemHtml(tSystemHtml('sp.record.mic_unavailable', { error: res.state.micError })));
+    }
+  } catch (e) {
+    if (currentTabId !== tabId) return;
+    addMessage('system', systemHtml(tSystemHtml('sp.record.error', { error: e?.message || 'unknown' })));
+  }
 }
 
 function updateApiBadge() {
@@ -2812,19 +2868,18 @@ async function sendMessage(extraChatParams) {
 }
 
 // ─── Tab Recorder (v7.4) ────────────────────────────────────────────
-// State: idle ↔ recording. The agent's `record_tab` tool is what flips
-// the panel into recording mode (background broadcasts a started event);
-// the toolbar Stop button + the banner Stop button are the two ways to
-// flip back. The banner timer is driven off recordingState.startedAt
-// (received from background), so it survives panel re-mount.
+// State: idle ↔ recording. Slash commands flip the panel into recording mode
+// via background broadcasts. `/record` shows the banner Stop button;
+// `/record-full-screen` stays visually quiet and relies on double Escape or
+// Chrome's Stop sharing control. The visible banner timer is driven off
+// recordingState.startedAt (received from background), so it survives remount.
 
 let recordingTimerInterval = null;
 let recordingStartedAt = null;
-// Safety cap: auto-stop a recording that has run this long, so a forgotten or
-// orphaned recording can't tick on forever (and pile up memory in the
-// offscreen recorder). Enforced from the 1s banner timer below.
-const MAX_RECORDING_MS = 2 * 60 * 60 * 1000; // 2 hours
-let recordingAutoStopTriggered = false;
+let recordingActive = false;
+let recordingShowsBanner = false;
+let recordingEscapeArmedUntil = 0;
+const RECORDING_DOUBLE_ESCAPE_MS = 1400;
 
 function formatRecordTimer(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -2833,25 +2888,30 @@ function formatRecordTimer(ms) {
   return `${m}:${s}`;
 }
 
-function setRecordingUI(active) {
-  if (recordingBanner) recordingBanner.classList.toggle('hidden', !active);
+function shouldShowRecordingBanner(state) {
+  return state?.showBanner !== false;
+}
+
+function setRecordingUI(active, state = null) {
+  recordingActive = !!active;
+  recordingShowsBanner = !!active && shouldShowRecordingBanner(state || {});
+  recordingEscapeArmedUntil = 0;
+  if (recordingBanner) recordingBanner.classList.toggle('hidden', !recordingShowsBanner);
   if (active) {
-    recordingAutoStopTriggered = false;
     if (!recordingTimerInterval) {
       recordingTimerInterval = setInterval(() => {
-        if (recordingStartedAt && recordingTimerEl) {
+        if (recordingStartedAt) {
           const elapsed = Date.now() - recordingStartedAt;
-          recordingTimerEl.textContent = formatRecordTimer(elapsed);
-          if (elapsed >= MAX_RECORDING_MS && !recordingAutoStopTriggered) {
-            // Hit the safety cap — stop the runaway recording.
-            recordingAutoStopTriggered = true;
-            stopRecording();
+          if (recordingShowsBanner && recordingTimerEl) {
+            recordingTimerEl.textContent = formatRecordTimer(elapsed);
           }
         }
       }, 1000);
     }
-    if (recordingTimerEl && recordingStartedAt) {
+    if (recordingShowsBanner && recordingTimerEl && recordingStartedAt) {
       recordingTimerEl.textContent = formatRecordTimer(Date.now() - recordingStartedAt);
+    } else if (recordingTimerEl) {
+      recordingTimerEl.textContent = '00:00';
     }
   } else {
     if (recordingTimerInterval) {
@@ -2860,7 +2920,9 @@ function setRecordingUI(active) {
     }
     if (recordingTimerEl) recordingTimerEl.textContent = '00:00';
     recordingStartedAt = null;
-    recordingAutoStopTriggered = false;
+    recordingActive = false;
+    recordingShowsBanner = false;
+    recordingEscapeArmedUntil = 0;
   }
 }
 
@@ -2869,7 +2931,7 @@ async function hydrateRecordingFromBackground() {
     const res = await sendToBackground('get_recording_state');
     if (res?.state?.active) {
       recordingStartedAt = res.state.startedAt;
-      setRecordingUI(true);
+      setRecordingUI(true, res.state);
     } else {
       setRecordingUI(false);
     }
@@ -2927,7 +2989,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.target !== 'sidepanel' || msg.action !== 'recording_update') return;
   if (msg.event === 'started') {
     recordingStartedAt = msg.state?.startedAt || Date.now();
-    setRecordingUI(true);
+    setRecordingUI(true, msg.state || {});
   } else if (msg.event === 'stopped') {
     setRecordingUI(false);
     lastRecordingResult = msg.result || null;
@@ -4153,12 +4215,40 @@ function sendToBackground(action, data = {}) {
 
 // --- Keyboard shortcuts ---
 
+function handleRecordingEscapeKey(e) {
+  if (e.key !== 'Escape' || !recordingActive || !e.isTrusted) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  const now = Date.now();
+  if (now <= recordingEscapeArmedUntil) {
+    recordingEscapeArmedUntil = 0;
+    stopRecording();
+    return true;
+  }
+  recordingEscapeArmedUntil = now + RECORDING_DOUBLE_ESCAPE_MS;
+  return true;
+}
+
 async function handleGlobalKeydown(e) {
   if (e.defaultPrevented) return;
 
   // Don't steal shortcuts from other input elements (e.g. schedule form fields)
   const tag = e.target?.tagName;
-  if (e.target !== inputEl && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')) return;
+  const isOtherFormField = e.target !== inputEl && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT');
+
+  if (e.key === 'Escape') {
+    const slashMenuOpen = !!slashCommandMenuEl && !slashCommandMenuEl.classList.contains('hidden');
+    if (slashMenuOpen) return;
+    if (isProcessing) {
+      e.preventDefault();
+      abortRun();
+      return;
+    }
+    if (isOtherFormField) return;
+    if (handleRecordingEscapeKey(e)) return;
+  }
+
+  if (isOtherFormField) return;
 
   const mod = e.ctrlKey || e.metaKey;
 
@@ -4180,12 +4270,6 @@ async function handleGlobalKeydown(e) {
     e.preventDefault();
     await ensureActMode();
     return;
-  }
-  // Escape: abort running agent (only when slash menu is not open)
-  if (e.key === 'Escape' && isProcessing &&
-      slashCommandMenuEl?.classList.contains('hidden')) {
-    e.preventDefault();
-    abortRun();
   }
 }
 
@@ -4689,7 +4773,7 @@ if (attachBtn && fileAttachInput) {
 
 sendBtn.addEventListener('click', sendMessage);
 
-document.addEventListener('keydown', handleGlobalKeydown);
+document.addEventListener('keydown', handleGlobalKeydown, true);
 
 queuedMessagesEl?.addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-queue-action][data-queue-id]');

@@ -267,6 +267,7 @@ const { Agent: AgentFx } = await import(
 const {
   AGENT_TOOL_NAMES: AGENT_TOOL_NAMES_CH,
   RESERVED_AGENT_TOOL_NAMES: RESERVED_AGENT_TOOL_NAMES_CH,
+  RETIRED_AGENT_TOOL_NAMES: RETIRED_AGENT_TOOL_NAMES_CH,
   COMPACT_TOOL_NAMES: COMPACT_TOOL_NAMES_CH,
   SYSTEM_PROMPT_ACT: SYSTEM_PROMPT_ACT_CH,
   SYSTEM_PROMPT_ASK: SYSTEM_PROMPT_ASK_CH,
@@ -279,6 +280,7 @@ const {
 const {
   AGENT_TOOL_NAMES: AGENT_TOOL_NAMES_FX,
   RESERVED_AGENT_TOOL_NAMES: RESERVED_AGENT_TOOL_NAMES_FX,
+  RETIRED_AGENT_TOOL_NAMES: RETIRED_AGENT_TOOL_NAMES_FX,
   COMPACT_TOOL_NAMES: COMPACT_TOOL_NAMES_FX,
   SYSTEM_PROMPT_ACT: SYSTEM_PROMPT_ACT_FX,
   SYSTEM_PROMPT_ASK: SYSTEM_PROMPT_ASK_FX,
@@ -2499,7 +2501,6 @@ test('recommended actions match issue scenarios', () => {
 
 test('actionable recommendations opt into Act mode', () => {
   const actionablePages = [
-    { url: 'https://meet.google.com/abc-defg-hij', title: 'Team meeting' },
     { url: 'https://github.com/esokullu/webbrain/releases', title: 'Releases · esokullu/webbrain' },
     { url: 'https://tinder.com/app/recs', title: 'Profile' },
     { url: 'https://www.instagram.com/p/abc/', title: 'Post', media: { imageCount: 1, videoCount: 0 } },
@@ -2512,6 +2513,10 @@ test('actionable recommendations opt into Act mode', () => {
     const actions = buildRecommendedActionsCh(pageInfo);
     assert.ok(actions.some((action) => action.mode === 'act'), `expected an Act-mode action for ${pageInfo.url}`);
   }
+  const meetingAction = buildRecommendedActionsCh({ url: 'https://meet.google.com/abc-defg-hij', title: 'Team meeting' })
+    .find((action) => action.id === 'record-meeting');
+  assert.equal(meetingAction?.prompt, '/record');
+  assert.equal(meetingAction?.mode, 'ask', 'recording recommendation should route through slash command, not Act tools');
   assert.equal(buildRecommendedActionsCh(readOnlyPage).find((a) => a.id === 'summarize-page')?.mode, undefined);
 });
 
@@ -2761,23 +2766,24 @@ test('getToolsForMode: compact mode restricts act tools in both browsers', () =>
   }
 });
 
-test('getToolsForMode: screenshot tools are not model-callable', () => {
-  for (const [label, getTools, agentToolNames, reservedNames, compactNames, prompts] of [
-    ['chrome', getToolsForModeCh, AGENT_TOOL_NAMES_CH, RESERVED_AGENT_TOOL_NAMES_CH, COMPACT_TOOL_NAMES_CH, [
+test('getToolsForMode: retired tools are not model-callable', () => {
+  for (const [label, getTools, agentToolNames, reservedNames, retiredNames, compactNames, prompts] of [
+    ['chrome', getToolsForModeCh, AGENT_TOOL_NAMES_CH, RESERVED_AGENT_TOOL_NAMES_CH, RETIRED_AGENT_TOOL_NAMES_CH, COMPACT_TOOL_NAMES_CH, [
       ['ask', SYSTEM_PROMPT_ASK_CH],
       ['act:full', SYSTEM_PROMPT_ACT_CH],
       ['act:mid', SYSTEM_PROMPT_ACT_MID_CH],
       ['act:compact', SYSTEM_PROMPT_ACT_COMPACT_CH],
     ]],
-    ['firefox', getToolsForModeFx, AGENT_TOOL_NAMES_FX, RESERVED_AGENT_TOOL_NAMES_FX, COMPACT_TOOL_NAMES_FX, [
+    ['firefox', getToolsForModeFx, AGENT_TOOL_NAMES_FX, RESERVED_AGENT_TOOL_NAMES_FX, RETIRED_AGENT_TOOL_NAMES_FX, COMPACT_TOOL_NAMES_FX, [
       ['ask', SYSTEM_PROMPT_ASK_FX],
       ['act:full', SYSTEM_PROMPT_ACT_FX],
       ['act:mid', SYSTEM_PROMPT_ACT_MID_FX],
       ['act:compact', SYSTEM_PROMPT_ACT_COMPACT_FX],
     ]],
   ]) {
-    for (const removed of ['screenshot', 'full_page_screenshot']) {
+    for (const removed of ['screenshot', 'full_page_screenshot', 'record_tab', 'stop_recording']) {
       assert.equal(agentToolNames.has(removed), false, `[${label}] AGENT_TOOL_NAMES must not include ${removed}`);
+      assert.equal(retiredNames.has(removed), true, `[${label}] retired names must include ${removed}`);
       assert.equal(reservedNames.has(removed), true, `[${label}] reserved names must still block retired ${removed}`);
       assert.equal(compactNames.has(removed), false, `[${label}] compact set must not include ${removed}`);
     }
@@ -2785,11 +2791,15 @@ test('getToolsForMode: screenshot tools are not model-callable', () => {
     const collidingSkillTools = [
       { type: 'function', function: { name: 'screenshot', description: 'Skill collision.', parameters: { type: 'object', properties: {}, required: [] } } },
       { type: 'function', function: { name: 'full_page_screenshot', description: 'Skill collision.', parameters: { type: 'object', properties: {}, required: [] } } },
+      { type: 'function', function: { name: 'record_tab', description: 'Skill collision.', parameters: { type: 'object', properties: {}, required: [] } } },
+      { type: 'function', function: { name: 'stop_recording', description: 'Skill collision.', parameters: { type: 'object', properties: {}, required: [] } } },
       { type: 'function', function: { name: 'custom_safe_read', description: 'Safe custom skill.', parameters: { type: 'object', properties: {}, required: [] } } },
     ];
     const mergedNames = getTools('act', { skillTools: collidingSkillTools }).map(t => t.function?.name).filter(Boolean);
     assert.equal(mergedNames.includes('screenshot'), false, `[${label}] skill tools must not re-expose retired screenshot`);
     assert.equal(mergedNames.includes('full_page_screenshot'), false, `[${label}] skill tools must not re-expose retired full_page_screenshot`);
+    assert.equal(mergedNames.includes('record_tab'), false, `[${label}] skill tools must not re-expose retired record_tab`);
+    assert.equal(mergedNames.includes('stop_recording'), false, `[${label}] skill tools must not re-expose retired stop_recording`);
     assert.equal(mergedNames.includes('custom_safe_read'), true, `[${label}] non-conflicting skill tool should still be exposed`);
 
     for (const [modeLabel, tools] of [
@@ -2801,12 +2811,16 @@ test('getToolsForMode: screenshot tools are not model-callable', () => {
       const names = tools.map(t => t.function?.name).filter(Boolean);
       assert.equal(names.includes('screenshot'), false, `[${label}] ${modeLabel} tools must not expose screenshot`);
       assert.equal(names.includes('full_page_screenshot'), false, `[${label}] ${modeLabel} tools must not expose full_page_screenshot`);
+      assert.equal(names.includes('record_tab'), false, `[${label}] ${modeLabel} tools must not expose record_tab`);
+      assert.equal(names.includes('stop_recording'), false, `[${label}] ${modeLabel} tools must not expose stop_recording`);
     }
 
     for (const [promptLabel, prompt] of prompts) {
       assert.doesNotMatch(prompt, /^- screenshot:/m, `[${label}] ${promptLabel} prompt must not list screenshot as a tool`);
       assert.doesNotMatch(prompt, /\bscreenshot\s*\(\s*\{/i, `[${label}] ${promptLabel} prompt must not recommend screenshot(...)`);
       assert.doesNotMatch(prompt, /\bfull_page_screenshot\b/i, `[${label}] ${promptLabel} prompt must not mention full_page_screenshot`);
+      assert.doesNotMatch(prompt, /\brecord_tab\b/i, `[${label}] ${promptLabel} prompt must not mention record_tab`);
+      assert.doesNotMatch(prompt, /\bstop_recording\b/i, `[${label}] ${promptLabel} prompt must not mention stop_recording`);
       assert.doesNotMatch(prompt, /\b(?:take|taking) (?:a |fresh )?screenshot\b/i, `[${label}] ${promptLabel} prompt must not tell the model to take a screenshot`);
       assert.match(prompt, /\/screenshot\b/, `[${label}] ${promptLabel} prompt should direct chat-image requests to the /screenshot slash command`);
       if (promptLabel !== 'ask') {
@@ -2814,8 +2828,11 @@ test('getToolsForMode: screenshot tools are not model-callable', () => {
       }
       if (label === 'chrome') {
         assert.match(prompt, /\/full-page-screenshot\b/, `[${label}] ${promptLabel} prompt should direct full-page chat-image requests to the /full-page-screenshot slash command`);
+        assert.match(prompt, /\/record\b/, `[${label}] ${promptLabel} prompt should direct recording requests to the /record slash command`);
+        assert.match(prompt, /\/record-full-screen\b/, `[${label}] ${promptLabel} prompt should direct screen recording requests to the /record-full-screen slash command`);
       } else {
         assert.doesNotMatch(prompt, /\/full-page-screenshot\b/, `[${label}] ${promptLabel} prompt must not mention the Chrome-only full-page screenshot slash command`);
+        assert.doesNotMatch(prompt, /\/record-full-screen\b/, `[${label}] ${promptLabel} prompt must not mention the Chrome-only full-screen recording slash command`);
       }
     }
   }
@@ -2868,6 +2885,20 @@ test('getToolsForMode: skill tools are exposed only when enabled skills declare 
     "parameters": { "type": "object", "properties": {}, "required": [] }
   },
   {
+    "name": "record_tab",
+    "description": "Attempts to collide with a retired built-in.",
+    "endpoint": "https://example.com/record-tab",
+    "method": "POST",
+    "parameters": { "type": "object", "properties": {}, "required": [] }
+  },
+  {
+    "name": "stop_recording",
+    "description": "Attempts to collide with a retired built-in.",
+    "endpoint": "https://example.com/stop-recording",
+    "method": "POST",
+    "parameters": { "type": "object", "properties": {}, "required": [] }
+  },
+  {
     "name": "custom_safe_read",
     "description": "A non-conflicting read-only skill tool.",
     "endpoint": "https://example.com/custom-safe-read",
@@ -2879,9 +2910,11 @@ test('getToolsForMode: skill tools are exposed only when enabled skills declare 
     }]);
     const collisionDefs = buildDefs(collidingSkills, { mode: 'ask', excludeNames: reservedNames });
     const collisionRegistry = buildRegistry(collidingSkills, { excludeNames: reservedNames });
-    assert.deepEqual(collisionDefs.map(t => t.function?.name), ['custom_safe_read'], `${label}: retired screenshot names should be excluded from skill schemas`);
+    assert.deepEqual(collisionDefs.map(t => t.function?.name), ['custom_safe_read'], `${label}: retired built-in names should be excluded from skill schemas`);
     assert.equal(collisionRegistry.has('screenshot'), false, `${label}: retired screenshot should be excluded from skill registry`);
     assert.equal(collisionRegistry.has('full_page_screenshot'), false, `${label}: retired full_page_screenshot should be excluded from skill registry`);
+    assert.equal(collisionRegistry.has('record_tab'), false, `${label}: retired record_tab should be excluded from skill registry`);
+    assert.equal(collisionRegistry.has('stop_recording'), false, `${label}: retired stop_recording should be excluded from skill registry`);
     assert.equal(collisionRegistry.has('custom_safe_read'), true, `${label}: safe custom tool should remain registered`);
 
     const skills = normalizeSkills([packagedFreeSkillzRecord(prefix)]);
@@ -4790,6 +4823,55 @@ test('chrome /record reports mic denial as a warning, not recording failure', ()
   assert.match(locale, /Recording started with tab audio and video only/, 'chrome: mic warning should say recording started');
 });
 
+test('chrome /record-full-screen is slash-only, Chrome-only, and hidden from the recording banner', () => {
+  const panel = fs.readFileSync(path.join(ROOT, 'src/chrome/src/ui/sidepanel.js'), 'utf8');
+  const firefoxPanel = fs.readFileSync(path.join(ROOT, 'src/firefox/src/ui/sidepanel.js'), 'utf8');
+  const manifest = fs.readFileSync(path.join(ROOT, 'src/chrome/manifest.json'), 'utf8');
+  const background = fs.readFileSync(path.join(ROOT, 'src/chrome/src/background.js'), 'utf8');
+  const host = fs.readFileSync(path.join(ROOT, 'src/chrome/src/recorder/host.js'), 'utf8');
+  const offscreen = fs.readFileSync(path.join(ROOT, 'src/chrome/src/offscreen/recorder.js'), 'utf8');
+  const locale = fs.readFileSync(path.join(ROOT, 'src/chrome/src/ui/locales/en.js'), 'utf8');
+
+  const slashList = panel.slice(panel.indexOf('const SLASH_COMMANDS = ['), panel.indexOf('const OUT_OF_BAND_SLASH_COMMANDS'));
+  assert.match(slashList, /\/record-full-screen/, 'chrome: slash autocomplete should advertise /record-full-screen');
+  assert.match(locale, /sp\.slash\.record_full_screen/, 'chrome: missing /record-full-screen slash label');
+  assert.doesNotMatch(manifest, /"desktopCapture"/, 'chrome: full-screen recording should use getDisplayMedia without desktopCapture permission');
+
+  const fullScreenIdx = panel.indexOf("// /record-full-screen");
+  const recordIdx = panel.indexOf("// /record — start recording");
+  assert.ok(fullScreenIdx >= 0 && recordIdx >= 0 && fullScreenIdx < recordIdx, 'chrome: /record-full-screen parser must run before /record');
+  const fullScreenBody = panel.slice(fullScreenIdx, recordIdx);
+  const helperStart = panel.indexOf('async function startFullScreenRecording');
+  const helperBody = panel.slice(helperStart, panel.indexOf('function updateApiBadge', helperStart));
+  assert.match(fullScreenBody, /startFullScreenRecording\(tabId/, 'chrome: parser should route /record-full-screen through helper');
+  assert.match(helperBody, /prepare_recording_host/, 'chrome: full-screen route should prepare offscreen before recording');
+  assert.match(helperBody, /start_display_recording[\s\S]*?showBanner:\s*false/, 'chrome: full-screen route should start hidden display recording');
+  assert.doesNotMatch(helperBody, /streamId/, 'chrome: sidepanel must not ferry a desktopCapture stream id to the recorder');
+  assert.match(panel, /function shouldShowRecordingBanner\(state\)[\s\S]*?state\?\.showBanner !== false/, 'chrome: banner visibility should be state-driven');
+  assert.match(panel, /parseRecordingSlashOptions[\s\S]*?--transcribe/, 'chrome: recording slash commands should support transcript opt-in');
+
+  assert.match(background, /prepare_recording_host[\s\S]*?start_display_recording/, 'chrome: background should keep recorder routes for slash commands');
+  assert.match(host, /export async function startDisplayRecording\(options = \{\}/, 'chrome: recorder host should expose display recording for slash command routing');
+  assert.match(host, /function scheduleRecordingSafetyWatchdog[\s\S]*?chrome\.alarms\?\.create/, 'chrome: hidden recordings should have a background-owned safety cap');
+  assert.match(offscreen, /navigator\.mediaDevices\.getDisplayMedia\(\{[\s\S]*?audio: audio !== false,[\s\S]*?video: true,[\s\S]*?\}\)/, 'chrome: offscreen recorder should open the screen/window picker through getDisplayMedia');
+  assert.doesNotMatch(offscreen, /chrome\.desktopCapture/, 'chrome: offscreen recorder cannot use extension APIs beyond chrome.runtime');
+  assert.match(offscreen, /addEventListener\('ended', \(\) => \{[\s\S]*?s\.captureEndedCleanupStarted = true;[\s\S]*?finalizeCaptureEnded\(s\)\.catch/, 'chrome: capture-ended cleanup should use the async finalize path');
+  assert.match(offscreen, /async function finalizeCaptureEnded\(s\) \{[\s\S]*?s\.stopping = true;[\s\S]*?await waitForRecorderStop\(s\);[\s\S]*?notifyCaptureEnded\(s\);[\s\S]*?await releaseSession\(s\);[\s\S]*?\}/, 'chrome: capture-ended finalize should wait for final recorder data before notifying background');
+  assert.match(offscreen, /function waitForRecorderStop\(s\) \{[\s\S]*?if \(s\.stopPromise\) return s\.stopPromise;[\s\S]*?s\.stopPromise = new Promise/, 'chrome: recorder stop waits should share one in-progress stop promise');
+  assert.doesNotMatch(offscreen, /s\.recorder\.state === 'inactive'\) return Promise\.resolve/, 'chrome: inactive recorder state alone must not skip waiting for queued stop/dataavailable events');
+  assert.match(offscreen, /function notifyCaptureEnded\(s\) \{[\s\S]*?target: 'background'[\s\S]*?action: 'recording_capture_ended'[\s\S]*?tabId: s\.tabId/, 'chrome: capture-ended notify should ask background to persist the stopped recording');
+  assert.match(background, /case 'recording_capture_ended':[\s\S]*?stopTabRecording\(\{ reason: 'capture_ended' \}\)/, 'chrome: background should finalize and save recordings when the shared stream ends');
+  assert.match(offscreen, /async function releaseSession\(s\) \{[\s\S]*?s\.captureStream = null;[\s\S]*?s\.micStream = null;[\s\S]*?s\.audioContext = null;[\s\S]*?micStream\?\.getTracks/, 'chrome: releaseSession should be idempotent and stop the separately-acquired mic stream');
+  assert.match(background, /case 'get_recording_state':[\s\S]*?getRecordingStateFresh\(\{[\s\S]*?beforeFinalizeRecording: loadProvidersForRecordingFinalize,[\s\S]*?\}\)/, 'chrome: get_recording_state should preload providers before finalizing transcribed stopped recordings');
+  assert.match(background, /async function loadProvidersForRecordingFinalize\(\) \{[\s\S]*?providerManager\.providers\.size === 0[\s\S]*?await providerManager\.load\(\);[\s\S]*?\}/, 'chrome: recording finalize provider preload should load the provider manager only when empty');
+  assert.match(host, /async function beforeRecordingFinalize\(beforeFinalizeRecording\)[\s\S]*?recordingState\?\.transcribeAfter[\s\S]*?await beforeFinalizeRecording\(\)/, 'chrome: recorder host should only preload providers before finalize when transcription was requested');
+  assert.match(host, /async function runTranscription[\s\S]*?providerManagerRef\.providers\?\.size === 0[\s\S]*?await providerManagerRef\.load\(\)/, 'chrome: transcription should also lazy-load providers as a fallback');
+
+  const firefoxSlashList = firefoxPanel.slice(firefoxPanel.indexOf('const SLASH_COMMANDS = ['), firefoxPanel.indexOf('const OUT_OF_BAND_SLASH_COMMANDS'));
+  assert.doesNotMatch(firefoxSlashList, /\/record-full-screen/, 'firefox: autocomplete should not advertise /record-full-screen');
+  assert.match(firefoxPanel, /\/record-full-screen[\s\S]*Full-screen recording is not supported in Firefox/, 'firefox: manual /record-full-screen should return unsupported');
+});
+
 test('chrome offscreen helper recreates an evicted document after ready cache is stale', async () => {
   const previousChrome = globalThis.chrome;
   let documentExists = false;
@@ -5410,11 +5492,33 @@ test('chrome sidepanel Escape abort honors slash autocomplete dismissal', () => 
 
   const globalHandlerStart = panel.indexOf('function handleGlobalKeydown(e)');
   const defaultPreventedGuard = panel.indexOf('if (e.defaultPrevented) return;', globalHandlerStart);
+  const recordingEscapeCall = panel.indexOf('if (handleRecordingEscapeKey(e)) return;', globalHandlerStart);
   const abortCall = panel.indexOf('abortRun();', globalHandlerStart);
   assert.notEqual(globalHandlerStart, -1, 'chrome: global keydown handler missing');
   assert.notEqual(defaultPreventedGuard, -1, 'chrome: global keydown handler should honor consumed key events');
+  assert.notEqual(recordingEscapeCall, -1, 'chrome: global keydown handler should route recording Escape after higher-priority Escape handlers');
   assert.notEqual(abortCall, -1, 'chrome: Escape abort shortcut missing');
   assert.equal(defaultPreventedGuard < abortCall, true, 'chrome: consumed slash-menu Escape should not reach abortRun');
+  assert.equal(abortCall < recordingEscapeCall, true, 'chrome: agent-run Escape abort should take precedence over recording stop');
+});
+
+test('chrome double Escape stops active recordings from sidepanel and content pages', () => {
+  const panel = fs.readFileSync(path.join(ROOT, 'src/chrome/src/ui/sidepanel.js'), 'utf8');
+  const content = fs.readFileSync(path.join(ROOT, 'src/chrome/src/content/content.js'), 'utf8');
+  const host = fs.readFileSync(path.join(ROOT, 'src/chrome/src/recorder/host.js'), 'utf8');
+
+  assert.match(panel, /const RECORDING_DOUBLE_ESCAPE_MS = 1400;/, 'chrome: sidepanel should define a double-Escape window');
+  assert.match(panel, /function handleRecordingEscapeKey\(e\)[\s\S]*?recordingActive[\s\S]*?!e\.isTrusted[\s\S]*?recordingEscapeArmedUntil[\s\S]*?stopRecording\(\)/, 'chrome: sidepanel should arm then stop recording on trusted double Escape');
+  assert.match(panel, /document\.addEventListener\('keydown', handleGlobalKeydown, true\)/, 'chrome: sidepanel Escape routing should run in capture phase');
+  assert.match(host, /export const MAX_RECORDING_MS = 2 \* 60 \* 60 \* 1000/, 'chrome: recorder host should own the recording safety cap');
+  assert.match(host, /function scheduleRecordingSafetyWatchdog[\s\S]*?setTimeout[\s\S]*?chrome\.alarms\?\.create/, 'chrome: recording safety cap should survive hidden sidepanel recordings');
+
+  assert.match(content, /const RECORDING_DOUBLE_ESCAPE_MS = 1400;/, 'chrome: content script should define a double-Escape window');
+  assert.match(content, /let recordingActive = false;/, 'chrome: content script should track live recording state');
+  assert.match(content, /action: 'get_recording_state'[\s\S]*?setRecordingActive\(!!res\?\.state\?\.active\)/, 'chrome: content script should hydrate recording state from background');
+  assert.match(content, /msg\?\.target !== 'content' \|\| msg\.action !== 'recording_state'[\s\S]*?setRecordingActive\(!!msg\.active\)/, 'chrome: content script should accept recording state broadcasts');
+  assert.match(content, /if \(!recordingActive \|\| !e\.isTrusted\)[\s\S]*?return;/, 'chrome: content pages should only consume trusted Escape while recording is active');
+  assert.match(content, /stop_tab_recording[\s\S]*?reason: 'double_escape'/, 'chrome: top-level content pages should send stop_tab_recording on active trusted double Escape');
 });
 
 test('chrome sidepanel shortcuts are documented in help and README', () => {
@@ -6333,9 +6437,16 @@ test('sidepanel scopes async tab commands to the original tab', () => {
     assert.match(sendBody, /const tabId = currentTabId;[\s\S]*?text = normalizeScreenshotCommandText\(text\);[\s\S]*?if \(isProcessing\)/, `${label}: plain screenshot requests should route to slash commands before busy gating`);
 
     if (label === 'chrome') {
-      const recordIdx = panel.indexOf('// /record');
+      const fullScreenRecordIdx = panel.indexOf('// /record-full-screen');
+      const recordIdx = panel.indexOf('// /record — start recording');
+      assert.notEqual(fullScreenRecordIdx, -1, `${label}: /record-full-screen parser missing`);
+      assert.notEqual(recordIdx, -1, `${label}: /record parser missing`);
+      assert.ok(fullScreenRecordIdx < recordIdx, `${label}: /record-full-screen should be parsed before /record`);
       const recordBody = panel.slice(recordIdx, panel.indexOf('// /export', recordIdx));
       assert.match(recordBody, /sendToBackground\('start_tab_recording', \{[\s\S]*?tabId,[\s\S]*?\}\);[\s\S]*?if \(currentTabId !== tabId\) return '';/, `${label}: /record should not render recording status into a different tab`);
+      assert.match(recordBody, /showBanner:\s*true/, `${label}: /record should keep the visible recording banner`);
+      const fullScreenBody = panel.slice(fullScreenRecordIdx, recordIdx);
+      assert.match(fullScreenBody, /startFullScreenRecording\(tabId/, `${label}: /record-full-screen should use the initiating tab id`);
     }
 
     const profileIdx = panel.indexOf('// /profile');
@@ -11355,9 +11466,17 @@ test('press_keys: Enter is a submit (CLICK); Tab/Escape are benign (null)', () =
   assert.equal(capabilityFor('press_keys', {}), Capability.CLICK); // unknown → gate, fail safe
 });
 
-test('record_tab (tab + microphone capture) is gated in Chrome and absent in Firefox', () => {
-  assert.equal(capabilityForCh('record_tab', {}), CapabilityCh.RECORD);
-  assert.equal(capabilityFor('record_tab', {}), null);
+test('recording tools are retired/reserved instead of permission-gated model tools', () => {
+  for (const name of ['record_tab', 'stop_recording']) {
+    assert.equal(capabilityForCh(name, {}), null, `chrome: ${name} should not map to a permission capability`);
+    assert.equal(capabilityFor(name, {}), null, `firefox: ${name} should not map to a permission capability`);
+    assert.equal(AGENT_TOOL_NAMES_CH.has(name), false, `chrome: ${name} should not be model-callable`);
+    assert.equal(AGENT_TOOL_NAMES_FX.has(name), false, `firefox: ${name} should not be model-callable`);
+    assert.equal(RETIRED_AGENT_TOOL_NAMES_CH.has(name), true, `chrome: ${name} should be retired`);
+    assert.equal(RETIRED_AGENT_TOOL_NAMES_FX.has(name), true, `firefox: ${name} should be retired`);
+    assert.equal(RESERVED_AGENT_TOOL_NAMES_CH.has(name), true, `chrome: ${name} should stay reserved`);
+    assert.equal(RESERVED_AGENT_TOOL_NAMES_FX.has(name), true, `firefox: ${name} should stay reserved`);
+  }
 });
 
 // The tab recorder can be stopped out-of-band (sidebar/toolbar Stop button,
@@ -11400,6 +11519,16 @@ test('Agent enrich: no recording status note when the conversation never recorde
     { role: 'assistant', content: 'hi' },
   ];
   const enriched = await agent._enrichUserMessageWithCurrentPage(999, messages, 'summarize this page');
+  assert.doesNotMatch(enriched.content, /Recording status/i);
+});
+
+test('Agent enrich: ordinary record words do not trigger recording status correction', async () => {
+  const agent = new AgentCh({});
+  const messages = [
+    { role: 'user', content: 'Summarize these medical records and the world record history.' },
+    { role: 'assistant', content: 'The page discusses kayıt forms, not browser recording.' },
+  ];
+  const enriched = await agent._enrichUserMessageWithCurrentPage(999, messages, 'continue');
   assert.doesNotMatch(enriched.content, /Recording status/i);
 });
 
@@ -14487,7 +14616,6 @@ const KNOWN_SAFE_TOOLS = new Set([
   // list_downloads: url + Content-Disposition filename). "Doesn't act
   // dangerously" is not the test; "does its RESULT carry page-derived bytes" is.
   'wait_for_stable',      // waits for the page to settle; returns status only
-  'stop_recording',       // stops capture (starting it is gated via record_tab)
   // solve_captcha is not page-content; its side effects (spends CapSolver
   // quota + injects a token into the page) are minor and bounded, and the only
   // consequential follow-up — the submit — is separately gated. Left ungated to
@@ -14877,12 +15005,12 @@ function plannerFixtureJson() {
   });
 }
 
-test('plan before act: off is default with strict/try migration', () => {
+test('plan before act: try is default while explicit off is preserved', () => {
   for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
     const agent = new AgentClass({});
-    assert.equal(agent.planBeforeActMode, 'off', `${label} default mode`);
-    assert.equal(agent.planBeforeAct, false, `${label} legacy mirror default`);
-    assert.equal(agent._plannerMode(), 'off', `${label} effective default mode`);
+    assert.equal(agent.planBeforeActMode, 'try', `${label} default mode`);
+    assert.equal(agent.planBeforeAct, true, `${label} legacy mirror default`);
+    assert.equal(agent._plannerMode(), 'try', `${label} effective default mode`);
     agent.setPlanBeforeActMode('try');
     assert.equal(agent.planBeforeAct, true, `${label} try enables legacy mirror`);
     assert.equal(agent._plannerMode(), 'try', `${label} try mode`);
@@ -14901,7 +15029,8 @@ test('plan before act: off is default with strict/try migration', () => {
   ]) {
     const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
     assert.match(source, /planBeforeActMode/, `${file} should use the planner mode setting`);
-    assert.match(source, /return 'off'/, `${file} should treat unset storage as planning off`);
+    assert.match(source, /return 'try'/, `${file} should treat unset storage as planning try`);
+    assert.match(source, /planBeforeAct(?:Mode)?[^]*?=== false[^]*?return 'off'/, `${file} should preserve explicit legacy off storage`);
     assert.match(source, /planBeforeAct(?:Mode)?[^]*?=== true[^]*?return 'strict'/, `${file} should migrate legacy enabled storage to strict`);
   }
   for (const file of [
@@ -14909,7 +15038,7 @@ test('plan before act: off is default with strict/try migration', () => {
     'src/firefox/src/ui/settings.html',
   ]) {
     const html = fs.readFileSync(path.join(ROOT, file), 'utf8');
-    assert.match(html, /<select id="select-plan-before-act-mode">\s*<option value="off"/, `${file} should render off as the first/default option`);
+    assert.match(html, /<select id="select-plan-before-act-mode">\s*<option value="try"/, `${file} should render try as the first/default option`);
   }
 });
 

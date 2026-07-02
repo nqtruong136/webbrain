@@ -1,11 +1,9 @@
 /**
  * Service-worker-side recorder orchestration.
  *
- * Two callers share this:
- *   • background.js's runtime.onMessage routes — for the sidepanel's
- *     button-driven flow.
- *   • agent.js's executor — for the prompt-driven `record_tab` /
- *     `stop_recording` tools the agent can call.
+ * Two user-driven flows share this:
+ *   • `/record` — current-tab capture via chrome.tabCapture.
+ *   • `/record-full-screen` — screen/window capture via getDisplayMedia().
  *
  * Without this shared module, the two paths would either duplicate the
  * orchestration or have to round-trip messages through each other. Both
@@ -13,9 +11,13 @@
  *
  * Exports
  *   • getRecordingState()        — current state snapshot (read-only)
+ *   • prepareRecordingHost()     — boots the offscreen recorder host before
+ *     the display picker opens in that same recording context.
  *   • startTabRecording(tabId, options) — gets tabCapture streamId,
  *     boots the offscreen recorder, persists state, broadcasts a
  *     `recording_update` event:'started' to sidepanels.
+ *   • startDisplayRecording(options) — prompts for a display/window stream via
+ *     the offscreen recorder and records it with the same stop/download path.
  *   • stopTabRecording()         — halts the offscreen recorder, saves
  *     the .webm to Downloads, broadcasts event:'stopped', kicks off
  *     transcription if it was requested.
@@ -29,6 +31,9 @@ import { transcribeAudio } from '../agent/transcribe.js';
 
 let recordingState = { active: false };
 const RECORDING_STATE_KEY = 'recordingState';
+const RECORDING_SAFETY_ALARM_NAME = 'webbrain-recording-safety-cap';
+export const MAX_RECORDING_MS = 2 * 60 * 60 * 1000; // 2 hours
+let recordingSafetyTimeout = null;
 let recordingStateReady = null;
 
 let providerManagerRef = null;
@@ -41,13 +46,56 @@ export function getRecordingState() {
   return recordingState;
 }
 
+function getRecordingSafetyDueAt(state = recordingState) {
+  const startedAt = Number(state?.startedAt || 0);
+  return startedAt > 0 ? startedAt + MAX_RECORDING_MS : 0;
+}
+
+function clearRecordingSafetyWatchdog() {
+  if (recordingSafetyTimeout) {
+    clearTimeout(recordingSafetyTimeout);
+    recordingSafetyTimeout = null;
+  }
+  try { chrome.alarms?.clear?.(RECORDING_SAFETY_ALARM_NAME); } catch {}
+}
+
+function scheduleRecordingSafetyWatchdog(state = recordingState) {
+  if (!state?.active) {
+    clearRecordingSafetyWatchdog();
+    return;
+  }
+  const dueAt = getRecordingSafetyDueAt(state);
+  if (!dueAt) return;
+  if (recordingSafetyTimeout) {
+    clearTimeout(recordingSafetyTimeout);
+    recordingSafetyTimeout = null;
+  }
+  const delay = Math.max(0, dueAt - Date.now());
+  recordingSafetyTimeout = setTimeout(() => {
+    stopRecordingForSafetyCap().catch((e) => {
+      console.warn('[WebBrain] recording safety cap failed:', e);
+    });
+  }, delay);
+  try { chrome.alarms?.create?.(RECORDING_SAFETY_ALARM_NAME, { when: dueAt }); } catch {}
+}
+
 async function loadRecordingState() {
   try {
     const stored = await chrome.storage.session.get(RECORDING_STATE_KEY);
     if (stored[RECORDING_STATE_KEY]) recordingState = stored[RECORDING_STATE_KEY];
   } catch { /* session storage unavailable */ }
+  if (recordingState.active) scheduleRecordingSafetyWatchdog(recordingState);
 }
 recordingStateReady = loadRecordingState();
+
+try {
+  chrome.alarms?.onAlarm?.addListener?.((alarm) => {
+    if (alarm?.name !== RECORDING_SAFETY_ALARM_NAME) return;
+    stopRecordingForSafetyCap().catch((e) => {
+      console.warn('[WebBrain] recording safety alarm failed:', e);
+    });
+  });
+} catch {}
 
 async function ensureRecordingStateLoaded() {
   try { await recordingStateReady; } catch {}
@@ -57,12 +105,32 @@ function saveRecordingState() {
   chrome.storage.session?.set({ [RECORDING_STATE_KEY]: recordingState }).catch(() => {});
 }
 
-export async function getRecordingStateFresh() {
+export async function getRecordingStateFresh({ beforeFinalizeRecording = null } = {}) {
   await ensureRecordingStateLoaded();
   if (recordingState.active) {
-    await reconcileStaleRecordingState({ finalizeInactiveSession: true });
+    await reconcileStaleRecordingState({ finalizeInactiveSession: true, beforeFinalizeRecording });
+    if (recordingState.active && Date.now() >= getRecordingSafetyDueAt(recordingState)) {
+      await stopRecordingForSafetyCap({ beforeFinalizeRecording });
+    }
   }
   return recordingState;
+}
+
+function broadcastContentRecordingState(active) {
+  try {
+    chrome.tabs?.query?.({}, (tabs) => {
+      for (const tab of tabs || []) {
+        if (tab?.id == null) continue;
+        try {
+          chrome.tabs.sendMessage(tab.id, {
+            target: 'content',
+            action: 'recording_state',
+            active,
+          }).catch?.(() => {});
+        } catch {}
+      }
+    });
+  } catch {}
 }
 
 function broadcast(event, payload = {}) {
@@ -74,6 +142,17 @@ function broadcast(event, payload = {}) {
       ...payload,
     }).catch(() => {});
   } catch {}
+  if (event === 'started') broadcastContentRecordingState(true);
+  else if (event === 'stopped') broadcastContentRecordingState(false);
+}
+
+export async function prepareRecordingHost() {
+  try {
+    await ensureOffscreen();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: `offscreen setup failed: ${e.message}` };
+  }
 }
 
 // Probe the offscreen recorder for its live state. The return value is a
@@ -106,7 +185,16 @@ async function readOffscreenRecorderState() {
   }
 }
 
-async function reconcileStaleRecordingState({ finalizeInactiveSession = false } = {}) {
+async function beforeRecordingFinalize(beforeFinalizeRecording) {
+  if (!recordingState?.transcribeAfter || typeof beforeFinalizeRecording !== 'function') return;
+  try {
+    await beforeFinalizeRecording();
+  } catch (e) {
+    console.warn('[WebBrain] recording finalize provider preload failed:', e);
+  }
+}
+
+async function reconcileStaleRecordingState({ finalizeInactiveSession = false, beforeFinalizeRecording = null } = {}) {
   const offscreenState = await readOffscreenRecorderState();
   // Couldn't reach a verdict (document exists but didn't answer). Stay
   // conservative and leave the flag as-is rather than risk tearing down a live
@@ -118,6 +206,7 @@ async function reconcileStaleRecordingState({ finalizeInactiveSession = false } 
   // MediaRecorder stopped before the Stop message landed). Finalize it so the
   // captured bytes are saved instead of dropped.
   if (offscreenState.tabId && finalizeInactiveSession) {
+    await beforeRecordingFinalize(beforeFinalizeRecording);
     await stopTabRecording();
     return recordingState.active === false;
   }
@@ -127,6 +216,7 @@ async function reconcileStaleRecordingState({ finalizeInactiveSession = false } 
   // gone. In both cases no live recording can be relying on the flag, so clear
   // the stuck active state instead of leaving the banner/agent to believe a
   // capture is still running.
+  clearRecordingSafetyWatchdog();
   recordingState = { active: false };
   saveRecordingState();
   broadcast('stopped', {
@@ -140,49 +230,56 @@ async function reconcileStaleRecordingState({ finalizeInactiveSession = false } 
 }
 
 /**
- * Start recording the given tab.
+ * Start a recording session.
  *
- * @param {number} tabId
- * @param {object} options
- *   • video       (default true)
- *   • mic         (default true)
- *   • transcribeAfter (default false)
- *   • mimeType    (optional override for MediaRecorder)
- * @returns {Promise<{ok:true, state}|{ok:false, error}>}
+ * @param {object} spec
+ *   • source      "tab" or "display"
+ *   • tabId       source tab for tab capture, optional origin tab for display
+ *   • streamId    tabCapture stream id; only used for source:"tab"
+ *   • options     video/audio/mic/transcribe/showBanner/mimeType
  */
-export async function startTabRecording(tabId, options = {}) {
+async function startRecordingSession({ source, tabId = null, streamId = null, options = {} }) {
   await ensureRecordingStateLoaded();
   if (recordingState.active) {
     const cleared = await reconcileStaleRecordingState({ finalizeInactiveSession: true });
-    if (cleared) return startTabRecording(tabId, options);
+    if (!cleared) {
+      return {
+        ok: false,
+        error: `A recording is already in progress on tab ${recordingState.tabId || 'another source'}.`,
+      };
+    }
+  }
+
+  if (source === 'tab' && !tabId) return { ok: false, error: 'No tab ID supplied.' };
+  if (source !== 'tab' && source !== 'display') {
     return {
       ok: false,
-      error: `A recording is already in progress on tab ${recordingState.tabId}.`,
+      error: `Unknown recording source: ${source || 'missing'}.`,
     };
   }
-  if (!tabId) return { ok: false, error: 'No tab ID supplied.' };
 
-  // tabCapture.getMediaStreamId requires the target tab to be active in
-  // its window. Activate first if needed.
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    if (tab && !tab.active) await chrome.tabs.update(tabId, { active: true });
-  } catch { /* let the next step's error speak for it */ }
+  if (source === 'tab') {
+    // tabCapture.getMediaStreamId requires the target tab to be active in
+    // its window. Activate first if needed.
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab && !tab.active) await chrome.tabs.update(tabId, { active: true });
+    } catch { /* let the next step's error speak for it */ }
 
-  let streamId;
-  try {
-    streamId = await new Promise((resolve, reject) => {
-      chrome.tabCapture.getMediaStreamId(
-        { targetTabId: tabId },
-        (id) => {
-          const err = chrome.runtime.lastError;
-          if (err || !id) reject(new Error(err?.message || 'getMediaStreamId returned no id'));
-          else resolve(id);
-        }
-      );
-    });
-  } catch (e) {
-    return { ok: false, error: `tabCapture failed: ${e.message}` };
+    try {
+      streamId = await new Promise((resolve, reject) => {
+        chrome.tabCapture.getMediaStreamId(
+          { targetTabId: tabId },
+          (id) => {
+            const err = chrome.runtime.lastError;
+            if (err || !id) reject(new Error(err?.message || 'getMediaStreamId returned no id'));
+            else resolve(id);
+          }
+        );
+      });
+    } catch (e) {
+      return { ok: false, error: `tabCapture failed: ${e.message}` };
+    }
   }
 
   try {
@@ -198,7 +295,9 @@ export async function startTabRecording(tabId, options = {}) {
       streamId,
       tabId,
       options: {
+        source,
         video: options.video !== false,
+        audio: options.audio !== false,
         mic: options.mic !== false,
         mimeType: options.mimeType || null,
       },
@@ -210,20 +309,38 @@ export async function startTabRecording(tabId, options = {}) {
     return { ok: false, error: recResult?.error || 'recorder failed to start' };
   }
 
+  const startedAt = Date.now();
   recordingState = {
     active: true,
+    source,
     tabId,
-    startedAt: Date.now(),
+    startedAt,
     mimeType: recResult.mimeType,
     hasVideo: recResult.hasVideo,
+    hasAudio: recResult.hasAudio,
     hasMic: recResult.hasMic,
     micError: recResult.micError || null,
+    captureAudioError: recResult.captureAudioError || null,
     transcribeAfter: !!options.transcribeAfter,
+    showBanner: source === 'tab' ? options.showBanner !== false : options.showBanner === true,
   };
   saveRecordingState();
+  scheduleRecordingSafetyWatchdog(recordingState);
   broadcast('started', { state: recordingState });
 
   return { ok: true, state: recordingState };
+}
+
+export async function startTabRecording(tabId, options = {}) {
+  return startRecordingSession({ source: 'tab', tabId, options });
+}
+
+export async function startDisplayRecording(options = {}) {
+  return startRecordingSession({
+    source: 'display',
+    tabId: options.tabId || null,
+    options,
+  });
 }
 
 /**
@@ -231,13 +348,29 @@ export async function startTabRecording(tabId, options = {}) {
  *
  * @returns {Promise<{ok:true, filename, downloadId, ...}|{ok:false, error}>}
  */
-export async function stopTabRecording() {
+async function stopRecordingForSafetyCap({ beforeFinalizeRecording = null } = {}) {
+  await ensureRecordingStateLoaded();
+  if (!recordingState.active) {
+    clearRecordingSafetyWatchdog();
+    return { ok: true, alreadyStopped: true };
+  }
+  const dueAt = getRecordingSafetyDueAt(recordingState);
+  if (dueAt && Date.now() < dueAt) {
+    scheduleRecordingSafetyWatchdog(recordingState);
+    return { ok: true, notDue: true };
+  }
+  await beforeRecordingFinalize(beforeFinalizeRecording);
+  return stopTabRecording({ reason: 'safety_cap' });
+}
+
+export async function stopTabRecording(opts = {}) {
   await ensureRecordingStateLoaded();
   if (!recordingState.active) {
     // Nothing active. Still broadcast 'stopped' so any sidepanel showing a
     // stale banner clears it, and report success — the user's goal (no active
     // recording) is already met. This is benign (no failure to surface), so
     // the broadcast carries ok:true and the UI clears silently.
+    clearRecordingSafetyWatchdog();
     broadcast('stopped', { result: { ok: true, alreadyStopped: true } });
     return { ok: true, alreadyStopped: true };
   }
@@ -256,6 +389,7 @@ export async function stopTabRecording() {
   // banner can tick forever with no way to dismiss it.
   if (stopError || !res?.ok) {
     const error = stopError || res?.error || 'recorder failed to stop';
+    clearRecordingSafetyWatchdog();
     recordingState = { active: false };
     saveRecordingState();
     broadcast('stopped', { result: { ok: false, error } });
@@ -293,10 +427,12 @@ export async function stopTabRecording() {
     durationMs: res.durationMs,
     mimeType: res.mimeType,
     transcribeAfter: wantTranscribe,
+    reason: opts.reason || undefined,
   };
 
   // Always clear the recording state once the recorder has stopped, even if the
   // download failed — the capture is over and the banner must not linger.
+  clearRecordingSafetyWatchdog();
   recordingState = { active: false };
   saveRecordingState();
   broadcast('stopped', { result: final });
@@ -329,6 +465,16 @@ async function runTranscription({ dataUrl, mimeType, baseFilename }) {
     return broadcastTranscribed({
       ok: false,
       error: 'No provider manager wired — internal error. Transcription unavailable until background.js calls setProviderManager().',
+    });
+  }
+  try {
+    if (providerManagerRef.providers?.size === 0) {
+      await providerManagerRef.load();
+    }
+  } catch (e) {
+    return broadcastTranscribed({
+      ok: false,
+      error: `Couldn't load transcription providers: ${e.message || e}`,
     });
   }
 
