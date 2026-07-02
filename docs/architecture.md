@@ -4,7 +4,7 @@
 
 ## Overview
 
-WebBrain is a browser extension that gives an LLM control over the user's active browser tab. The user types a natural-language instruction in a side panel, and an autonomous agent loop calls the LLM, executes tool calls (click, type, navigate, screenshot, etc.), feeds results back to the LLM, and repeats until the task is done.
+WebBrain is a browser extension that gives an LLM control over the user's active browser tab. The user types a natural-language instruction in a side panel, and an autonomous agent loop calls the LLM, executes tool calls (click, type, navigate, read page state, etc.), feeds results back to the LLM, and repeats until the task is done.
 
 There are two builds that share almost all code:
 - **Chrome** — Manifest V3, service worker, CDP-backed trusted events
@@ -169,15 +169,71 @@ while (steps < maxSteps) {
 | Tool group | Handler | Where it runs |
 |---|---|---|
 | `get_accessibility_tree`, `click_ax`, `type_ax`, `set_field`, `hover` | content script message | Injected page context |
-| `click`, `type_text`, `press_keys`, `scroll`, `read_page`, `screenshot`, etc. | content script message | Injected page context |
+| `click`, `type_text`, `press_keys`, `scroll`, `read_page`, etc. | content script message | Injected page context |
 | `navigate`, `new_tab`, `go_back`, `go_forward` | `chrome.tabs` / `browser.tabs` API | Background script |
 | `fetch_url`, `research_url`, `list_downloads`, etc. | `network-tools.js` | Service worker |
+| Enabled skill tools | `skills.js` registry + `executeHttpSkillTool()` | Service worker |
 | `done` | agent.js — captures verification screenshot + page state probe | Service worker + CDP |
 | `clarify` | agent.js — pauses for user input | Service worker |
 | `solve_captcha` | captcha-solver.js | Service worker + CapSolver API |
 | `record_tab`, `stop_recording` | recorder/host.js | Service worker + offscreen doc |
 | `read_pdf` | pdf-tools.js | Service worker |
 | `scratchpad_write` | agent.js — in-memory pinned note | Service worker |
+
+### Step 6a: Skills and Dynamic Tool Exposure
+
+Settings -> Skills stores enabled skills in `customSkills` (`chrome.storage.local`
+or `browser.storage.local`). On startup, `background.js` loads packaged default
+skills from `skills/*`, seeds FreeSkillz.xyz the first time, and refreshes an
+existing built-in skill record when the packaged copy changes. If the user
+removes a default skill, the seeding marker prevents it from being silently
+re-added.
+
+`agent/skills.js` normalizes each skill and handles two separate surfaces:
+
+- Prompt instructions: `buildCustomSkillsPrompt()` strips fenced
+  `webbrain-tools` blocks before appending the skill text to the system prompt.
+- Tool exposure: `buildSkillToolDefinitions()` reads the manifest and appends
+  declared tool schemas to `getToolsForMode(...)` at LLM-call time.
+
+The manifest format is a fenced JSON block inside the skill markdown:
+
+````markdown
+```webbrain-tools
+{
+  "tools": [
+    {
+      "name": "read_youtube_transcript",
+      "kind": "http",
+      "readOnly": true,
+      "method": "POST",
+      "endpoint": "https://freeskillz.xyz/v1/youtube/transcript",
+      "activeTabUrlArg": "url",
+      "inputUrlArg": "url",
+      "resultPolicy": "untrusted",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string" }
+        },
+        "required": []
+      }
+    }
+  ]
+}
+```
+````
+
+Current skill tools support `kind: "http"` for read-only HTTPS GET/POST
+integrations and `kind: "httpDownloadJob"` for short-lived HTTPS POST jobs that
+poll a same-origin status URL, save the produced file through browser Downloads,
+and call cleanup afterward. Requests use `credentials: "omit"` and optional
+manifest allowlists can restrict URL-like inputs. This is intentionally a
+trust-at-import model for the declared endpoint; download-job tools still run in
+Act mode and use the normal Downloads permission gate before saving files.
+Results that carry third-party content should set `resultPolicy: "untrusted"` so
+`_wrapUntrusted()` and `_digestToolResult()` treat them as data rather than
+instructions.
 
 ### Step 7: Results Back to UI
 
@@ -334,7 +390,6 @@ MV3 service workers can die between turns. Conversations are persisted to `chrom
 | Background | Service worker (ephemeral) | Background page (persistent) |
 | Events | CDP-trusted (`isTrusted=true`) | Synthetic (`isTrusted=false`) |
 | Screenshots | CDP `Page.captureScreenshot` | `browser.tabs.captureVisibleTab()` |
-| Full-page screenshot | CDP scroll+stitch | Not available |
 | Conversation persistence | `chrome.storage.session` | In-memory only |
 | Offscreen document | Yes (fetch proxy + recorder) | Not available |
 | Trace recorder | IndexedDB (opt-in) | IndexedDB (opt-in) — same `trace/recorder.js` |
@@ -357,8 +412,9 @@ Everything else (agent loop, tools, adapters, providers, loop detection, context
 src/
 ├── chrome/           # Chromium build (MV3)
 │   ├── manifest.json
+│   ├── skills/       # Packaged default skills
 │   └── src/
-│       ├── agent/    # agent.js, tools.js, adapters.js, scheduler.js, ...
+│       ├── agent/    # agent.js, tools.js, skills.js, adapters.js, scheduler.js, ...
 │       ├── cdp/      # CDP client (Chrome only)
 │       ├── content/  # accessibility-tree.js, content.js, ...
 │       ├── network/  # network-tools.js
@@ -369,6 +425,7 @@ src/
 │       └── ui/       # sidepanel, settings, traces, i18n
 ├── firefox/          # Firefox build (MV2)
 │   ├── manifest.json
+│   ├── skills/       # Packaged default skills
 │   └── src/          # Same structure, minus cdp/, offscreen/, recorder/
 └── vendor/           # Third-party libs (pdfjs, katex)
 ```

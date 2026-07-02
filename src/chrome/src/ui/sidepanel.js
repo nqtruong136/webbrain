@@ -342,6 +342,7 @@ const SLASH_COMMANDS = [
   { value: '/verbose', descriptionKey: 'sp.slash.verbose' },
   { value: '/reset', descriptionKey: 'sp.slash.reset' },
   { value: '/screenshot', descriptionKey: 'sp.slash.screenshot' },
+  { value: '/full-page-screenshot', descriptionKey: 'sp.slash.full_page_screenshot' },
   { value: '/record', descriptionKey: 'sp.slash.record' },
   { value: '/export', descriptionKey: 'sp.slash.export' },
   { value: '/profile', descriptionKey: 'sp.slash.profile' },
@@ -357,6 +358,42 @@ const OUT_OF_BAND_SLASH_COMMANDS = new Set([
   '/export',
   '/verbose',
 ]);
+
+function normalizeScreenshotRequestText(text) {
+  return String(text || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\u0131/g, 'i')
+    .replace(/[.!?]+$/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function isPlainScreenshotRequest(text) {
+  const s = normalizeScreenshotRequestText(text);
+  if (!s || s.startsWith('/')) return false;
+  return /^(?:please |pls )?(?:screenshot|screen ?shot)(?: (?:please|pls))?$/.test(s)
+    || /^(?:please |pls |can you |could you |would you )?(?:take|capture|grab|show|get) (?:a |the |this |current )?(?:screen ?shot|screenshot)(?: (?:of|for) (?:the |this |current )?(?:page|tab|screen|window))?$/.test(s)
+    || /^(?:lutfen )?(?:screenshot|screen ?shot|ekran goruntusu)(?: (?:al|cek|goster|at))?$/.test(s)
+    || /^(?:lutfen )?(?:bu |mevcut |aktif )?(?:sekmenin|sayfanin|ekranin) ekran goruntusunu (?:al|cek|goster|at)$/.test(s);
+}
+
+function isPlainFullPageScreenshotRequest(text) {
+  const s = normalizeScreenshotRequestText(text);
+  if (!s || s.startsWith('/')) return false;
+  return /^(?:please |pls )?(?:(?:full|whole|entire|complete) page|fullpage|long) (?:screenshot|screen ?shot)(?: (?:please|pls))?$/.test(s)
+    || /^(?:please |pls |can you |could you |would you )?(?:take|capture|grab|show|get) (?:a |the |this )?(?:(?:full|whole|entire|complete) page|fullpage|long) (?:screenshot|screen ?shot)(?: (?:of|for) (?:the |this |current )?(?:page|tab|screen|window))?$/.test(s)
+    || /^(?:lutfen )?(?:tam sayfa|butun sayfa|tum sayfa|uzun) ekran goruntusu(?: (?:al|cek|goster|at))?$/.test(s)
+    || /^(?:lutfen )?(?:bu |mevcut |aktif )?(?:sayfanin|sekmenin) (?:tam|butun|tum) ekran goruntusunu (?:al|cek|goster|at)$/.test(s);
+}
+
+function normalizeScreenshotCommandText(text) {
+  if (isPlainFullPageScreenshotRequest(text)) return '/full-page-screenshot';
+  if (isPlainScreenshotRequest(text)) return '/screenshot';
+  return text;
+}
+
 const SLASH_COMMAND_OPTION_ID_PREFIX = 'slash-command-option-';
 const BUSY_SLASH_NOTICE_COOLDOWN_MS = 3000;
 let placeholderRotationIndex = 0;
@@ -679,7 +716,6 @@ const TOOL_KEYS = {
   wait_for_element: 'tool.wait_for_element',
   get_selection: 'tool.get_selection',
   new_tab: 'tool.new_tab',
-  screenshot: 'tool.screenshot',
   schedule_resume: 'tool.schedule_resume',
   schedule_task: 'tool.schedule_task',
   done: 'tool.done',
@@ -2171,8 +2207,9 @@ function isOutOfBandSlashDraft(value) {
 
 function syncSendButtonState() {
   if (!sendBtn) return;
+  const draft = normalizeScreenshotCommandText(inputEl?.value || '');
   if (isProcessing) {
-    sendBtn.disabled = !isOutOfBandSlashDraft(inputEl?.value || '');
+    sendBtn.disabled = !isOutOfBandSlashDraft(draft);
     return;
   }
   sendBtn.disabled = isAttachmentReadPendingForTab();
@@ -2293,6 +2330,24 @@ async function parseSlashCommands(text, tabId = currentTabId) {
         const imgHtml = `<img src="${dataUrl}" style="max-width:100%;border-radius:6px;margin:4px 0;" alt="Screenshot"/>`;
         addMessage('system', systemHtml(imgHtml));
       }
+    } catch (e) {
+      if (currentTabId !== tabId) return '';
+      addMessage('system', systemHtml(tSystemHtml('sp.screenshot.error', { msg: e.message })));
+    }
+    return '';
+  }
+
+  // /full-page-screenshot — capture the full scrollable page and display in chat
+  if (/^\/full-page-screenshot\b\s*/i.test(text)) {
+    try {
+      const res = await sendToBackground('capture_full_page_screenshot', { tabId });
+      if (currentTabId !== tabId) return '';
+      if (!res?.ok || !res.dataUrl) {
+        addMessage('system', systemHtml(tSystemHtml('sp.screenshot.error', { msg: res?.error || 'unknown error' })));
+        return '';
+      }
+      const imgHtml = `<img src="${res.dataUrl}" style="max-width:100%;max-height:70vh;object-fit:contain;object-position:top;border-radius:6px;margin:4px 0;" alt="Full-page screenshot"/>`;
+      addMessage('system', systemHtml(imgHtml));
     } catch (e) {
       if (currentTabId !== tabId) return '';
       addMessage('system', systemHtml(tSystemHtml('sp.screenshot.error', { msg: e.message })));
@@ -2427,6 +2482,7 @@ async function sendMessage(extraChatParams) {
   let text = inputEl.value.trim();
   if (!text) return;
   const tabId = currentTabId;
+  text = normalizeScreenshotCommandText(text);
   if (!isProcessing && isAttachmentReadPendingForTab(tabId)) {
     syncSendButtonState();
     return false;
@@ -3612,7 +3668,7 @@ chrome.storage.onChanged.addListener((changes) => {
 });
 
 // Page inspection banner — shown when agent starts interacting with the page
-const PAGE_TOOLS = new Set(['read_page', 'read_page_source', 'get_interactive_elements', 'click', 'type_text', 'scroll', 'extract_data', 'inspect_element_styles', 'wait_for_element', 'get_selection', 'screenshot']);
+const PAGE_TOOLS = new Set(['read_page', 'read_page_source', 'get_interactive_elements', 'click', 'type_text', 'scroll', 'extract_data', 'inspect_element_styles', 'wait_for_element', 'get_selection']);
 let inspectionBannerShown = false;
 
 function showInspectionBanner(toolName) {
