@@ -1331,10 +1331,11 @@ function renderProviders() {
         const canLoadModels = localModelProviders.includes(id) && field.key === 'model';
         const listAttr = canLoadModels ? `list="models-${id}"` : '';
         const datalistHTML = canLoadModels ? `<datalist id="models-${id}"></datalist>` : '';
-        const loadedModelsSelectHTML = canLoadModels
-          ? `<select class="loaded-model-select" data-loaded-models-for="${id}"
-                    aria-label="${escapeHtml(t('st.providers.select_loaded_model'))}"
-                    style="display:none;margin-top:6px;"></select>`
+        const loadedModelsMenuHTML = canLoadModels
+          ? `<div class="loaded-model-menu" data-loaded-models-for="${id}" role="listbox"
+                  aria-label="${escapeHtml(t('st.providers.select_loaded_model'))}"
+                  style="display:none;margin-top:6px;max-height:180px;overflow:auto;
+                         border:1px solid var(--border);border-radius:6px;background:var(--bg3);"></div>`
           : '';
         const loadBtnHTML = canLoadModels
           ? `<button type="button" class="btn-secondary btn-load-models" data-provider="${id}"
@@ -1355,7 +1356,7 @@ function renderProviders() {
                    value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}">
             ${datalistHTML}
             ${loadBtnHTML}
-            ${loadedModelsSelectHTML}
+            ${loadedModelsMenuHTML}
           </div>
         `;
       }
@@ -1438,13 +1439,15 @@ function renderProviders() {
       }
     });
   });
-  document.querySelectorAll('.loaded-model-select').forEach(sel => {
-    sel.addEventListener('change', () => {
-      if (!sel.value) return;
-      const providerId = sel.dataset.loadedModelsFor;
+  document.querySelectorAll('.loaded-model-menu').forEach(menu => {
+    menu.addEventListener('click', (event) => {
+      const option = event.target.closest('.loaded-model-option');
+      if (!option) return;
+      const providerId = menu.dataset.loadedModelsFor;
       const input = document.querySelector(`input[data-provider="${providerId}"][data-key="model"]`);
       if (!input) return;
-      input.value = sel.value;
+      input.value = option.dataset.model || '';
+      menu.style.display = 'none';
     });
   });
   document.querySelectorAll('.btn-claude-signin').forEach(btn => {
@@ -1654,11 +1657,10 @@ function applyProviderBaseUrl(id, baseUrl) {
 }
 
 function clearProviderLoadedModels(id) {
-  const loadedSelectEl = document.querySelector(`.loaded-model-select[data-loaded-models-for="${id}"]`);
-  if (loadedSelectEl) {
-    loadedSelectEl.innerHTML = '';
-    loadedSelectEl.value = '';
-    loadedSelectEl.style.display = 'none';
+  const loadedMenuEl = document.querySelector(`.loaded-model-menu[data-loaded-models-for="${id}"]`);
+  if (loadedMenuEl) {
+    loadedMenuEl.innerHTML = '';
+    loadedMenuEl.style.display = 'none';
   }
   const datalistEl = document.getElementById(`models-${id}`);
   if (datalistEl) datalistEl.innerHTML = '';
@@ -1688,17 +1690,15 @@ async function loadProviderModels(id) {
   if (!datalistEl) return;
   if (res?.ok) {
     applyProviderBaseUrl(id, res.baseUrl);
-    const loadedSelectEl = document.querySelector(`.loaded-model-select[data-loaded-models-for="${id}"]`);
+    const loadedMenuEl = document.querySelector(`.loaded-model-menu[data-loaded-models-for="${id}"]`);
     datalistEl.innerHTML = res.models
       .map((m) => `<option value="${escapeHtml(m)}"></option>`)
       .join('');
-    if (loadedSelectEl) {
-      loadedSelectEl.innerHTML = `<option value="">${escapeHtml(t('st.providers.select_loaded_model'))}</option>` +
-        res.models
-          .map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`)
-          .join('');
-      loadedSelectEl.value = '';
-      loadedSelectEl.style.display = res.models.length ? '' : 'none';
+    if (loadedMenuEl) {
+      loadedMenuEl.innerHTML = res.models
+        .map((m) => `<button type="button" class="loaded-model-option" role="option" data-model="${escapeHtml(m)}" style="display:block;width:100%;padding:7px 10px;border:0;border-bottom:1px solid var(--border);background:transparent;color:var(--text);font:inherit;text-align:left;overflow-wrap:anywhere;cursor:pointer;">${escapeHtml(m)}</button>`)
+        .join('');
+      loadedMenuEl.style.display = res.models.length ? '' : 'none';
     }
     setProviderLoadModelsStatus(id, t('st.providers.models_loaded', { count: res.models.length }));
   } else {

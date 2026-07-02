@@ -6069,7 +6069,7 @@ test('settings async test controls surface rejected background results', () => {
     );
     assert.match(
       settings,
-      /function clearProviderLoadedModels\(id\) \{[\s\S]*?loadedSelectEl\.innerHTML = '';[\s\S]*?loadedSelectEl\.value = '';[\s\S]*?loadedSelectEl\.style\.display = 'none';[\s\S]*?if \(datalistEl\) datalistEl\.innerHTML = '';[\s\S]*?\}/,
+      /function clearProviderLoadedModels\(id\) \{[\s\S]*?loadedMenuEl\.innerHTML = '';[\s\S]*?loadedMenuEl\.style\.display = 'none';[\s\S]*?if \(datalistEl\) datalistEl\.innerHTML = '';[\s\S]*?\}/,
       `${label}: model loading should have a helper that clears stale loaded-model choices`,
     );
     assert.match(
@@ -6079,13 +6079,18 @@ test('settings async test controls surface rejected background results', () => {
     );
     assert.match(
       settings,
-      /const loadedModelsSelectHTML = canLoadModels[\s\S]*class="loaded-model-select" data-loaded-models-for="\$\{id\}"[\s\S]*\$\{loadedModelsSelectHTML\}/,
-      `${label}: local model loading should render a separate loaded-model selector`,
+      /const loadedModelsMenuHTML = canLoadModels[\s\S]*class="loaded-model-menu" data-loaded-models-for="\$\{id\}"[\s\S]*\$\{loadedModelsMenuHTML\}/,
+      `${label}: local model loading should render a temporary loaded-model menu`,
+    );
+    assert.doesNotMatch(
+      settings,
+      /loaded-model-select|loadedModelsSelectHTML/,
+      `${label}: local model loading should not render a second select control`,
     );
     assert.match(
       loadBody,
-      /const loadedSelectEl = document\.querySelector\(`\.loaded-model-select\[data-loaded-models-for="\$\{id\}"\]`\);[\s\S]*?loadedSelectEl\.innerHTML = `<option value="">\$\{escapeHtml\(t\('st\.providers\.select_loaded_model'\)\)\}<\/option>` \+[\s\S]*?res\.models[\s\S]*?loadedSelectEl\.value = '';[\s\S]*?loadedSelectEl\.style\.display = res\.models\.length \? '' : 'none';/,
-      `${label}: loaded models should populate a visible selector without replacing the current model text`,
+      /const loadedMenuEl = document\.querySelector\(`\.loaded-model-menu\[data-loaded-models-for="\$\{id\}"\]`\);[\s\S]*?loadedMenuEl\.innerHTML = res\.models[\s\S]*?class="loaded-model-option"[\s\S]*?loadedMenuEl\.style\.display = res\.models\.length \? '' : 'none';/,
+      `${label}: loaded models should populate a temporary menu without replacing the current model text`,
     );
     assert.doesNotMatch(
       loadBody,
@@ -6094,8 +6099,8 @@ test('settings async test controls surface rejected background results', () => {
     );
     assert.match(
       settings,
-      /document\.querySelectorAll\('\.loaded-model-select'\)\.forEach\(sel => \{[\s\S]*?sel\.addEventListener\('change', \(\) => \{[\s\S]*?const providerId = sel\.dataset\.loadedModelsFor;[\s\S]*?input\.value = sel\.value;[\s\S]*?\}\);[\s\S]*?\}\);/,
-      `${label}: selecting a loaded model should write it back to the provider model input`,
+      /document\.querySelectorAll\('\.loaded-model-menu'\)\.forEach\(menu => \{[\s\S]*?menu\.addEventListener\('click', \(event\) => \{[\s\S]*?event\.target\.closest\('\.loaded-model-option'\);[\s\S]*?const providerId = menu\.dataset\.loadedModelsFor;[\s\S]*?input\.value = option\.dataset\.model \|\| '';[\s\S]*?menu\.style\.display = 'none';[\s\S]*?\}\);[\s\S]*?\}\);/,
+      `${label}: choosing a loaded model should write it back to the provider model input`,
     );
     const localeDir = path.join(ROOT, label === 'chrome' ? 'src/chrome/src/ui/locales' : 'src/firefox/src/ui/locales');
     for (const filename of fs.readdirSync(localeDir).filter((name) => name.endsWith('.js'))) {
