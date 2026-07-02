@@ -1,6 +1,6 @@
 # WebBrain Chrome/Edge Extension — Architecture
 
-> Version 19.3.2 · Manifest V3 · Service Worker background
+> Version 20.0.0 · Manifest V3 · Service Worker background
 
 ## High-Level Overview
 
@@ -154,32 +154,44 @@ content instead of trusted instructions.
 
 ---
 
-## Tab Recorder (v7.4+)
+## Recorder (v7.4+)
 
-Optional opt-in feature in the sidepanel toolbar. Captures the active tab's
-video + audio + (optionally) microphone into a single webm file, with
-optional Whisper transcription after stop.
+Recording is user-driven from slash commands, not model-callable tools. `/record`
+captures the active tab's video + audio + (optionally) microphone into a single
+webm file and shows the red side-panel banner/timer. Add `--transcribe` to
+`/record` or `/record-full-screen` to run Whisper transcription after stop.
+`/record-full-screen` opens Chrome's screen/window picker from the offscreen
+recorder context through `getDisplayMedia()`, records without showing the WebBrain
+recording banner, and can be stopped by double Escape on WebBrain or browser
+pages. Chrome's picker decides what can be captured: the user must choose the
+browser window or whole screen if they want the WebBrain panel in the video.
 
 ### Flow
 
 ```
-sidepanel.js  [Record button → popover → Start]
-      │
+sidepanel.js  [/record]
       │ runtime.sendMessage {action:'start_tab_recording', tabId, options}
       ▼
 background.js
-      ├─ chrome.tabCapture.getMediaStreamId({targetTabId})    → streamId
-      ├─ ensureOffscreen()  (shared with localhost fetch proxy)
-      └─ runtime.sendMessage to offscreen {type:'recorder-start', streamId, options}
+      ├─ chrome.tabCapture.getMediaStreamId({targetTabId}) → streamId
+      └─ offscreen recorder-start {source:'tab', streamId, options}
+
+sidepanel.js  [/record-full-screen]
+      │ prepare_recording_host
+      │ runtime.sendMessage {action:'start_display_recording', options}
+      ▼
+background.js
+      └─ offscreen recorder-start {source:'display', options}
                       │
                       ▼
 offscreen/recorder.js
-      ├─ navigator.mediaDevices.getUserMedia(chromeMediaSource:'tab', streamId)
+      ├─ display: navigator.mediaDevices.getDisplayMedia({audio:true, video:true})
+      ├─ tab: navigator.mediaDevices.getUserMedia(chromeMediaSource:'tab', streamId)
       ├─ navigator.mediaDevices.getUserMedia({audio:true})       (mic, best-effort)
       ├─ AudioContext:
-      │     tab audio ─→ mixDestination
-      │     mic       ─→ mixDestination
-      │     tab audio ─→ audioContext.destination   (passthrough so user hears the call)
+      │     captured audio ─→ mixDestination
+      │     mic            ─→ mixDestination
+      │     tab audio only ─→ audioContext.destination   (passthrough so user hears the call)
       ├─ MediaStream(video tracks ∪ mixDestination audio tracks)
       └─ MediaRecorder(mimeType: 'video/webm;codecs=vp9,opus')
               └─ ondataavailable → chunks[]
@@ -194,11 +206,15 @@ background.js (on recorder-stop)
               └─ chrome.downloads.download(.txt sibling)
 
 sidepanel listens for recording_update broadcast events:
-   started        → red banner appears, mm:ss timer starts
+   started        → /record shows the banner; /record-full-screen stays hidden
    stopped        → banner hides, "saved to Downloads" toast
    transcribing   → "Transcribing audio with Whisper…"
    transcribed    → "Transcript saved" + Summarize button (Phase 3)
 ```
+
+The 2-hour safety cap lives in `recorder/host.js` as a service-worker timeout
+plus a `chrome.alarms` watchdog, so hidden display recordings remain bounded
+after the side panel closes.
 
 ### Audio passthrough — the gotcha
 
@@ -208,7 +224,7 @@ in the tab. For a meeting recorder this is catastrophic (you can't follow
 the call). `offscreen/recorder.js` works around this with Web Audio:
 
 ```js
-const tabAudioSource = audioContext.createMediaStreamSource(tabStream);
+const tabAudioSource = audioContext.createMediaStreamSource(captureStream);
 tabAudioSource.connect(mixDestination);          // into the recording
 tabAudioSource.connect(audioContext.destination); // back to the user's speaker
 ```
@@ -223,8 +239,8 @@ localhost-fetch proxy already needs one for Private Network Access
 workarounds. Rather than fight over it, `offscreen/offscreen.html` loads
 both `offscreen.js` (fetch proxy) and `recorder.js` (tab recorder).
 `src/offscreen/ensure.js` is the single creation helper, declaring all
-reasons up front: `LOCAL_STORAGE` (fetch), `DISPLAY_MEDIA` (tabCapture),
-`USER_MEDIA` (mic). Each script binds its own `runtime.onMessage` filter
+reasons up front: `LOCAL_STORAGE` (fetch), `DISPLAY_MEDIA` (tab/display
+capture), `USER_MEDIA` (mic). Each script binds its own `runtime.onMessage` filter
 (`offscreen-fetch` vs `recorder-*`) so they don't collide.
 
 ### Transcription provider selection
@@ -254,7 +270,7 @@ still saved.
 |---|---|
 | Google Meet (browser) | ✓ |
 | Zoom web client (`zoom.us/wc/...`) | ✓ |
-| **Native Zoom desktop app** | ✗ — not in a tab; tabCapture cannot reach it. Would need `desktopCapture` (window picker) — deferred. |
+| **Native Zoom desktop app** | ✓ via `/record-full-screen` when the user selects the Zoom window or screen in Chrome's picker; `/record` tab capture cannot reach it. |
 | DRM-protected video (Netflix, Disney+) | ✗ — the browser blocks the encoder at the platform level. |
 | chrome:// / edge:// / chrome-extension:// pages | ✗ — tabCapture is not allowed there. |
 | Background tabs at start time | ⚠ — `getMediaStreamId` requires the target tab to be active; we briefly activate it before capture. The user can switch away after capture starts. |

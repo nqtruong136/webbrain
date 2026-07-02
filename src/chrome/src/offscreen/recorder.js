@@ -6,11 +6,12 @@
  * the MediaRecorder for the duration of a recording. Driven by
  * runtime.onMessage from background.js:
  *
- *   {type:'recorder-start', streamId, tabId, options:{video, mic, mimeType}}
- *     ↳ acquires tab stream via getUserMedia(chromeMediaSource:'tab'),
- *       optionally acquires mic, wires Web Audio so the user can still
- *       HEAR the tab while it's being recorded (tabCapture mutes the
- *       tab by default), starts MediaRecorder, replies {ok:true}.
+ *   {type:'recorder-start', streamId, tabId, options:{source, video, mic, mimeType}}
+ *     ↳ acquires tab stream via getUserMedia(chromeMediaSource:'tab'), or
+ *       prompts for a display/window stream via getDisplayMedia() in this
+ *       offscreen context, optionally acquires mic, wires Web Audio so the user can still HEAR
+ *       the tab while it's being recorded (tabCapture mutes the tab by
+ *       default), starts MediaRecorder, replies {ok:true}.
  *
  *   {type:'recorder-stop'}
  *     ↳ flushes MediaRecorder, converts the accumulated chunks to a
@@ -52,7 +53,8 @@
     });
   }
 
-  async function start({ streamId, tabId, options }) {
+  async function start(message) {
+    let { streamId, tabId, options } = message || {};
     if (session) {
       const state = session.recorder?.state || '';
       if (state === 'inactive') {
@@ -64,7 +66,13 @@
     if (session) {
       throw new Error('A recording is already in progress.');
     }
-    const { video = true, mic = true, mimeType: requestedMime } = options || {};
+    const {
+      source = 'tab',
+      video = true,
+      audio = true,
+      mic = true,
+      mimeType: requestedMime,
+    } = options || {};
 
     // Pick a MediaRecorder mimeType the browser actually supports. VP9 is
     // best quality-per-byte; VP8 is the wide-compat fallback. Audio-only
@@ -86,35 +94,57 @@
       throw new Error('No supported MediaRecorder mimeType found.');
     }
 
-    // 1. Tab stream — chrome.tabCapture exposes the active tab as a
+    // 1. Capture stream — chrome.tabCapture exposes the active tab as a
     // MediaStream when we pass the streamId we got from
-    // chrome.tabCapture.getMediaStreamId() on the service-worker side.
+    // chrome.tabCapture.getMediaStreamId() on the service-worker side. For
+    // `/record-full-screen`, the offscreen document uses the Web platform's
+    // display-media picker directly; offscreen documents only expose
+    // chrome.runtime from the extension API surface, so the desktop-capture
+    // extension API is intentionally not used here.
     //
     // Note: even if `video:false` was requested, we still pull video from
     // tabCapture and discard the track below — tabCapture's audio path
     // requires you to ask for the full stream, you can't request audio
     // alone via this API.
-    const tabConstraints = {
-      audio: {
-        mandatory: {
-          chromeMediaSource: 'tab',
-          chromeMediaSourceId: streamId,
+    let captureStream;
+    let captureAudioError = null;
+    if (source === 'display') {
+      if (!navigator.mediaDevices?.getDisplayMedia) {
+        throw new Error('Full-screen recording requires display media support.');
+      }
+      try {
+        captureStream = await navigator.mediaDevices.getDisplayMedia({
+          audio: audio !== false,
+          video: true,
+        });
+      } catch (e) {
+        throw new Error(`Failed to capture screen/window: ${e.message || e}`);
+      }
+      if (audio !== false && captureStream.getAudioTracks().length === 0) {
+        captureAudioError = 'Screen/window audio was not shared or is unavailable.';
+      }
+    } else {
+      const captureConstraints = {
+        audio: audio === false ? false : {
+          mandatory: {
+            chromeMediaSource: 'tab',
+            chromeMediaSourceId: streamId,
+          },
         },
-      },
-      video: {
-        mandatory: {
-          chromeMediaSource: 'tab',
-          chromeMediaSourceId: streamId,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'tab',
+            chromeMediaSourceId: streamId,
+          },
         },
-      },
-    };
-    let tabStream;
-    try {
-      tabStream = await navigator.mediaDevices.getUserMedia(tabConstraints);
-    } catch (e) {
-      throw new Error(`Failed to capture tab: ${e.message || e}`);
+      };
+      try {
+        captureStream = await navigator.mediaDevices.getUserMedia(captureConstraints);
+      } catch (e) {
+        throw new Error(`Failed to capture tab: ${e.message || e}`);
+      }
     }
-    log('tab stream acquired', tabStream.getTracks().map(t => `${t.kind}:${t.label || 'unnamed'}`));
+    log(`${source} stream acquired`, captureStream.getTracks().map(t => `${t.kind}:${t.label || 'unnamed'}`));
 
     // 2. Mic stream — best-effort. If the user has not granted mic
     // permission, fall through with mic disabled instead of failing the
@@ -131,10 +161,9 @@
       }
     }
 
-    // 3. Web Audio mixer. Combine tab audio + mic into one node, AND
-    // re-pipe it to the speaker so the user can still hear the call.
-    // Without the passthrough, tabCapture mutes the tab and the user
-    // can't follow the conversation — a known footgun.
+    // 3. Web Audio mixer. Combine captured audio + mic into one node. For tab
+    // capture, re-pipe captured audio to the speaker so the user can still hear
+    // the call; desktop/window capture does not need that passthrough.
     // Everything from here through the MediaRecorder construction can throw
     // (AudioContext under autoplay policy, createMediaStreamSource, or the
     // MediaRecorder constructor on an unsupported config). `session` isn't set
@@ -147,11 +176,16 @@
       audioContext = new AudioContext();
       const mixDest = audioContext.createMediaStreamDestination();
 
-      const tabAudioSource = audioContext.createMediaStreamSource(
-        new MediaStream(tabStream.getAudioTracks())
-      );
-      tabAudioSource.connect(mixDest);          // into the recording
-      tabAudioSource.connect(audioContext.destination); // out to user's speaker
+      const capturedAudioTracks = captureStream.getAudioTracks();
+      if (capturedAudioTracks.length) {
+        const capturedAudioSource = audioContext.createMediaStreamSource(
+          new MediaStream(capturedAudioTracks)
+        );
+        capturedAudioSource.connect(mixDest); // into the recording
+        if (source === 'tab') {
+          capturedAudioSource.connect(audioContext.destination);
+        }
+      }
 
       if (micStream) {
         const micSource = audioContext.createMediaStreamSource(micStream);
@@ -161,7 +195,7 @@
       // 4. Build the final stream the recorder consumes.
       const finalStream = new MediaStream();
       if (video) {
-        for (const t of tabStream.getVideoTracks()) finalStream.addTrack(t);
+        for (const t of captureStream.getVideoTracks()) finalStream.addTrack(t);
       }
       for (const t of mixDest.stream.getAudioTracks()) finalStream.addTrack(t);
 
@@ -174,7 +208,7 @@
         videoBitsPerSecond: 2_500_000,
       });
     } catch (e) {
-      try { for (const t of tabStream.getTracks()) t.stop(); } catch {}
+      try { for (const t of captureStream.getTracks()) t.stop(); } catch {}
       if (micStream) { try { for (const t of micStream.getTracks()) t.stop(); } catch {} }
       if (audioContext) { try { audioContext.close(); } catch {} }
       throw new Error(`Failed to start recorder: ${e.message || e}`);
@@ -190,40 +224,54 @@
 
     session = {
       tabId,
+      source,
       mimeType: chosenMime,
       hasVideo: video,
+      hasAudio: captureStream.getAudioTracks().length > 0,
       hasMic: !!micStream,
       micError,
+      captureAudioError,
       startedAt: Date.now(),
       recorder,
-      tabStream,
+      captureStream,
       micStream,
       audioContext,
       chunks,
       stopping: false,
+      stopPromise: null,
+      stopEventObserved: false,
       get bytes() { return bytes; },
     };
+    const activeSession = session;
+    recorder.addEventListener('stop', () => {
+      activeSession.stopEventObserved = true;
+    });
 
-    // Cleanup if the underlying tab stream goes away (tab closed, user
-    // revoked capture, etc.). We can't notify the service worker
-    // synchronously, but it can poll recorder-state.
-    for (const t of tabStream.getTracks()) {
+    // Cleanup if the underlying capture stream goes away (tab/window closed,
+    // user revoked capture, Chrome's Stop sharing control, etc.). We can't
+    // notify the service worker synchronously, but it can poll recorder-state.
+    for (const t of captureStream.getTracks()) {
       t.addEventListener('ended', () => {
-        log('tab track ended unexpectedly:', t.kind);
-        if (session && session.recorder.state !== 'inactive') {
-          try { session.recorder.stop(); } catch {}
-        }
+        const s = session;
+        if (!s || s.captureEndedCleanupStarted) return;
+        s.captureEndedCleanupStarted = true;
+        log(`${source} track ended unexpectedly:`, t.kind);
+        finalizeCaptureEnded(s).catch((e) => {
+          log('capture-ended finalize failed:', e?.message || e);
+        });
       });
     }
 
     recorder.start(2000); // 2s timeslices → ondataavailable every 2s
-    log('recorder started', { mimeType: chosenMime, video, mic: !!micStream });
+    log('recorder started', { source, mimeType: chosenMime, video, mic: !!micStream });
     return {
       ok: true,
       mimeType: chosenMime,
       hasVideo: video,
+      hasAudio: captureStream.getAudioTracks().length > 0,
       hasMic: !!micStream,
       micError,
+      captureAudioError,
     };
   }
 
@@ -233,12 +281,15 @@
       recording: session.recorder.state === 'recording',
       paused: session.recorder.state === 'paused',
       stopping: !!session.stopping,
+      source: session.source,
       tabId: session.tabId,
       startedAt: session.startedAt,
       mimeType: session.mimeType,
       hasVideo: session.hasVideo,
+      hasAudio: session.hasAudio,
       hasMic: session.hasMic,
       micError: session.micError,
+      captureAudioError: session.captureAudioError,
       bytes: session.bytes,
     };
   }
@@ -286,13 +337,16 @@
   }
 
   function waitForRecorderStop(s) {
-    if (!s?.recorder || s.recorder.state === 'inactive') return Promise.resolve();
-    return new Promise((resolve) => {
+    if (!s?.recorder) return Promise.resolve();
+    if (s.stopPromise) return s.stopPromise;
+    if (s.recorder.state === 'inactive' && s.stopEventObserved) return Promise.resolve();
+    s.stopPromise = new Promise((resolve) => {
       let done = false;
       let timeout = null;
       const finish = () => {
         if (done) return;
         done = true;
+        s.stopEventObserved = true;
         if (timeout) clearTimeout(timeout);
         try { s.recorder.removeEventListener('stop', finish); } catch {}
         resolve();
@@ -310,14 +364,43 @@
         finish();
       }
     });
+    return s.stopPromise;
   }
 
   async function releaseSession(s) {
-    try { for (const t of s.tabStream?.getTracks?.() || []) t.stop(); } catch {}
-    try { for (const t of s.micStream?.getTracks?.() || []) t.stop(); } catch {}
+    const captureStream = s.captureStream;
+    const micStream = s.micStream;
+    const audioContext = s.audioContext;
+    s.captureStream = null;
+    s.micStream = null;
+    s.audioContext = null;
+    try { for (const t of captureStream?.getTracks?.() || []) t.stop(); } catch {}
+    try { for (const t of micStream?.getTracks?.() || []) t.stop(); } catch {}
     try {
-      if (s.audioContext && s.audioContext.state !== 'closed') await s.audioContext.close();
+      if (audioContext && audioContext.state !== 'closed') await audioContext.close();
     } catch {}
+  }
+
+  function notifyCaptureEnded(s) {
+    try {
+      chrome.runtime.sendMessage({
+        target: 'background',
+        action: 'recording_capture_ended',
+        source: s.source,
+        tabId: s.tabId,
+      }).catch((e) => {
+        log('capture-ended finalize notify failed:', e?.message || e);
+      });
+    } catch (e) {
+      log('capture-ended finalize notify failed:', e?.message || e);
+    }
+  }
+
+  async function finalizeCaptureEnded(s) {
+    s.stopping = true;
+    await waitForRecorderStop(s);
+    notifyCaptureEnded(s);
+    await releaseSession(s);
   }
 
   // ─── runtime.onMessage router ─────────────────────────────────────

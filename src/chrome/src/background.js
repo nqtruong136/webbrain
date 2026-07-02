@@ -22,7 +22,9 @@ import { buildContextMenuPrompt, createContextMenuStorage } from './context-menu
 // (ensureOffscreen + transcribeAudio used to be imported here; both are
 // now consumed inside src/recorder/host.js, which background.js calls into.)
 import {
+  prepareRecordingHost,
   startTabRecording,
+  startDisplayRecording,
   stopTabRecording,
   getRecordingStateFresh,
   setProviderManager as setRecorderProviderManager,
@@ -232,7 +234,7 @@ function normalizePlanBeforeActMode(stored = {}) {
   }
   if (stored.planBeforeAct === true) return 'strict';
   if (stored.planBeforeAct === false) return 'off';
-  return 'off';
+  return 'try';
 }
 
 function applyPlanBeforeActMode(mode) {
@@ -910,16 +912,43 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 async function handleMessage(msg, sender) {
-  // Ensure providers are loaded
-  if (providerManager.providers.size === 0) {
-    await providerManager.load();
+  const lightweightAction = msg.action === 'get_recording_state';
+  if (!lightweightAction) {
+    // Ensure providers are loaded
+    if (providerManager.providers.size === 0) {
+      await providerManager.load();
+    }
+    // Agent toggles and prompt add-ons hydrate once at SW boot — await those
+    // promises so the first chat can't race ahead of hydration, without a
+    // storage round-trip on every message.
+    await Promise.all([planBeforeActReady, customSkillsReady]);
   }
-  // Agent toggles and prompt add-ons hydrate once at SW boot — await those
-  // promises so the first chat can't race ahead of hydration, without a
-  // storage round-trip on every message.
-  await Promise.all([planBeforeActReady, customSkillsReady]);
 
   switch (msg.action) {
+    case 'prepare_recording_host':
+      return await prepareRecordingHost();
+    case 'start_tab_recording': {
+      const tabId = msg.tabId || sender.tab?.id;
+      return await startTabRecording(tabId, msg.options || {});
+    }
+    case 'start_display_recording': {
+      return await startDisplayRecording({
+        ...(msg.options || {}),
+        tabId: msg.tabId || sender.tab?.id || null,
+      });
+    }
+    case 'stop_tab_recording':
+      return await stopTabRecording();
+    case 'recording_capture_ended':
+      return await stopTabRecording({ reason: 'capture_ended' });
+    case 'get_recording_state':
+      return {
+        ok: true,
+        state: await getRecordingStateFresh({
+          beforeFinalizeRecording: loadProvidersForRecordingFinalize,
+        }),
+      };
+
     // --- Chat / Agent ---
     case 'chat': {
       const tabId = msg.tabId || sender.tab?.id;
@@ -1236,21 +1265,6 @@ async function handleMessage(msg, sender) {
         return { ok: false, error: e.message };
       }
     }
-    // ── Tab Recorder routes (v7.4) ────────────────────────────────
-    // Thin wrappers around src/recorder/host.js. Same module is also
-    // imported by agent.js so the prompt-driven `record_tab` and
-    // `stop_recording` tools share the exact same orchestration.
-    case 'start_tab_recording': {
-      const tabId = msg.tabId || sender.tab?.id;
-      return await startTabRecording(tabId, msg.options || {});
-    }
-    case 'stop_tab_recording': {
-      return await stopTabRecording();
-    }
-    case 'get_recording_state': {
-      return { ok: true, state: await getRecordingStateFresh() };
-    }
-
     case 'capture_full_page_screenshot': {
       const tabId = msg.tabId || sender.tab?.id;
       return await agent.captureFullPageScreenshotForUser(tabId);
@@ -1285,5 +1299,11 @@ async function handleMessage(msg, sender) {
 
     default:
       throw new Error(`Unknown action: ${msg.action}`);
+  }
+}
+
+async function loadProvidersForRecordingFinalize() {
+  if (providerManager.providers.size === 0) {
+    await providerManager.load();
   }
 }
