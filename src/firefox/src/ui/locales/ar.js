@@ -196,6 +196,7 @@ export default {
   'st.providers.load_models': 'تحميل النماذج',
   'st.providers.loading': 'جارٍ التحميل…',
   'st.providers.models_loaded': 'تم تحميل {count} نموذجًا',
+  'st.providers.select_loaded_model': 'اختر النموذج المحمّل',
 
   'st.provider.field.server_url': 'عنوان الخادم',
   'st.provider.field.api_base_url': 'عنوان API الأساسي',
@@ -515,7 +516,7 @@ export default {
   'sp.plan.approved': 'تمت الموافقة على الخطة — جارٍ التشغيل…',
   'sp.plan.cancelled': 'تم إلغاء الخطة.',
   'sp.plan.expired': 'لم تعد هذه الخطة قيد المراجعة — تم إلغاء التشغيل.',
-  'sp.slash.busy_only_oob': 'يمكن فقط لـ /help و /show-scratchpad و /list-schedules و /screenshot و /export و /verbose العمل بينما WebBrain مشغول. أوقف التشغيل أو حاول مرة أخرى عندما ينتهي.',
+  'sp.slash.busy_only_oob': 'تُضاف الرسائل إلى قائمة الانتظار بينما يكون WebBrain مشغولًا. يمكن فقط لـ /help و /show-scratchpad و /list-schedules و /screenshot و /export و /verbose العمل فورًا كأوامر slash.',
   'tool.go_back': 'العودة للخلف',
   'tool.go_forward': 'التقدم للأمام',
   'st.display.search.placeholder': 'البحث في الإعدادات العامة',

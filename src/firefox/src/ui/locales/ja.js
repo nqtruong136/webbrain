@@ -196,6 +196,7 @@ export default {
   'st.providers.load_models': 'モデルを読み込み',
   'st.providers.loading': '読み込み中…',
   'st.providers.models_loaded': '{count} 個のモデルを読み込みました',
+  'st.providers.select_loaded_model': '読み込んだモデルを選択',
 
   'st.provider.field.server_url': 'サーバー URL',
   'st.provider.field.api_base_url': 'API ベース URL',
@@ -515,7 +516,7 @@ export default {
   'sp.plan.approved': '計画承認済み — 実行中…',
   'sp.plan.cancelled': '計画がキャンセルされました。',
   'sp.plan.expired': 'この計画はレビュー待ちではなくなりました — 実行はキャンセルされました。',
-  'sp.slash.busy_only_oob': 'WebBrain がビジーの間は、/help、/show-scratchpad、/list-schedules、/screenshot、/export、/verbose のみ実行できます。実行を停止するか、終了してもう一度お試しください。',
+  'sp.slash.busy_only_oob': 'WebBrain がビジーの間、メッセージはキューに入ります。/help、/show-scratchpad、/list-schedules、/screenshot、/export、/verbose だけがスラッシュコマンドとしてすぐに実行できます。',
   'tool.go_back': '戻る',
   'tool.go_forward': '進む',
   'st.display.search.placeholder': '一般設定を検索',

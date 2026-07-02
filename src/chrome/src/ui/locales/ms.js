@@ -198,6 +198,7 @@ export default {
   'st.providers.load_models': 'Muatkan model',
   'st.providers.loading': 'Memuatkan…',
   'st.providers.models_loaded': '{count} model dimuatkan',
+  'st.providers.select_loaded_model': 'Pilih model yang dimuatkan',
 
   'st.provider.field.server_url': 'URL pelayan',
   'st.provider.field.api_base_url': 'URL asas API',
@@ -515,7 +516,7 @@ export default {
   'sp.plan.approved': 'Rancangan diluluskan — berjalan…',
   'sp.plan.cancelled': 'Rancangan dibatalkan.',
   'sp.plan.expired': 'Rancangan ini tidak lagi menunggu semakan — pelaksanaan dibatalkan.',
-  'sp.slash.busy_only_oob': 'Hanya /help, /show-scratchpad, /list-schedules, /screenshot, /export, dan /verbose boleh berjalan semasa WebBrain sibuk. Hentikan larian atau cuba semula apabila ia selesai.',
+  'sp.slash.busy_only_oob': 'Mesej dimasukkan ke giliran semasa WebBrain sibuk. Hanya /help, /show-scratchpad, /list-schedules, /screenshot, /export, dan /verbose boleh berjalan serta-merta sebagai arahan slash.',
   'tool.go_back': 'Kembali',
   'tool.go_forward': 'Maju',
   'st.display.search.placeholder': 'Cari tetapan Umum',

@@ -196,6 +196,7 @@ export default {
   'st.providers.load_models': 'I-load ang mga modelo',
   'st.providers.loading': 'Naglo-load…',
   'st.providers.models_loaded': '{count} na modelo ang na-load',
+  'st.providers.select_loaded_model': 'Piliin ang na-load na modelo',
 
   'st.provider.field.server_url': 'Server URL',
   'st.provider.field.api_base_url': 'API Base URL',
@@ -515,7 +516,7 @@ export default {
   'sp.plan.approved': 'Naaprubahan ang plano — tumatakbo…',
   'sp.plan.cancelled': 'Kinansela ang plano.',
   'sp.plan.expired': 'Ang planong ito ay hindi na naghihintay ng pagsusuri — ang pagtakbo ay kinansela.',
-  'sp.slash.busy_only_oob': 'Tanging /help, /show-scratchpad, /list-schedules, /screenshot, /export, at /verbose ang maaaring tumakbo habang abala ang WebBrain. Itigil ang pagtakbo o subukan muli kapag natapos na.',
+  'sp.slash.busy_only_oob': 'Nakapila ang mga mensahe habang abala ang WebBrain. Tanging /help, /show-scratchpad, /list-schedules, /screenshot, /export, at /verbose ang maaaring tumakbo agad bilang mga slash command.',
   'tool.go_back': 'Bumabalik',
   'tool.go_forward': 'Sumusulong',
   'st.display.search.placeholder': 'Maghanap sa General na mga setting',

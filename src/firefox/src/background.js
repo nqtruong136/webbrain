@@ -802,7 +802,7 @@ async function handleMessage(msg, sender) {
             type,
             data,
           }).catch(() => {});
-        }, mode);
+        }, mode, msg.attachments);
 
         return { content: result, updates };
       } finally {

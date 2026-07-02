@@ -198,6 +198,7 @@ export default {
   'st.providers.load_models': '모델 불러오기',
   'st.providers.loading': '불러오는 중…',
   'st.providers.models_loaded': '모델 {count}개를 불러왔습니다',
+  'st.providers.select_loaded_model': '불러온 모델 선택',
 
   'st.provider.field.server_url': '서버 URL',
   'st.provider.field.api_base_url': 'API 기본 URL',
@@ -515,7 +516,7 @@ export default {
   'sp.plan.approved': '계획 승인됨 — 실행 중…',
   'sp.plan.cancelled': '계획이 취소되었습니다.',
   'sp.plan.expired': '이 계획은 더 이상 검토 대기 중이 아닙니다 — 실행이 취소되었습니다.',
-  'sp.slash.busy_only_oob': 'WebBrain이 사용 중인 동안에는 /help, /show-scratchpad, /list-schedules, /screenshot, /export, /verbose만 실행할 수 있습니다. 실행을 중지하거나 완료되면 다시 시도하세요.',
+  'sp.slash.busy_only_oob': 'WebBrain이 사용 중일 때 메시지는 대기열에 추가됩니다. /help, /show-scratchpad, /list-schedules, /screenshot, /export, /verbose만 슬래시 명령으로 즉시 실행할 수 있습니다.',
   'tool.go_back': '뒤로 가기',
   'tool.go_forward': '앞으로 가기',
   'st.display.search.placeholder': '일반 설정 검색',

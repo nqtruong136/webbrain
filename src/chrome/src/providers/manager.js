@@ -665,7 +665,8 @@ export class ProviderManager {
       try {
         const res = await fetchWithFallback(url, { method: 'GET', headers });
         if (!res.ok) {
-          const errBody = await res.text();
+          let errBody = '';
+          try { errBody = await res.text(); } catch {}
           if (res.status === 403) {
             if (!firstFailure) firstFailure = {
               ok: false,
@@ -674,7 +675,7 @@ export class ProviderManager {
             };
             continue;
           }
-          if (!firstFailure) firstFailure = { ok: false, error: `HTTP ${res.status}: ${errBody}` };
+          if (!firstFailure) firstFailure = this._modelListFailure(res.status, errBody, res.statusText);
           continue;
         }
         const data = await res.json();
@@ -702,6 +703,19 @@ export class ProviderManager {
     const apiKey = provider?.config?.apiKey;
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
     return headers;
+  }
+
+  _modelListFailure(status, body = '', statusText = '') {
+    const text = String(body || '').trim();
+    if (status === 404 && /<!doctype\s+html|<html[\s>]|file not found/i.test(text)) {
+      return {
+        ok: false,
+        error: 'No local model server was detected.',
+        errorKey: 'ob.tokens.none_status',
+      };
+    }
+    const compact = text.replace(/\s+/g, ' ').slice(0, 300);
+    return { ok: false, error: `HTTP ${status}: ${compact || statusText || 'Request failed'}` };
   }
 
   _baseUrlCandidates(config) {

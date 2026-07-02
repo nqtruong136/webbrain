@@ -198,6 +198,7 @@ export default {
   'st.providers.load_models': 'Cargar modelos',
   'st.providers.loading': 'Cargando…',
   'st.providers.models_loaded': '{count} modelos cargados',
+  'st.providers.select_loaded_model': 'Seleccionar modelo cargado',
 
   'st.provider.field.server_url': 'URL del servidor',
   'st.provider.field.api_base_url': 'URL base de la API',
@@ -515,7 +516,7 @@ export default {
   'sp.plan.approved': 'Plan aprobado — ejecutando…',
   'sp.plan.cancelled': 'Plan cancelado.',
   'sp.plan.expired': 'Este plan ya no está en espera de revisión — la ejecución fue cancelada.',
-  'sp.slash.busy_only_oob': 'Solo /help, /show-scratchpad, /list-schedules, /screenshot, /export y /verbose pueden ejecutarse mientras WebBrain está ocupado. Detén la ejecución o inténtalo de nuevo cuando termine.',
+  'sp.slash.busy_only_oob': 'Los mensajes se ponen en cola mientras WebBrain está ocupado. Solo /help, /show-scratchpad, /list-schedules, /screenshot, /export y /verbose pueden ejecutarse de inmediato como comandos slash.',
   'tool.go_back': 'Volviendo atrás',
   'tool.go_forward': 'Avanzando',
   'st.display.search.placeholder': 'Buscar en ajustes generales',

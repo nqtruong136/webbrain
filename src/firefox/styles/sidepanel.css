@@ -1199,7 +1199,7 @@ body {
 
 #input-wrapper {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -1238,6 +1238,76 @@ body {
   display: none;
 }
 
+.queued-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.queued-messages.hidden {
+  display: none;
+}
+
+.queued-message {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.queued-message-label {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.queued-message-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queued-message-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.queued-message-action:hover {
+  color: var(--text-primary);
+  background: rgba(91, 82, 232, 0.12);
+  border-color: var(--border);
+}
+
+.queued-message-action svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
 .slash-command-option {
   display: grid;
   grid-template-columns: minmax(112px, max-content) minmax(0, 1fr);
@@ -1273,6 +1343,57 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+}
+
+.attachment-preview-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.attachment-preview-list.hidden {
+  display: none;
+}
+
+.attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  padding: 4px 6px 4px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.attachment-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip-remove {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attachment-chip-remove:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 #input-text-layer {
@@ -1353,6 +1474,63 @@ body {
 #btn-send:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+#btn-attach,
+#btn-mic {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, color 0.2s, transform 0.1s;
+  flex-shrink: 0;
+}
+
+#btn-attach:hover,
+#btn-mic:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+#btn-attach:active,
+#btn-mic:active {
+  transform: scale(0.95);
+}
+
+#btn-attach:disabled,
+#btn-mic:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Active dictation — pulsing red to signal the mic is live. */
+#btn-mic.listening {
+  color: var(--error);
+  animation: btn-mic-pulse 1.4s ease-in-out infinite;
+}
+
+/* Visually disabled but NOT the disabled attribute — clicks must still
+   register so the user gets a "why" message in chat (unsupported browser /
+   disabled in settings) instead of a button that mysteriously does nothing. */
+#btn-mic.mic-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#btn-mic.mic-disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+@keyframes btn-mic-pulse {
+  0%, 100% { background: transparent; }
+  50% { background: rgba(244, 67, 54, 0.16); }
 }
 
 /* Scrollbar */
