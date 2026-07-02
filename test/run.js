@@ -6067,6 +6067,28 @@ test('settings async test controls surface rejected background results', () => {
       /let datalistEl = document\.getElementById\(`models-\$\{id\}`\);[\s\S]*?setProviderLoadModelsStatus\(id, t\('st\.providers\.loading'\)\);[\s\S]*?try \{[\s\S]*?res = await sendToBackground\('list_provider_models', \{ providerId: id \}\);[\s\S]*?\} catch \(e\) \{[\s\S]*?setProviderLoadModelsStatus\(id, e\.message, 'var\(--danger, #c33\)'\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?datalistEl = document\.getElementById\(`models-\$\{id\}`\);[\s\S]*?if \(!datalistEl\) return;[\s\S]*?setProviderLoadModelsStatus\(id, res\?\.error \|\| 'Failed to load models', 'var\(--danger, #c33\)'\);/,
       `${label}: model loading should report rejected background results and avoid stale datalist writes`,
     );
+    assert.match(
+      settings,
+      /const loadedModelsSelectHTML = canLoadModels[\s\S]*class="loaded-model-select" data-loaded-models-for="\$\{id\}"[\s\S]*\$\{loadedModelsSelectHTML\}/,
+      `${label}: local model loading should render a separate loaded-model selector`,
+    );
+    assert.match(
+      loadBody,
+      /const loadedSelectEl = document\.querySelector\(`\.loaded-model-select\[data-loaded-models-for="\$\{id\}"\]`\);[\s\S]*?loadedSelectEl\.innerHTML = `<option value="">\$\{escapeHtml\(t\('st\.providers\.select_loaded_model'\)\)\}<\/option>` \+[\s\S]*?res\.models[\s\S]*?loadedSelectEl\.value = '';[\s\S]*?loadedSelectEl\.style\.display = res\.models\.length \? '' : 'none';/,
+      `${label}: loaded models should populate a visible selector without replacing the current model text`,
+    );
+    assert.doesNotMatch(
+      loadBody,
+      /input\.value\s*=\s*res\.models/,
+      `${label}: loading models should not overwrite an existing model until the user chooses one`,
+    );
+    assert.match(
+      settings,
+      /document\.querySelectorAll\('\.loaded-model-select'\)\.forEach\(sel => \{[\s\S]*?sel\.addEventListener\('change', \(\) => \{[\s\S]*?const providerId = sel\.dataset\.loadedModelsFor;[\s\S]*?input\.value = sel\.value;[\s\S]*?\}\);[\s\S]*?\}\);/,
+      `${label}: selecting a loaded model should write it back to the provider model input`,
+    );
+    const locale = fs.readFileSync(path.join(ROOT, label === 'chrome' ? 'src/chrome/src/ui/locales/en.js' : 'src/firefox/src/ui/locales/en.js'), 'utf8');
+    assert.match(locale, /'st\.providers\.select_loaded_model': 'Select loaded model'/, `${label}: loaded-model selector copy should be localized`);
   }
 });
 

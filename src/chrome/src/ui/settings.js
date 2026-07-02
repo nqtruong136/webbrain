@@ -1367,6 +1367,11 @@ function renderProviders() {
         const canLoadModels = localModelProviders.includes(id) && field.key === 'model';
         const listAttr = canLoadModels ? `list="models-${id}"` : '';
         const datalistHTML = canLoadModels ? `<datalist id="models-${id}"></datalist>` : '';
+        const loadedModelsSelectHTML = canLoadModels
+          ? `<select class="loaded-model-select" data-loaded-models-for="${id}"
+                    aria-label="${escapeHtml(t('st.providers.select_loaded_model'))}"
+                    style="display:none;margin-top:6px;"></select>`
+          : '';
         const loadBtnHTML = canLoadModels
           ? `<button type="button" class="btn-secondary btn-load-models" data-provider="${id}"
                     style="margin-top:6px;">${escapeHtml(t('st.providers.load_models'))}</button>
@@ -1386,6 +1391,7 @@ function renderProviders() {
                    value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}">
             ${datalistHTML}
             ${loadBtnHTML}
+            ${loadedModelsSelectHTML}
           </div>
         `;
       }
@@ -1469,6 +1475,15 @@ function renderProviders() {
         input.style.display = 'none';
         input.value = sel.value;
       }
+    });
+  });
+  document.querySelectorAll('.loaded-model-select').forEach(sel => {
+    sel.addEventListener('change', () => {
+      if (!sel.value) return;
+      const providerId = sel.dataset.loadedModelsFor;
+      const input = document.querySelector(`input[data-provider="${providerId}"][data-key="model"]`);
+      if (!input) return;
+      input.value = sel.value;
     });
   });
   // OAuth-Claude-specific bindings. These only fire if the OAuth card is
@@ -1724,9 +1739,18 @@ async function loadProviderModels(id) {
   if (!datalistEl) return;
   if (res?.ok) {
     applyProviderBaseUrl(id, res.baseUrl);
+    const loadedSelectEl = document.querySelector(`.loaded-model-select[data-loaded-models-for="${id}"]`);
     datalistEl.innerHTML = res.models
       .map((m) => `<option value="${escapeHtml(m)}"></option>`)
       .join('');
+    if (loadedSelectEl) {
+      loadedSelectEl.innerHTML = `<option value="">${escapeHtml(t('st.providers.select_loaded_model'))}</option>` +
+        res.models
+          .map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`)
+          .join('');
+      loadedSelectEl.value = '';
+      loadedSelectEl.style.display = res.models.length ? '' : 'none';
+    }
     setProviderLoadModelsStatus(id, t('st.providers.models_loaded', { count: res.models.length }));
   } else {
     setProviderLoadModelsStatus(id, res?.error || 'Failed to load models', 'var(--danger, #c33)');
