@@ -73,6 +73,9 @@ function binaryResponse(status, body = 'media-bytes', contentType = 'video/mp4',
 const { getActiveAdapter, listAdapters } = await import(
   'file://' + path.join(ROOT, 'src/chrome/src/agent/adapters.js').replace(/\\/g, '/')
 );
+const { getActiveAdapter: getActiveAdapterFx } = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/agent/adapters.js').replace(/\\/g, '/')
+);
 
 // network-tools.js references chrome.* inside a try/catch at module load, so
 // it imports cleanly under Node — the storage init silently no-ops and
@@ -688,6 +691,70 @@ test('matches wordpress wp-admin on any host', () => {
   assert.equal(getActiveAdapter('https://example.com/some-post/'), null);
   // /wp-admin must be a path segment, not a substring elsewhere in URL.
   assert.equal(getActiveAdapter('https://example.com/blog/wp-admin-tutorial/'), null);
+});
+
+test('matches mastodon profile and interaction URLs on any host', () => {
+  const urls = [
+    'https://mastoturk.org/@discon@types.pl',
+    'https://mastodon.social/@Gargron',
+    'https://mastoturk.org/@alice',
+    'https://mstdn.social/@alice',
+    'https://mastodon.example/@alice',
+    'https://mastodon.social/@Gargron/123456789012345678',
+    'https://example.social/@alice@example.net',
+    'https://example.social/@alice/123456789012345678',
+    'https://mastodon.social/users/Gargron',
+    'https://mastodon.social/users/Gargron/statuses/102136949141474775',
+    'https://example.social/users/alice/statuses/123456789012345678',
+    'https://example.social/interact?uri=https%3A%2F%2Ftypes.pl%2F%40discon',
+    'https://example.social/authorize_interaction?uri=acct%3Aalice%40types.pl',
+    'https://example.social/authorize_interaction?uri=https%3A%2F%2Ftypes.pl%2Fusers%2Fdiscon',
+    'https://example.social/interact?uri=https%3A%2F%2Ftypes.pl%2Fusers%2Fdiscon%2Fstatuses%2F123456789',
+  ];
+  for (const url of urls) {
+    assert.equal(getActiveAdapter(url)?.name, 'mastodon', `chrome did not match ${url}`);
+    assert.equal(getActiveAdapterFx(url)?.name, 'mastodon', `firefox did not match ${url}`);
+  }
+
+  const a = getActiveAdapter('https://mastoturk.org/@discon@types.pl');
+  assert.match(a?.notes || '', /DOMAIN ONLY/);
+  assert.match(a?.notes || '', /mastoturk\.org/);
+  assert.match(a?.notes || '', /Do NOT manually synthesize/);
+  assert.match(a?.notes || '', /Takip et=Follow/);
+  assert.match(a?.notes || '', /For account\/profile follow flows, click Follow/);
+  assert.match(a?.notes || '', /status or authorize_interaction flows, complete the requested action/);
+
+  // Earlier site-specific adapters should keep precedence for @-style URLs.
+  assert.equal(getActiveAdapter('https://www.youtube.com/@OpenAI')?.name, 'youtube');
+  assert.equal(getActiveAdapter('https://medium.com/@example')?.name, 'medium');
+  assert.equal(getActiveAdapter('https://substack.com/@alice')?.name, 'substack');
+  assert.equal(getActiveAdapterFx('https://substack.com/@alice')?.name, 'substack');
+  assert.equal(getActiveAdapter('https://www.tiktok.com/@openai')?.name, 'tiktok');
+  assert.equal(getActiveAdapter('https://www.tiktok.com/@openai/video/1234567890123456789')?.name, 'tiktok');
+  assert.equal(getActiveAdapterFx('https://www.tiktok.com/@openai')?.name, 'tiktok');
+  assert.equal(getActiveAdapter('https://m.tiktok.com/@openai'), null);
+  assert.equal(getActiveAdapterFx('https://m.tiktok.com/@openai'), null);
+  assert.equal(getActiveAdapter('https://threads.net/@openai'), null);
+  assert.equal(getActiveAdapter('https://threads.com/@openai'), null);
+  assert.equal(getActiveAdapter('https://www.threads.com/@openai'), null);
+  assert.equal(getActiveAdapterFx('https://threads.com/@openai'), null);
+  assert.equal(getActiveAdapter('https://dev.to/@ben'), null);
+  assert.equal(getActiveAdapterFx('https://dev.to/@ben'), null);
+  assert.equal(getActiveAdapter('https://patreon.com/@creator'), null);
+  assert.equal(getActiveAdapter('https://ko-fi.com/@creator'), null);
+  assert.equal(getActiveAdapter('https://gitlab.example.com/users/sign_in'), null);
+  assert.equal(getActiveAdapterFx('https://gitlab.example.com/users/sign_in'), null);
+  assert.equal(getActiveAdapter('https://example.com/users/alice'), null);
+  assert.equal(getActiveAdapterFx('https://example.com/users/alice'), null);
+  assert.equal(getActiveAdapter('https://example.com/interact'), null);
+  assert.equal(getActiveAdapter('https://example.com/authorize_interaction'), null);
+  assert.equal(getActiveAdapter('https://example.com/interact?uri=https%3A%2F%2Fexample.com%2Fnot-mastodon'), null);
+  assert.equal(getActiveAdapterFx('https://example.com/interact'), null);
+  assert.equal(getActiveAdapter('https://types.pl/@discon'), null);
+  assert.equal(getActiveAdapterFx('https://types.pl/@discon'), null);
+  assert.equal(getActiveAdapter('https://example.com/@alice'), null);
+  assert.equal(getActiveAdapterFx('https://example.com/@alice'), null);
+  assert.equal(getActiveAdapter('https://example.com/blog/@alice'), null);
 });
 
 test('returns null for unknown sites', () => {

@@ -42,6 +42,77 @@ PAYWALLS / SIGN-IN WALLS. Signals: "Subscribe to continue", "X free articles rem
 
 PDF TABS. If the active tab URL ends in .pdf (or is opened in Chrome's built-in PDF viewer), DO NOT use read_page / click / get_accessibility_tree / get_interactive_elements / scroll / screenshot — Chrome's PDF viewer is a chrome-extension:// page our content scripts cannot reach, so those tools either silently no-op or hit the viewer chrome (sidebar, page-number input) and you'll loop. Use \`read_pdf\` instead, which fetches the PDF binary and extracts text directly. By default it returns up to 50 pages / 50,000 chars; pass \`fromPage\`/\`toPage\` to read further. file:// PDFs require Chrome's "Allow access to file URLs" toggle on the WebBrain extension.`;
 
+function safeDecodePath(pathname) {
+  try {
+    return decodeURIComponent(pathname);
+  } catch (e) {
+    return pathname;
+  }
+}
+
+function normalizedHostname(hostname) {
+  return String(hostname || '').toLowerCase().replace(/\.$/, '');
+}
+
+const KNOWN_MASTODON_HOSTS = new Set([
+  'mastodon.social',
+  'mastoturk.org',
+  'mstdn.social',
+]);
+
+// Keep direct URL matching conservative until adapters can verify page markup.
+// Bare /@user and /users/user routes are too common on non-Mastodon sites.
+// Future work: verify candidate hosts through page/source signals, or through
+// https://instances.social/api/doc/ via a skill or known-instances list.
+function isLikelyMastodonHost(hostname) {
+  const host = normalizedHostname(hostname);
+  return KNOWN_MASTODON_HOSTS.has(host) || host.startsWith('mastodon.');
+}
+
+function isMastodonLocalProfilePath(hostname, path) {
+  return isLikelyMastodonHost(hostname) && /^\/@[A-Za-z0-9_]+\/?$/.test(path);
+}
+
+function isMastodonUsersPath(hostname, path) {
+  const match = /^\/users\/[A-Za-z0-9_]+(\/statuses\/[A-Za-z0-9._:-]+)?\/?$/.exec(path);
+  if (!match) return false;
+  return Boolean(match[1]) || isLikelyMastodonHost(hostname);
+}
+
+function isMastodonRemoteUsersPath(path) {
+  return /^\/users\/[A-Za-z0-9_]+(?:\/statuses\/[A-Za-z0-9._:-]+)?\/?$/.test(path);
+}
+
+function isMastodonRemoteUri(value) {
+  const raw = String(value || '').trim();
+  if (/^acct:[A-Za-z0-9_]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/i.test(raw)) return true;
+  try {
+    const remote = new URL(raw);
+    if (remote.protocol !== 'http:' && remote.protocol !== 'https:') return false;
+    const path = safeDecodePath(remote.pathname);
+    return /^\/@[A-Za-z0-9_]+(?:@[A-Za-z0-9.-]+\.[A-Za-z]{2,})?(?:\/\d+)?\/?$/.test(path)
+      || isMastodonRemoteUsersPath(path);
+  } catch (e) {
+    return false;
+  }
+}
+
+function hasMastodonInteractionSignal(url, path) {
+  return /^\/(interact|authorize_interaction)\/?$/.test(path)
+    && isMastodonRemoteUri(url.searchParams.get('uri'));
+}
+
+function isMastodonUrl(url) {
+  const u = new URL(url);
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  const path = safeDecodePath(u.pathname);
+  return isMastodonLocalProfilePath(u.hostname, path)
+    || /^\/@[A-Za-z0-9_]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?:\/\d+)?\/?$/.test(path)
+    || /^\/@[A-Za-z0-9_]+(?:@[A-Za-z0-9.-]+\.[A-Za-z]{2,})?\/\d+\/?$/.test(path)
+    || isMastodonUsersPath(u.hostname, path)
+    || hasMastodonInteractionSignal(u, path);
+}
+
 const ADAPTERS = [
   // ─── Code & Dev Tools ─────────────────────────────────────────────────
   {
@@ -209,7 +280,7 @@ const ADAPTERS = [
   {
     name: 'substack',
     category: 'general',
-    match: (url) => /\.substack\.com\//.test(url),
+    match: (url) => /^https?:\/\/([^/]+\.)?substack\.com\//.test(url),
     notes: `
 - Most posts are public; some are paywalled mid-article. If the content suddenly stops with a "Subscribe" CTA, that's a paywall, not the end.
 - Comments live below the article in a separate thread component.
@@ -766,6 +837,21 @@ const ADAPTERS = [
 - Stickers, GIFs, and bot commands (/) all live in popups above the message input.
 - DO NOT send a message unless the user named the recipient AND the exact message body in this conversation.
 - "Edit message" works for a window after sending (~48h); "Delete for everyone" within a shorter window — both have explicit confirms.`,
+  },
+  {
+    // Mastodon is federated and self-hosted across many domains. Keep this
+    // host-agnostic matcher after site-specific adapters so @profile paths on
+    // known sites (for example TikTok) preserve their own guidance.
+    name: 'mastodon',
+    category: 'general',
+    match: isMastodonUrl,
+    notes: `
+- Mastodon login is per-instance. If a remote profile asks you to sign in / continue before following, don't create an account on that remote server.
+- To hand a remote Mastodon profile/status back to the user's home instance: open the remote profile/status, wait_for_stable, then use the sign-in/interaction popup to enter the home server DOMAIN ONLY (example: mastoturk.org), not a full URL or @handle.
+- After submitting the home domain, expect a redirect to the user's own instance with a remote URL like \`https://mastoturk.org/@user@remote.example\`; wait_for_stable there. For account/profile follow flows, click Follow; for status or authorize_interaction flows, complete the requested action on the home-instance page (reply, boost, favorite, or follow).
+- Do NOT manually synthesize the home-instance URL before this handoff. The home instance may need the remote-profile lookup/redirect to recognize the account.
+- Label variants by version/language: "Sign in to continue", "Continue on your server", "Authorize interaction", "Proceed to follow"; Turkish: Takip et=Follow, sunucu/domain=server domain.
+- If the user's Mastodon home domain is not already known from the conversation or account UI, clarify once before entering anything.`,
   },
 ];
 

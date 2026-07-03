@@ -220,3 +220,19 @@ remaining (lower-priority) work is breadth:
 2. Document which provider-specific request fields are intentionally supported.
 
 ---
+
+## 11. Verify generic Mastodon-looking URLs before broad adapter matching
+
+The Mastodon adapter intentionally stays conservative because bare `/@user` and
+`/users/user` routes are common outside Mastodon. Once site adapters can verify
+more than the current URL string, candidate Mastodon hosts could be confirmed
+with page/source signals or with an
+[`instances.social` API](https://instances.social/api/doc/) integration.
+
+Two plausible shapes:
+1. A skill-backed lookup that checks candidate hosts only when the page already
+   looks Mastodon-like.
+2. A maintained known-instances list that lets URL-only matching cover common
+   Mastodon domains without treating every `@profile` route as federated social.
+
+---
