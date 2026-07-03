@@ -73,6 +73,9 @@ function binaryResponse(status, body = 'media-bytes', contentType = 'video/mp4',
 const { getActiveAdapter, listAdapters } = await import(
   'file://' + path.join(ROOT, 'src/chrome/src/agent/adapters.js').replace(/\\/g, '/')
 );
+const { getActiveAdapter: getActiveAdapterFx } = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/agent/adapters.js').replace(/\\/g, '/')
+);
 
 // network-tools.js references chrome.* inside a try/catch at module load, so
 // it imports cleanly under Node — the storage init silently no-ops and
@@ -688,6 +691,31 @@ test('matches wordpress wp-admin on any host', () => {
   assert.equal(getActiveAdapter('https://example.com/some-post/'), null);
   // /wp-admin must be a path segment, not a substring elsewhere in URL.
   assert.equal(getActiveAdapter('https://example.com/blog/wp-admin-tutorial/'), null);
+});
+
+test('matches mastodon profile and interaction URLs on any host', () => {
+  const urls = [
+    'https://types.pl/@discon',
+    'https://mastoturk.org/@discon@types.pl',
+    'https://mastodon.social/@Gargron/123456789012345678',
+    'https://example.social/interact?uri=https%3A%2F%2Ftypes.pl%2F%40discon',
+    'https://example.social/authorize_interaction',
+  ];
+  for (const url of urls) {
+    assert.equal(getActiveAdapter(url)?.name, 'mastodon', `chrome did not match ${url}`);
+    assert.equal(getActiveAdapterFx(url)?.name, 'mastodon', `firefox did not match ${url}`);
+  }
+
+  const a = getActiveAdapter('https://types.pl/@discon');
+  assert.match(a?.notes || '', /DOMAIN ONLY/);
+  assert.match(a?.notes || '', /mastoturk\.org/);
+  assert.match(a?.notes || '', /Do NOT manually synthesize/);
+  assert.match(a?.notes || '', /Takip et=Follow/);
+
+  // Earlier site-specific adapters should keep precedence for @-style URLs.
+  assert.equal(getActiveAdapter('https://www.youtube.com/@OpenAI')?.name, 'youtube');
+  assert.equal(getActiveAdapter('https://medium.com/@example')?.name, 'medium');
+  assert.equal(getActiveAdapter('https://example.com/blog/@alice'), null);
 });
 
 test('returns null for unknown sites', () => {

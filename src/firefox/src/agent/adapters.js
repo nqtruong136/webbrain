@@ -42,6 +42,22 @@ PAYWALLS / SIGN-IN WALLS. Signals: "Subscribe to continue", "X free articles rem
 
 PDF TABS. If the active tab URL ends in .pdf (or is opened in the browser's built-in PDF viewer), DO NOT use read_page / click / get_accessibility_tree / get_interactive_elements / scroll / screenshot — the PDF viewer is a privileged page our content scripts cannot reach, so those tools either silently no-op or hit the viewer chrome (sidebar, page-number input) and you'll loop. Use \`read_pdf\` instead, which fetches the PDF binary and extracts text directly. By default it returns up to 50 pages / 50,000 chars; pass \`fromPage\`/\`toPage\` to read further.`;
 
+function safeDecodePath(pathname) {
+  try {
+    return decodeURIComponent(pathname);
+  } catch (e) {
+    return pathname;
+  }
+}
+
+function isMastodonUrl(url) {
+  const u = new URL(url);
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  const path = safeDecodePath(u.pathname);
+  return /^\/@[A-Za-z0-9_]+(?:@[A-Za-z0-9.-]+\.[A-Za-z]{2,})?(?:\/\d+)?\/?$/.test(path)
+    || /^\/(interact|authorize_interaction)\/?$/.test(path);
+}
+
 const ADAPTERS = [
   // ─── Code & Dev Tools ─────────────────────────────────────────────────
   {
@@ -213,6 +229,20 @@ const ADAPTERS = [
 - Most posts are public; some are paywalled mid-article. If the content suddenly stops with a "Subscribe" CTA, that's a paywall, not the end.
 - Comments live below the article in a separate thread component.
 - Subscribe button is a popup form — needs an email and may require email confirmation.`,
+  },
+  {
+    // Mastodon is federated and self-hosted across many domains. Trigger on
+    // Mastodon-style account/status paths and interaction handoff pages.
+    name: 'mastodon',
+    category: 'general',
+    match: isMastodonUrl,
+    notes: `
+- Mastodon login is per-instance. If a remote profile asks you to sign in / continue before following, don't create an account on that remote server.
+- To follow a remote account from the user's home instance: open the remote profile/status, wait_for_stable, then use the sign-in/interaction popup to enter the home server DOMAIN ONLY (example: mastoturk.org), not a full URL or @handle.
+- After submitting the home domain, expect a redirect to the user's own instance with a remote account URL like \`https://mastoturk.org/@user@remote.example\`; wait_for_stable there, then click Follow on that home-instance page.
+- Do NOT manually synthesize the home-instance URL before this handoff. The home instance may need the remote-profile lookup/redirect to recognize the account.
+- Label variants by version/language: "Sign in to continue", "Continue on your server", "Authorize interaction", "Proceed to follow"; Turkish: Takip et=Follow, sunucu/domain=server domain.
+- If the user's Mastodon home domain is not already known from the conversation or account UI, clarify once before entering anything.`,
   },
   {
     // WordPress matcher is host-agnostic — self-hosted WP runs on millions
