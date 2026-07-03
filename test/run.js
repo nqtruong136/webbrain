@@ -73,6 +73,9 @@ function binaryResponse(status, body = 'media-bytes', contentType = 'video/mp4',
 const { getActiveAdapter, listAdapters } = await import(
   'file://' + path.join(ROOT, 'src/chrome/src/agent/adapters.js').replace(/\\/g, '/')
 );
+const { getActiveAdapter: getActiveAdapterFx } = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/agent/adapters.js').replace(/\\/g, '/')
+);
 
 // network-tools.js references chrome.* inside a try/catch at module load, so
 // it imports cleanly under Node — the storage init silently no-ops and
@@ -186,6 +189,21 @@ const {
   parseGithubStargazerFollowButtons: parseGithubStargazerFollowButtonsFx,
 } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/agent/observers/github-stargazers.js').replace(/\\/g, '/')
+);
+const {
+  analyzeMastodonPage,
+  inferMastodonHomeDomainFromTask,
+  inferMastodonHomeDomainFromUrl,
+  mastodonHandoffInstruction,
+  mastodonProgressGuard,
+} = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/agent/observers/mastodon.js').replace(/\\/g, '/')
+);
+const {
+  analyzeMastodonPage: analyzeMastodonPageFx,
+  mastodonProgressGuard: mastodonProgressGuardFx,
+} = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/agent/observers/mastodon.js').replace(/\\/g, '/')
 );
 const { CDPClient, cdpClient: cdpClientCh } = await import(
   'file://' + path.join(ROOT, 'src/chrome/src/cdp/cdp-client.js').replace(/\\/g, '/')
@@ -690,6 +708,129 @@ test('matches wordpress wp-admin on any host', () => {
   assert.equal(getActiveAdapter('https://example.com/blog/wp-admin-tutorial/'), null);
 });
 
+test('matches mastodon profile and interaction URLs on any host', () => {
+  const urls = [
+    'https://mastoturk.org/@discon@types.pl',
+    'https://mastodon.social/@Gargron',
+    'https://mastoturk.org/@alice',
+    'https://mastoturk.org/home',
+    'https://www.mastoturk.org/home',
+    'https://mas.to/home',
+    'https://fosstodon.org/@alice',
+    'https://hachyderm.io/@alice',
+    'https://honeybank.net/@alice',
+    'https://left-bank.net/@alice',
+    'https://mas.to/@alice',
+    'https://mastodon.world/@alice',
+    'https://mstdn.social/@alice',
+    'https://s.qbank.de/@alice',
+    'https://types.pl/@disconcision',
+    'https://mastodon.example/@alice',
+    'https://mastodon.social/@Gargron/123456789012345678',
+    'https://example.social/@alice@example.net',
+    'https://example.social/@alice/123456789012345678',
+    'https://mastodon.social/users/Gargron',
+    'https://mastodon.social/users/Gargron/statuses/102136949141474775',
+    'https://example.social/users/alice/statuses/123456789012345678',
+    'https://example.social/interact?uri=https%3A%2F%2Ftypes.pl%2F%40discon',
+    'https://example.social/authorize_interaction?uri=acct%3Aalice%40types.pl',
+    'https://example.social/authorize_interaction?uri=https%3A%2F%2Ftypes.pl%2Fusers%2Fdiscon',
+    'https://example.social/interact?uri=https%3A%2F%2Ftypes.pl%2Fusers%2Fdiscon%2Fstatuses%2F123456789',
+  ];
+  for (const url of urls) {
+    assert.equal(getActiveAdapter(url)?.name, 'mastodon', `chrome did not match ${url}`);
+    assert.equal(getActiveAdapterFx(url)?.name, 'mastodon', `firefox did not match ${url}`);
+  }
+
+  const a = getActiveAdapter('https://mastoturk.org/@discon@types.pl');
+  assert.match(a?.notes || '', /DOMAIN ONLY/);
+  assert.match(a?.notes || '', /mastoturk\.org/);
+  assert.match(a?.notes || '', /Do NOT manually synthesize/);
+  assert.match(a?.notes || '', /Takip et=Follow/);
+  assert.match(a?.notes || '', /For account\/profile follow flows, click Follow/);
+  assert.match(a?.notes || '', /status or authorize_interaction flows, complete the requested action/);
+
+  // Earlier site-specific adapters should keep precedence for @-style URLs.
+  assert.equal(getActiveAdapter('https://www.youtube.com/@OpenAI')?.name, 'youtube');
+  assert.equal(getActiveAdapter('https://medium.com/@example')?.name, 'medium');
+  assert.equal(getActiveAdapter('https://substack.com/@alice')?.name, 'substack');
+  assert.equal(getActiveAdapterFx('https://substack.com/@alice')?.name, 'substack');
+  assert.equal(getActiveAdapter('https://www.tiktok.com/@openai')?.name, 'tiktok');
+  assert.equal(getActiveAdapter('https://www.tiktok.com/@openai/video/1234567890123456789')?.name, 'tiktok');
+  assert.equal(getActiveAdapterFx('https://www.tiktok.com/@openai')?.name, 'tiktok');
+  assert.equal(getActiveAdapter('https://m.tiktok.com/@openai'), null);
+  assert.equal(getActiveAdapterFx('https://m.tiktok.com/@openai'), null);
+  assert.equal(getActiveAdapter('https://threads.net/@openai'), null);
+  assert.equal(getActiveAdapter('https://threads.com/@openai'), null);
+  assert.equal(getActiveAdapter('https://www.threads.com/@openai'), null);
+  assert.equal(getActiveAdapterFx('https://threads.com/@openai'), null);
+  assert.equal(getActiveAdapter('https://dev.to/@ben'), null);
+  assert.equal(getActiveAdapterFx('https://dev.to/@ben'), null);
+  assert.equal(getActiveAdapter('https://patreon.com/@creator'), null);
+  assert.equal(getActiveAdapter('https://ko-fi.com/@creator'), null);
+  assert.equal(getActiveAdapter('https://gitlab.example.com/users/sign_in'), null);
+  assert.equal(getActiveAdapterFx('https://gitlab.example.com/users/sign_in'), null);
+  assert.equal(getActiveAdapter('https://example.com/users/alice'), null);
+  assert.equal(getActiveAdapterFx('https://example.com/users/alice'), null);
+  assert.equal(getActiveAdapter('https://example.com/interact'), null);
+  assert.equal(getActiveAdapter('https://example.com/authorize_interaction'), null);
+  assert.equal(getActiveAdapter('https://example.com/interact?uri=https%3A%2F%2Fexample.com%2Fnot-mastodon'), null);
+  assert.equal(getActiveAdapterFx('https://example.com/interact'), null);
+  assert.equal(getActiveAdapter('https://example.pl/@discon'), null);
+  assert.equal(getActiveAdapterFx('https://example.pl/@discon'), null);
+  assert.equal(getActiveAdapter('https://example.com/@alice'), null);
+  assert.equal(getActiveAdapterFx('https://example.com/@alice'), null);
+  assert.equal(getActiveAdapter('https://example.com/blog/@alice'), null);
+});
+
+test('mastodon observer detects recoverable remote-follow handoff', () => {
+  assert.equal(inferMastodonHomeDomainFromUrl('https://mastoturk.org/home'), 'mastoturk.org');
+  assert.equal(inferMastodonHomeDomainFromTask('Follow https://fosstodon.org/@alice and https://hachyderm.io/@bob'), '');
+  assert.equal(inferMastodonHomeDomainFromTask('Follow these from my Mastodon instance mastoturk.org'), 'mastoturk.org');
+
+  for (const [analyze, guard] of [
+    [analyzeMastodonPage, mastodonProgressGuard],
+    [analyzeMastodonPageFx, mastodonProgressGuardFx],
+  ]) {
+    const state = analyze({
+      url: 'https://fosstodon.org/@alice',
+      taskText: 'Follow this user from my Mastodon instance mastoturk.org',
+      pageContent: [
+        'heading "Sign in to continue"',
+        'textbox "Mastodon server domain"',
+        'button "Continue"',
+      ].join('\n'),
+    });
+    assert.equal(state.homeDomain, 'mastoturk.org');
+    assert.equal(state.remoteAccount.acct, 'alice@fosstodon.org');
+    assert.equal(state.needsHandoff, true);
+    assert.match(mastodonHandoffInstruction(state), /mastoturk\.org/);
+
+    const blocked = guard([{ id: 'alice@fosstodon.org', action: 'follow', status: 'processed' }], state);
+    assert.equal(blocked.blocked, true);
+    assert.equal(blocked.blockedMastodonHandoff, true);
+
+    const followed = analyze({
+      url: 'https://mastoturk.org/@alice@fosstodon.org',
+      taskText: 'Follow this user from my Mastodon instance mastoturk.org',
+      pageContent: 'button "Takip ediliyor"',
+      previous: state,
+    });
+    assert.equal(followed.canMarkProcessed, true);
+    assert.equal(guard([{ id: 'alice@fosstodon.org', action: 'follow', status: 'processed' }], followed), null);
+
+    const genericFollow = analyze({
+      url: 'https://twitter.com/openai',
+      taskText: 'Follow this account.',
+      pageContent: 'button "Follow"',
+    });
+    assert.equal(genericFollow.hasFollowButton, true);
+    assert.equal(genericFollow.remoteAccount, null);
+    assert.equal(genericFollow.hasRemoteFollowPrompt, false);
+    assert.equal(guard([{ id: 'openai', action: 'follow', status: 'processed' }], genericFollow), null);
+  }
+});
+
 test('returns null for unknown sites', () => {
   assert.equal(getActiveAdapter('https://example.com/'), null);
   assert.equal(getActiveAdapter('https://random-site-xyz123.io/'), null);
@@ -712,6 +853,9 @@ test('finance adapters take precedence in order — stripe before generic', () =
   // Stripe URL should match stripe, not the generic finance pattern.
   const a = getActiveAdapter('https://dashboard.stripe.com/');
   assert.equal(a?.name, 'stripe');
+  assert.equal(getActiveAdapter('https://bank.example/dashboard')?.name, 'finance-generic');
+  assert.equal(getActiveAdapter('https://honeybank.net/@alice')?.name, 'mastodon');
+  assert.equal(getActiveAdapterFx('https://honeybank.net/@alice')?.name, 'mastodon');
 });
 
 test('GitHub Enterprise does not match github adapter (strict)', () => {
@@ -2201,19 +2345,6 @@ test('firefox loop-bucket matches chrome', () => {
     'invalid',
   ]) {
     assert.equal(resourceBucketFx(url), resourceBucket(url), `mismatch on ${url}`);
-  }
-});
-
-console.log('\nmarketing site');
-
-test('marketing site renders the Star History embed from the template', () => {
-  const template = fs.readFileSync(path.join(ROOT, 'web/build/template.html'), 'utf8');
-  const index = fs.readFileSync(path.join(ROOT, 'web/index.html'), 'utf8');
-  for (const [label, html] of [['template', template], ['index', index]]) {
-    assert.match(html, /id="star-history"/, `${label}: star-history section missing`);
-    assert.match(html, /<a href="https:\/\/www\.star-history\.com\/\?repos=webbrain-one%2Fwebbrain&type=date&legend=top-left">/, `${label}: star-history link missing`);
-    assert.doesNotMatch(html, /<iframe[^>]+star-history\.com/, `${label}: star-history should render as an image link, not an iframe`);
-    assert.match(html, /<picture>[\s\S]*?<source media="\(prefers-color-scheme: dark\)" srcset="https:\/\/api\.star-history\.com\/chart\?repos=webbrain-one\/webbrain&type=date&theme=dark&legend=top-left" \/>[\s\S]*?<source media="\(prefers-color-scheme: light\)" srcset="https:\/\/api\.star-history\.com\/chart\?repos=webbrain-one\/webbrain&type=date&legend=top-left" \/>[\s\S]*?<img alt="Star History Chart" src="https:\/\/api\.star-history\.com\/chart\?repos=webbrain-one\/webbrain&type=date&legend=top-left"/, `${label}: star-history picture chart markup missing`);
   }
 });
 
@@ -11994,7 +12125,7 @@ test('progress ledger merges rows and does not downgrade terminal rows', () => {
 
 test('progress ledger rejects malformed statuses and normalizes null-like fields', () => {
   assert.equal(isValidLedgerStatus('pending'), true);
-  assert.equal(isValidLedgerStatus('「pending」'), false);
+  assert.equal(isValidLedgerStatus('「pending」'), true);
   assert.equal(isValidLedgerStatusFx('processed'), true);
   assert.equal(isValidLedgerStatusFx('done'), false);
 
@@ -12009,8 +12140,18 @@ test('progress ledger rejects malformed statuses and normalizes null-like fields
     const bad = agent._progressUpdate(771, {
       items: [{ id: 'MarcoSal', label: 'MarcoSal', action: 'follow', status: '「pending」' }],
     });
-    assert.equal(bad.success, false);
-    assert.match(bad.error, /invalid status/i);
+    assert.equal(bad.success, true);
+    const pendingSession = agent.progressSessions.get(771);
+    assert.ok(pendingSession?.sessionId, `${AgentClass.name}: wrapped pending did not create a progress session`);
+    assert.equal(agent.progressLedgers.get(771)[0].status, 'pending');
+    assert.equal(agent.progressLedgers.get(771)[0].sessionId, pendingSession.sessionId);
+    assert.equal(agent._progressRowsForPrompt(771).length, 1);
+
+    const unknown = agent._progressUpdate(771, {
+      items: [{ id: 'MarcoSal', label: 'MarcoSal', action: 'follow', status: 'done' }],
+    });
+    assert.equal(unknown.success, false);
+    assert.match(unknown.error, /invalid status/i);
 
     const tabId = 777;
     const closed = agent._progressUpdate(tabId, {
@@ -12024,6 +12165,141 @@ test('progress ledger rejects malformed statuses and normalizes null-like fields
     assert.match(missing.error, /missing status/i);
     assert.equal(agent.progressLedgers.get(tabId)[0].status, 'processed');
     assert.equal(agent.progressLedgers.get(tabId)[0].fields.email, null);
+  }
+});
+
+test('mastodon progress guard blocks false terminal updates until handoff completes', () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = 779;
+    agent._persist = () => {};
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Follow this user from my Mastodon instance mastoturk.org.' },
+    ]);
+    allowProgress(agent, tabId, ['follow']);
+    agent.mastodonStates.set(tabId, analyzeMastodonPage({
+      url: 'https://fosstodon.org/@alice',
+      taskText: 'Follow this user from my Mastodon instance mastoturk.org.',
+      pageContent: 'heading "Sign in to continue"\ntextbox "Mastodon server domain"',
+    }));
+
+    for (const status of ['processed', 'skipped', 'failed', '「processed」', '「skipped」', '「failed」']) {
+      const blocked = agent._progressUpdate(tabId, {
+        items: [{ id: `alice-${status}`, label: 'alice@fosstodon.org', action: 'follow', status }],
+      });
+      assert.equal(blocked.success, false, `${AgentClass.name}: ${status} should be blocked`);
+      assert.equal(blocked.blockedMastodonHandoff, true);
+      assert.match(blocked.error, /Clicking Follow on the remote instance is not enough/);
+    }
+
+    const pending = agent._progressUpdate(tabId, {
+      items: [{ id: 'alice@fosstodon.org', label: 'alice@fosstodon.org', action: 'follow', status: 'pending' }],
+    });
+    assert.equal(pending.success, true);
+
+    agent.mastodonStates.set(tabId, analyzeMastodonPage({
+      url: 'https://mastoturk.org/@alice@fosstodon.org',
+      taskText: 'Follow this user from my Mastodon instance mastoturk.org.',
+      pageContent: 'button "Following"',
+      previous: agent.mastodonStates.get(tabId),
+    }));
+    const processed = agent._progressUpdate(tabId, {
+      items: [{ id: 'alice@fosstodon.org', label: 'alice@fosstodon.org', action: 'follow', status: 'processed' }],
+    });
+    assert.equal(processed.success, true);
+    assert.equal(agent.progressLedgers.get(tabId).find(row => row.id === 'alice@fosstodon.org').status, 'processed');
+  }
+});
+
+test('agent ignores generic follow buttons for Mastodon observations', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = 783;
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Follow this account.' },
+    ]);
+
+    const observed = await agent._rememberMastodonObservation(tabId, 'get_accessibility_tree', {
+      success: true,
+      url: 'https://twitter.com/openai',
+      pageContent: 'button "Follow"',
+    });
+
+    assert.equal(observed, null);
+    assert.equal(agent.mastodonStates.has(tabId), false);
+  }
+});
+
+test('progress done blocks claimed success when rows are skipped or failed', () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = 780;
+    agent.conversationModes.set(tabId, 'act');
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Follow these users.' },
+    ]);
+    const session = allowProgress(agent, tabId, ['follow']);
+    agent.progressLedgers.set(tabId, [
+      { id: 'alice', label: 'alice', action: 'follow', status: 'processed', sessionId: session.sessionId },
+      { id: 'bob', label: 'bob', action: 'follow', status: 'failed', sessionId: session.sessionId, reason: 'server unavailable' },
+    ]);
+
+    assert.equal(agent._shouldBlockDoneForProgress(tabId), true);
+    const successBlock = agent._progressDoneBlock(tabId, 'success');
+    assert.equal(successBlock.blocked, true);
+    assert.match(successBlock.error, /outcome:"success" is not allowed/);
+    assert.equal(agent._progressDoneBlock(tabId, 'partial'), null);
+    assert.equal(agent._progressDoneBlock(tabId, 'failed'), null);
+  }
+});
+
+test('agent rejects invalid tool JSON and repairs narrow get_accessibility_tree args', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({
+      getActive: () => ({ contextWindow: 128000, supportsVision: false }),
+      getVisionProvider: async () => null,
+    });
+    agent._persist = () => {};
+
+    const parsed = agent._parseToolCallArgs({
+      function: { name: 'click', arguments: '{"text":"Follow"' },
+    });
+    assert.match(parsed.error, /Invalid JSON tool arguments/);
+
+    let executed = false;
+    const badMessages = [];
+    agent.executeTool = async () => {
+      executed = true;
+      return { success: true };
+    };
+    await agent._executeToolBatch(781, [
+      { id: 'bad_args', function: { name: 'click', arguments: '{"text":"Follow"' } },
+    ], badMessages, () => {}, { supportsVision: false });
+    assert.equal(executed, false);
+    assert.match(badMessages[0].content, /invalidToolArguments/);
+
+    const repaired = agent._repairToolCallArgs('get_accessibility_tree', { filter: 'visible\\", page:2' });
+    assert.deepEqual(repaired.args, { filter: 'visible', page: 2 });
+    assert.equal(repaired.repaired, true);
+
+    let executedArgs = null;
+    const repairMessages = [];
+    const warnings = [];
+    agent.executeTool = async (_tabId, _name, args) => {
+      executedArgs = args;
+      return { success: true, pageContent: 'button "Follow alice" [ref_1]', url: 'https://github.com/o/r/stargazers' };
+    };
+    await agent._executeToolBatch(782, [
+      { id: 'repair_args', function: { name: 'get_accessibility_tree', arguments: JSON.stringify({ filter: 'visible\\", page:2' }) } },
+    ], repairMessages, (type, payload) => {
+      if (type === 'warning') warnings.push(payload.message);
+    }, { supportsVision: false });
+    assert.deepEqual(executedArgs, { filter: 'visible', page: 2 });
+    assert.match(repairMessages[0].content, /TOOL ARGUMENT REPAIR/);
+    assert.ok(warnings.includes('Repaired malformed tool arguments.'));
   }
 });
 

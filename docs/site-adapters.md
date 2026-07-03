@@ -28,6 +28,13 @@ export function getActiveAdapter(url) {
 
 Only ONE adapter fires at a time, so prompt cost is fixed regardless of total adapter count.
 
+For federated platforms such as Mastodon, keep generic URL shapes conservative.
+Bare `/@user` and `/users/user` paths appear on many non-Mastodon sites, and the
+current adapter matcher only sees the URL string. Future work may integrate
+[`instances.social`](https://instances.social/api/doc/) as a skill-backed lookup
+or maintained known-instances list so candidate hosts can be verified before
+injecting Mastodon guidance more broadly.
+
 ### Injection Timing
 
 - **First turn**: the adapter's `notes` are appended to the first user message in `_enrichUserMessageWithCurrentPage()`.
