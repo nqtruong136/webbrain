@@ -726,6 +726,8 @@ test('matches mastodon profile and interaction URLs on any host', () => {
   assert.equal(getActiveAdapter('https://www.tiktok.com/@openai/video/1234567890123456789')?.name, 'tiktok');
   assert.equal(getActiveAdapterFx('https://www.tiktok.com/@openai')?.name, 'tiktok');
   assert.equal(getActiveAdapter('https://threads.net/@openai'), null);
+  assert.equal(getActiveAdapter('https://threads.com/@openai'), null);
+  assert.equal(getActiveAdapterFx('https://threads.com/@openai'), null);
   assert.equal(getActiveAdapter('https://patreon.com/@creator'), null);
   assert.equal(getActiveAdapter('https://ko-fi.com/@creator'), null);
   assert.equal(getActiveAdapter('https://example.com/@alice')?.name, 'mastodon');

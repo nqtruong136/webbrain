@@ -55,6 +55,8 @@ function safeDecodePath(pathname) {
 const NON_MASTODON_AT_PROFILE_HOSTS = new Set([
   'ko-fi.com',
   'patreon.com',
+  'substack.com',
+  'threads.com',
   'threads.net',
 ]);
 
