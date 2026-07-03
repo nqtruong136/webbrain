@@ -50,39 +50,12 @@ function safeDecodePath(pathname) {
   }
 }
 
-// Keep bare /@user matching host-agnostic for self-hosted Mastodon, but block
-// known non-Mastodon sites that use the same top-level @profile shape.
-const NON_MASTODON_AT_PROFILE_HOSTS = new Set([
-  'dev.to',
-  'ko-fi.com',
-  'patreon.com',
-  'substack.com',
-  'threads.com',
-  'threads.net',
-  'tiktok.com',
-]);
-
 function normalizedHostname(hostname) {
   return String(hostname || '').toLowerCase().replace(/\.$/, '');
 }
 
-function hostMatches(hostname, hosts) {
-  const host = normalizedHostname(hostname);
-  for (const blockedHost of hosts) {
-    if (host === blockedHost || host.endsWith(`.${blockedHost}`)) return true;
-  }
-  return false;
-}
-
-function isNonMastodonAtProfileHost(hostname) {
-  return hostMatches(hostname, NON_MASTODON_AT_PROFILE_HOSTS);
-}
-
-function isNonMastodonUsersPathHost(hostname) {
-  const host = normalizedHostname(hostname);
-  return host === 'gitlab.com' || host.startsWith('gitlab.');
-}
-
+// Keep direct URL matching conservative until adapters can verify page markup.
+// Bare /@user and /users/user routes are too common on non-Mastodon sites.
 function isLikelyMastodonUsersPathHost(hostname) {
   const host = normalizedHostname(hostname);
   return host === 'mastodon.social' || host.startsWith('mastodon.');
@@ -91,7 +64,6 @@ function isLikelyMastodonUsersPathHost(hostname) {
 function isMastodonUsersPath(hostname, path) {
   const match = /^\/users\/[A-Za-z0-9_]+(\/statuses\/[A-Za-z0-9._:-]+)?\/?$/.exec(path);
   if (!match) return false;
-  if (isNonMastodonUsersPathHost(hostname)) return false;
   return Boolean(match[1]) || isLikelyMastodonUsersPathHost(hostname);
 }
 
@@ -124,7 +96,6 @@ function isMastodonUrl(url) {
   const path = safeDecodePath(u.pathname);
   return /^\/@[A-Za-z0-9_]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?:\/\d+)?\/?$/.test(path)
     || /^\/@[A-Za-z0-9_]+(?:@[A-Za-z0-9.-]+\.[A-Za-z]{2,})?\/\d+\/?$/.test(path)
-    || (/^\/@[A-Za-z0-9_]+\/?$/.test(path) && !isNonMastodonAtProfileHost(u.hostname))
     || isMastodonUsersPath(u.hostname, path)
     || hasMastodonInteractionSignal(u, path);
 }

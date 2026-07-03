@@ -695,11 +695,9 @@ test('matches wordpress wp-admin on any host', () => {
 
 test('matches mastodon profile and interaction URLs on any host', () => {
   const urls = [
-    'https://types.pl/@discon',
     'https://mastoturk.org/@discon@types.pl',
     'https://mastodon.social/@Gargron/123456789012345678',
     'https://example.social/@alice@example.net',
-    'https://example.social/@alice',
     'https://example.social/@alice/123456789012345678',
     'https://mastodon.social/users/Gargron',
     'https://mastodon.social/users/Gargron/statuses/102136949141474775',
@@ -714,7 +712,7 @@ test('matches mastodon profile and interaction URLs on any host', () => {
     assert.equal(getActiveAdapterFx(url)?.name, 'mastodon', `firefox did not match ${url}`);
   }
 
-  const a = getActiveAdapter('https://types.pl/@discon');
+  const a = getActiveAdapter('https://mastoturk.org/@discon@types.pl');
   assert.match(a?.notes || '', /DOMAIN ONLY/);
   assert.match(a?.notes || '', /mastoturk\.org/);
   assert.match(a?.notes || '', /Do NOT manually synthesize/);
@@ -748,7 +746,10 @@ test('matches mastodon profile and interaction URLs on any host', () => {
   assert.equal(getActiveAdapter('https://example.com/authorize_interaction'), null);
   assert.equal(getActiveAdapter('https://example.com/interact?uri=https%3A%2F%2Fexample.com%2Fnot-mastodon'), null);
   assert.equal(getActiveAdapterFx('https://example.com/interact'), null);
-  assert.equal(getActiveAdapter('https://example.com/@alice')?.name, 'mastodon');
+  assert.equal(getActiveAdapter('https://types.pl/@discon'), null);
+  assert.equal(getActiveAdapterFx('https://types.pl/@discon'), null);
+  assert.equal(getActiveAdapter('https://example.com/@alice'), null);
+  assert.equal(getActiveAdapterFx('https://example.com/@alice'), null);
   assert.equal(getActiveAdapter('https://example.com/blog/@alice'), null);
 });
 
