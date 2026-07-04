@@ -4587,13 +4587,50 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     ].join(' ');
   }
 
+  _progressActionMentionedInTaskText(taskText, action) {
+    const canonical = normalizeProgressAction(action);
+    if (!canonical) return false;
+    const words = new Set([canonical.replace(/_/g, ' ')]);
+    const firstWord = canonical.split('_')[0];
+    if (firstWord) words.add(firstWord);
+    return Array.from(words).some(word => {
+      const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`\\b${escaped}(?:s|ed|ing)?\\b`, 'i').test(taskText);
+    });
+  }
+
+  _taskTextLooksLikeLegacyProgressWork(taskText, rows = []) {
+    const text = String(taskText || '').toLowerCase();
+    if (!/\b(?:\d+|all|each|every|remaining|rest|list|accounts?|users?|profiles?|items?|rows?|people|members|followers|following|stargazers|results|links|pages|contacts|records)\b/i.test(text)) {
+      return false;
+    }
+    const actions = Array.from(new Set((Array.isArray(rows) ? rows : [])
+      .map(row => normalizeProgressAction(row?.action))
+      .filter(Boolean)));
+    return actions.some(action => this._progressActionMentionedInTaskText(text, action));
+  }
+
+  _legacyUnscopedProgressRowsForResumeGuard(tabId, allRows = []) {
+    const rows = (Array.isArray(allRows) ? allRows : [])
+      .filter(row => row && !String(row.sessionId || row.session_id || '').trim());
+    if (!rows.length) return [];
+    if (this._currentTaskIsProgressContinuation(tabId)) return rows;
+
+    const latestTask = this._progressTaskTextKey(this._latestTaskText(tabId));
+    const originalTask = this._progressTaskTextKey(this._originalTaskText(tabId));
+    if (!latestTask || latestTask !== originalTask) return [];
+    return this._taskTextLooksLikeLegacyProgressWork(latestTask, rows) ? rows : [];
+  }
+
   _buildProgressGuardedResumeInstruction(tabId, modelInstruction = '') {
     const rawInstruction = String(modelInstruction || '').trim();
     const session = this._currentProgressSession(tabId) || this._deriveProgressSessionFromRows(tabId);
     const sessionId = String(session?.sessionId || '').trim();
     const safeSessionId = /^[A-Za-z0-9_.:-]{1,128}$/.test(sessionId) ? sessionId : '';
     const allRows = this.progressLedgers.get(tabId) || [];
-    const rows = safeSessionId ? this._rowsForProgressSession(tabId, safeSessionId, allRows) : allRows;
+    const rows = safeSessionId
+      ? this._rowsForProgressSession(tabId, safeSessionId, allRows)
+      : this._legacyUnscopedProgressRowsForResumeGuard(tabId, allRows);
     if (!rows.length) return rawInstruction;
 
     const counts = progressCounts(rows);

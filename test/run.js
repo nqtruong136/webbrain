@@ -13887,6 +13887,49 @@ test('schedule_resume falls back to all-sessions progress read for legacy unscop
   }
 });
 
+test('schedule_resume does not attach stale legacy progress rows to unrelated tasks', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 805 : 806;
+    agent.conversationModes.set(tabId, 'act');
+    agent.conversationIds.set(tabId, 'conv_unrelated_resume_guard');
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: "follow 100 accounts i don't follow yet here" },
+      { role: 'assistant', content: 'Paused.' },
+      { role: 'user', content: 'Check the deployment again in one minute.' },
+    ]);
+    agent.progressLedgers.set(tabId, [
+      { id: 'legacy_pending', label: 'legacy_pending', action: 'follow', status: 'pending' },
+    ]);
+
+    let scheduledPayload = null;
+    agent.setScheduler({
+      createResumeJob: async payload => {
+        scheduledPayload = payload;
+        return {
+          success: true,
+          scheduled: true,
+          jobId: 'resume_unrelated_guard_test',
+          scheduledAt: '2026-06-30T09:01:30.000Z',
+          summary: 'Resume scheduled.',
+          done: true,
+        };
+      },
+    });
+
+    const rawInstruction = 'Check whether the deployment has completed.';
+    const result = await agent.executeTool(tabId, 'schedule_resume', {
+      after_seconds: 60,
+      reason: 'wait for deployment',
+      resume_instruction: rawInstruction,
+    });
+
+    assert.equal(result.success, true, `${AgentClass.name}: unrelated schedule_resume should succeed`);
+    assert.equal(scheduledPayload?.args?.resume_instruction, rawInstruction, `${AgentClass.name}: unrelated resume should not be rewritten by stale progress rows`);
+  }
+});
+
 test('context compaction pins scheduled resume instructions', async () => {
   for (const AgentClass of [AgentCh, AgentFx]) {
     const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
