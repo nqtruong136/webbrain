@@ -16112,6 +16112,18 @@ const ADAPTERS = [
 - Labels are Turkish: "Giriş Yap" = log in, "Üye Ol" = sign up, "İlan Ver"/"Ücretsiz İlan Ver" = post a listing, "Filtrele" = apply filters, "Sıralama" = sort.
 - Posting an "İlan" requires login and a multi-step form; after submitting it appears under "İlanlarım" with a status such as "Onay Bekliyor" (pending approval) — it is NOT live immediately. Do not report it as published until the status shows it is active ("Yayında").`,
   },
+  {
+    name: 'trendyol',
+    category: 'general',
+    match: (url) => /^https?:\/\/(www\.)?trendyol\.com\//.test(url),
+    notes: `
+- Trendyol is Türkiye's largest e-commerce MARKETPLACE (many third-party sellers per product), fashion-first but sells everything. Turkish labels: "Sepete Ekle" = add to cart, "Sepetim" = cart, "Hemen Al" = buy now, "Favorilere Ekle" = wishlist (needs login), "Giriş Yap" = log in, "Sıralama" = sort, "Filtrele" = filter.
+- Variant trap: pick "Beden" (size) and/or "Renk" (color) BEFORE "Sepete Ekle". If none is selected the button is inert and the page prompts you to choose a size — select the variant first, then add.
+- Marketplace-seller trap: the same product has multiple sellers. "Sepete Ekle" buys from the CURRENTLY SELECTED seller; a cheaper or faster one is often listed under "Diğer Satıcılar" (other sellers). Check it before quoting "the price".
+- Basket-discount trap: the listed price is NOT always final. Trendyol applies "Sepette %X indirim" (extra discount in cart) and coupons only at the basket, so quote the CART total — not the card/detail price — when the user asks what they'll pay.
+- Sort with the "Sıralama" dropdown ("En düşük fiyat" = price low→high, "En yüksek fiyat", "En yeniler", "Çok satanlar"); set filters in the left rail ("Marka" brand, "Fiyat" price, "Beden", rating) instead of guessing URL params.
+- Add-to-cart opens a drawer ("Sepete Git" vs keep shopping); the cart lives at /sepetim and checkout requires login. "Trendyol Go" (food/grocery quick-commerce) is a separate flow from the marketplace catalog.`,
+  },
 
   {
     name: 'apple',

@@ -672,6 +672,16 @@ test('matches sahibinden.com and includes anti-bot guidance', () => {
   assert.match(a?.notes || '', /classifieds/i);
 });
 
+test('matches trendyol.com and includes marketplace guidance', () => {
+  assert.equal(getActiveAdapter('https://www.trendyol.com/')?.name, 'trendyol');
+  assert.equal(getActiveAdapter('https://trendyol.com/cok-satanlar')?.name, 'trendyol');
+  // lookalike / suffix domains must NOT match
+  assert.notEqual(getActiveAdapter('https://trendyol.com.phishing.example/')?.name, 'trendyol');
+  const a = getActiveAdapter('https://www.trendyol.com/sr?q=ayakkabi');
+  assert.match(a?.notes || '', /marketplace/i);
+  assert.match(a?.notes || '', /Sepete Ekle/);
+});
+
 test('matches stripe dashboard', () => {
   const a = getActiveAdapter('https://dashboard.stripe.com/payments');
   assert.equal(a?.name, 'stripe');
