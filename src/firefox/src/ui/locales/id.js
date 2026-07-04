@@ -84,7 +84,7 @@ export default {
   'sp.mode.ask.title': 'Bertanya tentang halaman — tanpa perubahan',
   'sp.mode.act': 'Aksi',
   'sp.mode.act.title': 'Biarkan WebBrain mengeklik, mengetik, dan menavigasi untukmu',
-  'sp.mode.act.warning': 'Mode aksi: WebBrain akan berinteraksi dengan halaman atas nama Anda. Gunakan dengan risiko Anda sendiri.',
+  'sp.mode.act.warning': 'Mode aksi: Gunakan dengan risiko Anda sendiri.',
   'sp.mode.act.confirm': 'Mode aksi memungkinkan WebBrain mengeklik, mengetik, menggulir, dan menavigasi atas nama Anda.\n\nIa berjalan di dalam sesi peramban Anda yang sudah terautentikasi, jadi memiliki akses yang sama seperti Anda di setiap situs tempat Anda masuk.\n\nPerhatikan tindakannya dan hentikan kapan saja dengan tombol ◼.\n\nLanjutkan?',
 
   'sp.input.ask_placeholder': 'Tanyakan apa saja tentang halaman ini...',

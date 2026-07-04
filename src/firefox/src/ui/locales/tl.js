@@ -84,7 +84,7 @@ export default {
   'sp.mode.ask.title': 'Magtanong tungkol sa pahina — walang ginagawang pagbabago',
   'sp.mode.act': 'Aksyon',
   'sp.mode.act.title': 'Hayaan ang WebBrain na mag-click, mag-type, at mag-navigate para sa iyo',
-  'sp.mode.act.warning': 'Aksyon mode: Makikipag-interaksyon ang WebBrain sa mga pahina sa ngalan mo. Gamitin nang may pag-iingat.',
+  'sp.mode.act.warning': 'Aksyon mode: Gamitin sa sariling panganib.',
   'sp.mode.act.confirm': 'Hinahayaan ng Aksyon mode ang WebBrain na mag-click, mag-type, mag-scroll, at mag-navigate para sa iyo.\n\nTumatakbo ito sa loob ng iyong naka-authenticate na browser session, kaya may parehong access ito na tulad mo sa bawat site kung saan ka naka-log in.\n\nBantayan ang ginagawa nito at itigil ito anumang oras gamit ang ◼ button.\n\nMagpatuloy?',
 
   'sp.input.ask_placeholder': 'Magtanong kahit ano tungkol sa pahinang ito...',

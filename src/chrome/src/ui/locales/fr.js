@@ -84,7 +84,7 @@ export default {
   'sp.mode.ask.title': 'Posez des questions sur la page — aucune modification',
   'sp.mode.act': 'Agir',
   'sp.mode.act.title': 'Laissez WebBrain cliquer, taper et naviguer à votre place',
-  'sp.mode.act.warning': 'Mode Agir : WebBrain interagira avec les pages à votre place. Utilisez-le à vos propres risques.',
+  'sp.mode.act.warning': 'Mode Agir : utilisez-le à vos propres risques.',
   'sp.mode.act.confirm': 'Le mode Agir permet à WebBrain de cliquer, taper, défiler et naviguer à votre place.\n\nIl s\'exécute dans votre session de navigateur authentifiée et a donc le même accès que vous sur chaque site auquel vous êtes connecté.\n\nSurveillez ce qu\'il fait et arrêtez-le à tout moment avec le bouton ◼.\n\nContinuer ?',
 
   'sp.input.ask_placeholder': 'Posez une question sur cette page...',

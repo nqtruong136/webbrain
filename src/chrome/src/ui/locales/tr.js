@@ -114,7 +114,7 @@ export default {
   'sp.mode.ask.title': 'Sayfa hakkında soru sor — hiçbir değişiklik yapılmaz',
   'sp.mode.act': 'Uygula',
   'sp.mode.act.title': 'WebBrain senin yerine tıklasın, yazsın ve gezinsin',
-  'sp.mode.act.warning': 'Uygula modu: WebBrain sayfalarla senin adına etkileşime girer. Kendi sorumluluğunda kullan.',
+  'sp.mode.act.warning': 'Uygula modu: Kendi sorumluluğunda kullan.',
   'sp.mode.act.confirm': 'Uygula modu, WebBrain\'in senin adına tıklamasına, yazmasına, kaydırmasına ve gezinmesine izin verir.\n\nKimliği doğrulanmış tarayıcı oturumunun içinde çalışır, yani giriş yaptığın her sitede senin sahip olduğun erişim yetkisine sahiptir.\n\nNe yaptığını izle ve istediğin an ◼ düğmesiyle durdur.\n\nDevam edilsin mi?',
 
   'sp.input.ask_placeholder': 'Bu sayfayla ilgili istediğini sor...',

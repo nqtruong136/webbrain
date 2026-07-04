@@ -52,7 +52,7 @@ export default {
   'sp.mode.ask.title': 'Ask questions about the page — no changes made',
   'sp.mode.act': 'Act',
   'sp.mode.act.title': 'Let WebBrain click, type, and navigate for you',
-  'sp.mode.act.warning': 'Act mode: WebBrain will interact with pages on your behalf. Use at your own risk.',
+  'sp.mode.act.warning': 'Act mode:  Use at your own risk.',
   'sp.mode.act.confirm': 'Act mode lets WebBrain click, type, scroll, and navigate on your behalf.\n\nIt runs inside your authenticated browser session, so it has the same access as you do on every site you\'re logged into.\n\nWatch what it does and stop it any time with the ◼ button.\n\nContinue?',
 
   'sp.input.ask_placeholder': 'Ask anything about this page...',

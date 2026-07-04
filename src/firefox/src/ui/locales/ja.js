@@ -84,7 +84,7 @@ export default {
   'sp.mode.ask.title': 'ページについて質問する — 変更は行いません',
   'sp.mode.act': '操作',
   'sp.mode.act.title': 'WebBrain にクリック・入力・操作を任せる',
-  'sp.mode.act.warning': '操作モード：WebBrain があなたの代わりにページを操作します。自己責任でご利用ください。',
+  'sp.mode.act.warning': '操作モード：自己責任でご利用ください。',
   'sp.mode.act.confirm': '操作モードでは WebBrain があなたの代わりにクリック・入力・スクロール・遷移を行います。\n\nログイン済みのブラウザセッション内で動くため、あなたがログインしている各サイトで、あなたと同じアクセス権を持ちます。\n\n動作を見守り、◼ ボタンでいつでも停止してください。\n\n続行しますか？',
 
   'sp.input.ask_placeholder': 'このページについて何でも聞いてください...',

@@ -30,7 +30,7 @@ export default {
   'sp.mode.ask.title': 'Zadawaj pytania o stronie — bez wprowadzania zmian',
   'sp.mode.act': 'Działaj',
   'sp.mode.act.title': 'Pozwól WebBrain klikać, pisać i nawigować za Ciebie',
-  'sp.mode.act.warning': 'Tryb działania: WebBrain będzie wchodzić w interakcję ze stronami w Twoim imieniu. Używasz na własne ryzyko.',
+  'sp.mode.act.warning': 'Tryb działania: Używasz na własne ryzyko.',
   'sp.mode.act.confirm': 'Tryb działania pozwala WebBrain klikać, pisać, przewijać i nawigować w Twoim imieniu.\n\nDziała w Twojej uwierzytelnionej sesji przeglądarki, więc ma taki sam dostęp jak Ty na każdej stronie, na której jesteś zalogowany.\n\nObserwuj jego działania i zatrzymaj je w dowolnej chwili przyciskiem ◼.\n\nKontynuować?',
   'sp.input.ask_placeholder': 'Zapytaj o cokolwiek na tej stronie...',
   'sp.input.placeholder_tip.help': 'Użyj /help, aby dowiedzieć się więcej o poleceniach ukośnikowych',
