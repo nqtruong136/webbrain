@@ -6279,6 +6279,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     const contextWindow = Number(provider?.contextWindow) || 128000;
     const contextChars = Math.max(0, Math.floor(contextWindow * this._contextCompactRatioForWindow(contextWindow) * 4));
     const baseBudget = Math.min(64 * 1024, Math.floor(contextChars * 0.2));
+    const minimumBudget = Math.min(baseBudget, 8 * 1024);
     const messages = Array.isArray(options.messages) ? options.messages : null;
     if (!messages) return Math.max(2000, baseBudget);
 
@@ -6291,7 +6292,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       ? Math.max(0, (lastReported * 4) - lastEstChars)
       : 0;
     const remainingChars = Math.max(0, contextChars - promptChars - fixedPromptOverheadChars);
-    return Math.max(0, Math.min(baseBudget, Math.floor(remainingChars * 0.5)));
+    const adaptiveBudget = Math.max(0, Math.min(baseBudget, Math.floor(remainingChars * 0.5)));
+    return Math.max(minimumBudget, adaptiveBudget);
   }
 
   _formatTextAttachmentBlock(att, charBudget) {
