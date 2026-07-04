@@ -444,7 +444,7 @@ export const AGENT_TOOLS = [
             },
             required: ['type'],
           },
-          mode: { type: 'string', enum: ['ask', 'act'], description: 'Run mode. Default act.' },
+          mode: { type: 'string', enum: ['ask', 'act', 'dev'], description: 'Run mode. Default act.' },
         },
         required: ['title', 'prompt', 'schedule', 'target'],
       },

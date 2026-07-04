@@ -3046,6 +3046,19 @@ test('getToolsForMode: mode/tier redesign exposes the intended normal and Dev to
   }
 });
 
+test('schedule_task tool schema advertises every supported run mode', () => {
+  for (const [label, getTools] of [
+    ['chrome', getToolsForModeCh],
+    ['firefox', getToolsForModeFx],
+  ]) {
+    const scheduleTask = getTools('act').find(t => t.function.name === 'schedule_task');
+    const modeSchema = scheduleTask?.function.parameters.properties.mode;
+
+    assert.ok(modeSchema, `[${label}] schedule_task must expose a mode schema`);
+    assert.deepEqual(modeSchema.enum, ['ask', 'act', 'dev'], `[${label}] schedule_task mode enum must match validator modes`);
+  }
+});
+
 test('Ask prompts do not advertise removed Ask tools', () => {
   for (const [label, prompt] of [
     ['chrome', SYSTEM_PROMPT_ASK_CH],
