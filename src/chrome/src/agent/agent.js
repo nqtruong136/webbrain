@@ -5385,7 +5385,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (!rows.length) return rawInstruction;
 
     const counts = progressCounts(rows);
-    if (!counts.unresolved && !isProgressIntentActive(session)) return rawInstruction;
+    if (!counts.unresolved) return rawInstruction;
 
     const readCall = safeSessionId
       ? `progress_read({sessionId: "${safeSessionId}", limit: 50})`

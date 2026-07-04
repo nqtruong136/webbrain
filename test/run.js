@@ -13930,6 +13930,52 @@ test('schedule_resume does not attach stale legacy progress rows to unrelated ta
   }
 });
 
+test('schedule_resume skips progress guard when active session has no unresolved rows', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 807 : 808;
+    agent.conversationModes.set(tabId, 'act');
+    agent.conversationIds.set(tabId, 'conv_terminal_progress_resume_guard');
+    agent._persist = () => {};
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Follow every account in the list.' },
+    ]);
+    allowProgress(agent, tabId, ['follow']);
+    agent._progressUpdate(tabId, {
+      items: [
+        { id: 'already_done', label: 'already_done', action: 'follow', status: 'processed' },
+      ],
+    });
+    assert.equal(agent._progressRead(tabId).counts.unresolved, 0, `${AgentClass.name}: setup should have no unresolved progress rows`);
+
+    let scheduledPayload = null;
+    agent.setScheduler({
+      createResumeJob: async payload => {
+        scheduledPayload = payload;
+        return {
+          success: true,
+          scheduled: true,
+          jobId: 'resume_terminal_guard_test',
+          scheduledAt: '2026-06-30T09:01:30.000Z',
+          summary: 'Resume scheduled.',
+          done: true,
+        };
+      },
+    });
+
+    const rawInstruction = 'Check whether the export is ready.';
+    const result = await agent.executeTool(tabId, 'schedule_resume', {
+      after_seconds: 60,
+      reason: 'wait for export',
+      resume_instruction: rawInstruction,
+    });
+
+    assert.equal(result.success, true, `${AgentClass.name}: terminal-only schedule_resume should succeed`);
+    assert.equal(scheduledPayload?.args?.resume_instruction, rawInstruction, `${AgentClass.name}: terminal-only progress session should not wrap unrelated resume instruction`);
+  }
+});
+
 test('context compaction pins scheduled resume instructions', async () => {
   for (const AgentClass of [AgentCh, AgentFx]) {
     const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
