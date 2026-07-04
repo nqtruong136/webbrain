@@ -4679,7 +4679,7 @@ const MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024; // matches PDF_PASSTHROUGH_MAX_BY
 // Text files are injected VERBATIM into the prompt as a text block (no
 // server-side processing like PDFs), so the 16MB binary cap would blow any
 // context window — cap them far lower.
-const MAX_TEXT_ATTACHMENT_BYTES = 512 * 1024;
+const MAX_TEXT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 function normalizeAttachmentTabId(tabId = renderedTabId ?? currentTabId) {
   if (tabId == null || tabId === '') return null;
@@ -4808,7 +4808,7 @@ async function handleAttachedFiles(fileList, tabId = renderedTabId ?? currentTab
       const maxBytes = isTextFile ? MAX_TEXT_ATTACHMENT_BYTES : MAX_ATTACHMENT_BYTES;
       if (file.size > maxBytes) {
         if (normalizeAttachmentTabId() === numericTabId) {
-          addMessage('system', systemHtml(tSystemHtml('sp.attach.too_large', { name: file.name, max: isTextFile ? '512KB' : '16MB' })));
+          addMessage('system', systemHtml(tSystemHtml('sp.attach.too_large', { name: file.name, max: isTextFile ? '5MB' : '16MB' })));
         }
         continue;
       }
