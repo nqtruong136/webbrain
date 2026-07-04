@@ -3800,6 +3800,35 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return String(text || '').replace(/\s+/g, ' ').trim();
   }
 
+  _progressTaskKeyHash(tabId) {
+    const text = this._progressTaskTextKey(this._latestTaskText(tabId) || this._originalTaskText(tabId)).toLowerCase();
+    if (!text) return '';
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return `tk_${hash.toString(16).padStart(8, '0')}`;
+  }
+
+  _adoptUnscopedProgressRows(tabId, sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) return false;
+    const taskKey = this._progressTaskKeyHash(tabId);
+    if (!taskKey) return false;
+    const rows = this.progressLedgers.get(tabId) || [];
+    let changed = false;
+    const next = rows.map(row => {
+      if (!row || typeof row !== 'object') return row;
+      if (String(row.sessionId || row.session_id || '').trim()) return row;
+      if (String(row.taskKey || '').trim() !== taskKey) return row;
+      changed = true;
+      return { ...row, sessionId: safeSessionId };
+    });
+    if (changed) this.progressLedgers.set(tabId, next);
+    return changed;
+  }
+
   _progressSessionMatchesTask(session, taskText, pageScope = '') {
     if (!session?.sessionId) return false;
     const wantedText = this._progressTaskTextKey(taskText);
@@ -4063,20 +4092,32 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         : item))
       : canonicalItems;
     const current = this.progressLedgers.get(tabId) || [];
-    const result = upsertLedgerItems(current, scopedItems, { source: opts.source || args.source || 'model', sessionId, pageScope });
+    const result = upsertLedgerItems(current, scopedItems, {
+      source: opts.source || args.source || 'model',
+      sessionId,
+      pageScope,
+      taskKey: this._progressTaskKeyHash(tabId),
+      allowReopen: args.reopen === true,
+    });
     if (!result.changed) {
       return { success: false, error: 'progress_update: no valid items were provided. Each item needs a stable id.' };
     }
     this.progressLedgers.set(tabId, result.rows);
+    if (sessionId) this._adoptUnscopedProgressRows(tabId, sessionId);
     this._syncProgressLedgerMessage(tabId);
     if (typeof this._persist === 'function') this._persist(tabId);
-    const visibleRows = sessionId ? this._rowsForProgressSession(tabId, sessionId, result.rows) : result.rows;
+    const ledgerRows = this.progressLedgers.get(tabId) || [];
+    const visibleRows = sessionId ? this._rowsForProgressSession(tabId, sessionId, ledgerRows) : ledgerRows;
+    const blockedDowngrades = result.blockedDowngrades || [];
     return {
       success: true,
       updated: result.updated,
       counts: progressCounts(visibleRows),
       unresolved: unresolvedLedgerRows(visibleRows, { limit: 20 }),
       ...(sessionId ? { sessionId } : {}),
+      ...(blockedDowngrades.length ? {
+        warnings: blockedDowngrades.map(b => `row ${b.id} is already ${b.keptStatus}; status change to ${b.requestedStatus} ignored. Pass reopen:true only if the user explicitly asked to redo it.`),
+      } : {}),
       note: 'progress ledger updated',
     };
   }
@@ -4616,14 +4657,19 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (!rows.length) return [];
     if (this._currentTaskIsProgressContinuation(tabId)) return rows;
 
+    const stamped = rows.filter(row => String(row.taskKey || '').trim());
+    if (stamped.length) {
+      const taskKey = this._progressTaskKeyHash(tabId);
+      return taskKey ? stamped.filter(row => row.taskKey === taskKey) : [];
+    }
+
     const latestTask = this._progressTaskTextKey(this._latestTaskText(tabId));
     const originalTask = this._progressTaskTextKey(this._originalTaskText(tabId));
     if (!latestTask || latestTask !== originalTask) return [];
     return this._taskTextLooksLikeLegacyProgressWork(latestTask, rows) ? rows : [];
   }
 
-  _buildProgressGuardedResumeInstruction(tabId, modelInstruction = '') {
-    const rawInstruction = String(modelInstruction || '').trim();
+  _progressRowsForResumeGuard(tabId) {
     const session = this._currentProgressSession(tabId) || this._deriveProgressSessionFromRows(tabId);
     const sessionId = String(session?.sessionId || '').trim();
     const safeSessionId = /^[A-Za-z0-9_.:-]{1,128}$/.test(sessionId) ? sessionId : '';
@@ -4636,6 +4682,27 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       rows = this._legacyUnscopedProgressRowsForResumeGuard(tabId, allRows);
       if (rows.length) readSessionId = '';
     }
+    return { rows, sessionId: readSessionId };
+  }
+
+  _augmentScheduledResumeMessage(tabId, userMessage) {
+    if (typeof userMessage !== 'string') return userMessage;
+    if ((this.conversationModes.get(tabId) || 'ask') !== 'act') return userMessage;
+    if (!this._isScheduledResumeTurn(userMessage)) return userMessage;
+    const { rows } = this._progressRowsForResumeGuard(tabId);
+    if (!rows.length) return userMessage;
+    const counts = progressCounts(rows);
+    if (!counts.unresolved) return userMessage;
+
+    const firstUnresolved = unresolvedLedgerRows(rows, { limit: 1 })[0];
+    const summary = `${formatLedgerSummary(rows, { maxRows: 18 })}${firstUnresolved ? `\nFirst unresolved row id: ${firstUnresolved.id}` : ''}`;
+    const preamble = `[Fresh progress ledger snapshot at resume time: ${counts.total} row(s), ${counts.unresolved} unresolved. The app-recorded rows below are the source of truth; they override any next-account/item hint in the resume instruction above.]`;
+    return `${userMessage}\n\n${preamble}\n${this._wrapUntrusted('progress_read', summary)}`;
+  }
+
+  _buildProgressGuardedResumeInstruction(tabId, modelInstruction = '') {
+    const rawInstruction = String(modelInstruction || '').trim();
+    const { rows, sessionId: readSessionId } = this._progressRowsForResumeGuard(tabId);
     if (!rows.length) return rawInstruction;
 
     const counts = progressCounts(rows);
@@ -7138,6 +7205,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   async _processMessageInner(tabId, userMessage, onUpdate, mode, attachments = []) {
     await this._hydrate(tabId);
     const messages = this.getConversation(tabId, mode);
+    // Scheduled resumes get the live ledger appended at fire time, so the
+    // model's first turn sees current row state even if it never calls
+    // progress_read; must run before the message is enriched/pushed.
+    userMessage = this._augmentScheduledResumeMessage(tabId, userMessage);
     const costState = this._newCostRunState();
     this.currentCostState.set(tabId, costState);
     // New user turn: drop transient "allow once" / "deny once" permission grants.

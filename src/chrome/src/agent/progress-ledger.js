@@ -183,6 +183,7 @@ export function upsertLedgerItems(rows = [], items = [], opts = {}) {
   });
 
   const updated = [];
+  const blockedDowngrades = [];
   for (const rawItem of Array.isArray(items) ? items : []) {
     const incoming = normalizeLedgerItem(rawItem, { source, now, sessionId: opts.sessionId, pageScope: opts.pageScope, taskKey: opts.taskKey });
     if (!incoming) continue;
@@ -197,7 +198,11 @@ export function upsertLedgerItems(rows = [], items = [], opts = {}) {
 
     const existing = next[existingIdx] || {};
     const autoActed = source === 'auto' && incoming.status === 'acted';
-    const keepTerminal = autoActed && isTerminalLedgerStatus(existing.status);
+    const downgrade = isTerminalLedgerStatus(existing.status) && !isTerminalLedgerStatus(incoming.status);
+    const keepTerminal = downgrade && (source === 'auto' || opts.allowReopen !== true);
+    if (keepTerminal && !autoActed) {
+      blockedDowngrades.push({ id: incoming.id, keptStatus: existing.status, requestedStatus: incoming.status });
+    }
     const merged = {
       ...existing,
       label: incoming.label || existing.label,
@@ -224,7 +229,7 @@ export function upsertLedgerItems(rows = [], items = [], opts = {}) {
     updated.push(merged);
   }
 
-  return { rows: next, updated, counts: progressCounts(next), changed: updated.length > 0 };
+  return { rows: next, updated, counts: progressCounts(next), changed: updated.length > 0, blockedDowngrades };
 }
 
 export function formatLedgerRow(row) {
