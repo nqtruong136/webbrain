@@ -3225,6 +3225,42 @@ test('agent runtime warnings preserve injected auto-screenshot recovery guidance
   }
 });
 
+test('runtime recovery hints mention Dev-only style tools only when available', () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({});
+    const actTools = new Set(['get_accessibility_tree', 'get_interactive_elements', 'click']);
+    const devTools = new Set([...actTools, 'inspect_element_styles']);
+
+    const actCoord = agent._coordinateClickRecoveryWarning({ x: 267, y: 226 }, actTools);
+    assert.match(actCoord, /COORDINATE CLICK WARNING/, `${label}: coordinate warning should identify the recovery warning`);
+    assert.match(actCoord, /latest injected auto_screenshot\/visual context/, `${label}: coordinate warning should keep visual-context guidance`);
+    assert.match(actCoord, /get_interactive_elements/, `${label}: act coordinate warning should use available fallback tools`);
+    assert.doesNotMatch(actCoord, /\binspect_element_styles\b/, `${label}: act coordinate warning must not mention Dev-only style inspection`);
+
+    const devCoord = agent._coordinateClickRecoveryWarning({ x: 267, y: 226 }, devTools);
+    assert.match(devCoord, /\binspect_element_styles\b/, `${label}: dev coordinate warning may mention style inspection`);
+
+    agent.conversationModes.set(9091, 'act');
+    const actNormalized = agent._normalizedCoordinateRecoveryError(9091, { x: 0.5, y: 0.25 });
+    assert.match(actNormalized, /get_interactive_elements/, `${label}: act normalized-coordinate warning should use available coordinate helpers`);
+    assert.match(actNormalized, /injected visual context only when it explicitly says image pixels map 1:1 to click\(x,y\)/, `${label}: normalized-coordinate warning should preserve visual-pixel safety guidance`);
+    assert.doesNotMatch(actNormalized, /\binspect_element_styles\b/, `${label}: act normalized-coordinate warning must not mention Dev-only style inspection`);
+
+    agent.conversationModes.set(9091, 'dev');
+    const devNormalized = agent._normalizedCoordinateRecoveryError(9091, { x: 0.5, y: 0.25 });
+    assert.match(devNormalized, /\binspect_element_styles\b/, `${label}: dev normalized-coordinate warning may mention style inspection`);
+
+    if (typeof agent._noProgressRecoveryWarning === 'function') {
+      const actNoProgress = agent._noProgressRecoveryWarning(actTools);
+      assert.match(actNoProgress, /get_accessibility_tree\(\{filter:"visible"\}\) or get_interactive_elements/, `${label}: act no-progress warning should use available read tools`);
+      assert.doesNotMatch(actNoProgress, /\binspect_element_styles\b/, `${label}: act no-progress warning must not mention Dev-only style inspection`);
+
+      const devNoProgress = agent._noProgressRecoveryWarning(devTools);
+      assert.match(devNoProgress, /\binspect_element_styles\b/, `${label}: dev no-progress warning may mention style inspection`);
+    }
+  }
+});
+
 test('getToolsForMode: skill tools are exposed only when enabled skills declare them', () => {
   for (const [label, prefix, getTools, normalizeSkills, buildDefs, buildRegistry, reservedNames] of [
     ['chrome', 'src/chrome', getToolsForModeCh, normalizeCustomSkillsCh, buildSkillToolDefinitionsCh, buildSkillToolRegistryCh, RESERVED_AGENT_TOOL_NAMES_CH],

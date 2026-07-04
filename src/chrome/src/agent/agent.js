@@ -1773,6 +1773,36 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    *   { action: 'return',   value: string }   → caller should return immediately
    *   { action: 'abort',   value: string }    → user requested abort mid-batch
    */
+  _canUseToolInCurrentBatch(allowedToolNames, name) {
+    return !!allowedToolNames?.has?.(name);
+  }
+
+  _coordinateClickRecoveryWarning(args = {}, allowedToolNames = AGENT_TOOL_NAMES) {
+    const cssBoxHint = this._canUseToolInCurrentBatch(allowedToolNames, 'inspect_element_styles')
+      ? 'then use get_accessibility_tree or inspect_element_styles to get CSS-pixel boxes'
+      : 'then use get_accessibility_tree or get_interactive_elements to choose a reachable target';
+    return `[COORDINATE CLICK WARNING: You've clicked at or near (${args.x}, ${args.y}) several times with no visible page change. The click may be missing its target. Try: (a) call get_interactive_elements to find a real selector, (b) click({text: "..."}) to target by visible text, or (c) inspect the latest injected auto_screenshot/visual context for element positions, ${cssBoxHint}. Try a different approach before clicking these coordinates again.]`;
+  }
+
+  _noProgressRecoveryWarning(allowedToolNames = AGENT_TOOL_NAMES) {
+    const rereadHint = this._canUseToolInCurrentBatch(allowedToolNames, 'inspect_element_styles')
+      ? 'get_accessibility_tree({filter:"visible"}) or inspect_element_styles'
+      : 'get_accessibility_tree({filter:"visible"}) or get_interactive_elements';
+    return `[NO PROGRESS DETECTED: The last click returned from the page, but the visible page snapshot did not change. Do not repeat the same click. Re-observe the page with ${rereadHint}, then choose a different target or explain the blocker.]`;
+  }
+
+  _devStyleInspectionAvailableForTab(tabId) {
+    return (this.conversationModes.get(tabId) || 'ask') === 'dev'
+      && this._resolvePromptTier() !== 'compact';
+  }
+
+  _normalizedCoordinateRecoveryError(tabId, args = {}) {
+    const pixelSourceHint = this._devStyleInspectionAvailableForTab(tabId)
+      ? 'use CSS-pixel positions from measured layout/inspect_element_styles, or from injected visual context only when it explicitly says image pixels map 1:1 to click(x,y).'
+      : 'use CSS-pixel positions from get_interactive_elements or from injected visual context only when it explicitly says image pixels map 1:1 to click(x,y).';
+    return `Coordinates (${args.x}, ${args.y}) look like normalized values (0-1 fractions of the viewport), not CSS pixels. The click tool expects CSS pixels (e.g. {x: 437, y: 156}). Prefer click_ax({ref_id}) after get_accessibility_tree or click({text: "..."}) over pixel clicks. If you must use pixels, ${pixelSourceHint}`;
+  }
+
   async _executeToolBatch(tabId, toolCalls, messages, onUpdate, provider, partialAssistantText = null, allowedToolNames = AGENT_TOOL_NAMES, step = null) {
     let didStateChange = false;
     // Set of tools whose side effect can navigate the page. We snapshot the
@@ -2123,7 +2153,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       } else if (loopCheck.kind === 'nudge' || coordCheck.kind === 'nudge') {
         effectiveKind = 'nudge';
         if (coordCheck.kind === 'nudge') {
-          nudgeWarning = `[COORDINATE CLICK WARNING: You've clicked at or near (${fnArgs.x}, ${fnArgs.y}) several times with no visible page change. The click may be missing its target. Try: (a) call get_interactive_elements to find a real selector, (b) click({text: "..."}) to target by visible text, or (c) inspect the latest injected auto_screenshot/visual context for element positions, then use get_accessibility_tree or inspect_element_styles to get CSS-pixel boxes. Try a different approach before clicking these coordinates again.]`;
+          nudgeWarning = this._coordinateClickRecoveryWarning(fnArgs, allowedToolNames);
         } else {
           nudgeWarning = loopCheck.warning;
         }
@@ -2181,8 +2211,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         onUpdate('warning', { message: 'Bulk API replay failed; falling back to UI for this shape.' });
       }
       if (toolResult?.noProgress) {
-        resultContent = resultContent +
-          '\n[NO PROGRESS DETECTED: The last click returned from the page, but the visible page snapshot did not change. Do not repeat the same click. Re-observe the page with get_accessibility_tree({filter:"visible"}) or inspect_element_styles, then choose a different target or explain the blocker.]';
+        resultContent += '\n' + this._noProgressRecoveryWarning(allowedToolNames);
         onUpdate('warning', { message: 'Click made no visible progress.' });
       }
       if (effectiveKind === 'nudge') {
@@ -8016,7 +8045,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           if (Number.isFinite(xn) && Number.isFinite(yn) && xn >= 0 && xn <= 1 && yn >= 0 && yn <= 1) {
             return {
               success: false,
-              error: `Coordinates (${args.x}, ${args.y}) look like normalized values (0–1 fractions of the viewport), not CSS pixels. The click tool expects CSS pixels (e.g. {x: 437, y: 156}). Prefer click_ax({ref_id}) after get_accessibility_tree or click({text: "..."}) over pixel clicks. If you must use pixels, use CSS-pixel positions from measured layout/inspect_element_styles, or from injected visual context only when it explicitly says image pixels map 1:1 to click(x,y).`,
+              error: this._normalizedCoordinateRecoveryError(tabId, args),
             };
           }
         }
