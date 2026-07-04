@@ -76,7 +76,6 @@ export default {
   'sp.inspection': 'WebBrain mula meneliti halaman ini',
 
   'sp.greeting.html': 'Hai! Saya <strong>WebBrain</strong>. Saya boleh membaca halaman ini, menjawab soalan, mengklik butang, mengisi borang, dan mengautomatikkan tugas berbilang langkah.',
-  'sp.greeting.hint': 'Cuba: "Rumuskan halaman ini" atau "Cari semua pautan tentang harga"',
   'sp.help_message': 'Bagaimana saya boleh membantu pada halaman ini?',
   'sp.cleared_message': 'Perbualan dikosongkan. Bagaimana saya boleh membantu?',
 
@@ -84,7 +83,7 @@ export default {
   'sp.mode.ask.title': 'Tanya soalan tentang halaman — tiada perubahan dibuat',
   'sp.mode.act': 'Lakukan',
   'sp.mode.act.title': 'Biarkan WebBrain mengklik, menaip, dan menavigasi untuk anda',
-  'sp.mode.act.warning': 'Mod Lakukan: WebBrain akan berinteraksi dengan halaman bagi pihak anda. Gunakan atas risiko anda sendiri.',
+  'sp.mode.act.warning': 'Mod Lakukan: Gunakan atas risiko anda sendiri.',
   'sp.mode.act.confirm': 'Mod Lakukan membenarkan WebBrain mengklik, menaip, menatal dan menavigasi bagi pihak anda.\n\nIa berjalan di dalam sesi pelayar anda yang telah disahkan, jadi ia mempunyai akses yang sama seperti anda pada setiap laman web yang anda log masuk.\n\nPerhatikan tindakannya dan hentikan bila-bila masa dengan butang ◼.\n\nTeruskan?',
 
   'sp.input.ask_placeholder': 'Tanya apa-apa sahaja tentang halaman ini...',

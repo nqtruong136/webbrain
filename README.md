@@ -261,7 +261,7 @@ WebBrain accepts slash commands as the first thing on a line in the input box. T
 | `/allow-api` | **Per-conversation API mutation override.** Lifts the UI-first restriction so the agent may use POST/PUT/PATCH/DELETE via `fetch_url` when UI is failing. Badge appears while active; clears on `/reset`. |
 | `/dangerously-skip-permissions` | **Global permission-prompt bypass.** Turns off `Ask before consequential actions` without opening Settings. WebBrain will act without per-site prompts until you re-enable the setting. |
 | `/compact` | Force context compaction for the current conversation |
-| `/verbose` | Toggle verbose/compact tool display (same as the toolbar button) |
+| `/verbose` | Toggle verbose/compact tool display |
 | `/reset` | Clear the conversation and all per-conversation flags |
 | `/screenshot` | Capture the visible tab and display the image inline in chat |
 | `/full-page-screenshot` | Capture the full scrollable page and display it inline in chat (Chrome only) |
@@ -302,15 +302,6 @@ Chrome side panel shortcuts work when the WebBrain side panel has focus.
 ## What's New
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full version history. Recent highlights include Plan before Act, native browser-history tools, repeated-click API shortcut hints, WebBrain Cloud 1.0, scheduled tasks, compact-mode improvements, and native PDF reading.
-
-## Roadmap
-
-- [X] **Conversation export/~~import~~** — Save ~~and load~~ chat histories (only export added, import not planned)
-- [X] **Custom skill tools** — User-imported skills can expose read-only HTTP and download-job tools via `webbrain-tools` manifests
-- [X] **Keyboard shortcuts** — Hotkeys for opening panel, sending messages, switching modes
-- [X] **Context menu integration** — Right-click → "Ask WebBrain about this"
-- [X] **Auto-screenshot vision context** — Send captured viewport context to multimodal models for visual understanding
-- [X] **Chrome Web Store / Firefox AMO** — Official store listings
 
 ## Adding a New Provider
 

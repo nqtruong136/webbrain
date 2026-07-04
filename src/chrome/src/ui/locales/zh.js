@@ -76,7 +76,6 @@ export default {
   'sp.inspection': 'WebBrain 已开始检查此页面',
 
   'sp.greeting.html': '你好！我是 <strong>WebBrain</strong>。我可以阅读此页面、回答问题、点击按钮、填写表单以及执行多步骤自动化任务。',
-  'sp.greeting.hint': '试试：「总结此页面」或「查找所有关于定价的链接」',
   'sp.help_message': '需要我在此页面做什么？',
   'sp.cleared_message': '会话已清除。有什么可以帮你的？',
 
@@ -84,7 +83,7 @@ export default {
   'sp.mode.ask.title': '就页面提问 — 不做任何修改',
   'sp.mode.act': '执行',
   'sp.mode.act.title': '让 WebBrain 代你点击、输入和导航',
-  'sp.mode.act.warning': '执行模式：WebBrain 将代你操作页面。请自行承担风险。',
+  'sp.mode.act.warning': '执行模式：请自行承担风险。',
   'sp.mode.act.confirm': '执行模式允许 WebBrain 代你点击、输入、滚动和导航。\n\n它在你已登录的浏览器会话中运行，因此在每个你登录的站点上拥有和你一样的权限。\n\n请注意观察其行为，并可随时通过 ◼ 按钮停止。\n\n是否继续？',
 
   'sp.input.ask_placeholder': '针对此页面随便问点什么...',

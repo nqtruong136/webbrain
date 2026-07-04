@@ -76,7 +76,6 @@ export default {
   'sp.inspection': 'WebBrain mulai memeriksa halaman ini',
 
   'sp.greeting.html': 'Halo! Saya <strong>WebBrain</strong>. Saya bisa membaca halaman ini, menjawab pertanyaan, mengeklik tombol, mengisi formulir, dan mengotomatiskan tugas multi-langkah.',
-  'sp.greeting.hint': 'Coba: "Ringkas halaman ini" atau "Temukan semua tautan tentang harga"',
   'sp.help_message': 'Ada yang bisa saya bantu di halaman ini?',
   'sp.cleared_message': 'Percakapan dihapus. Ada yang bisa saya bantu?',
 
@@ -84,7 +83,7 @@ export default {
   'sp.mode.ask.title': 'Bertanya tentang halaman — tanpa perubahan',
   'sp.mode.act': 'Aksi',
   'sp.mode.act.title': 'Biarkan WebBrain mengeklik, mengetik, dan menavigasi untukmu',
-  'sp.mode.act.warning': 'Mode aksi: WebBrain akan berinteraksi dengan halaman atas nama Anda. Gunakan dengan risiko Anda sendiri.',
+  'sp.mode.act.warning': 'Mode aksi: Gunakan dengan risiko Anda sendiri.',
   'sp.mode.act.confirm': 'Mode aksi memungkinkan WebBrain mengeklik, mengetik, menggulir, dan menavigasi atas nama Anda.\n\nIa berjalan di dalam sesi peramban Anda yang sudah terautentikasi, jadi memiliki akses yang sama seperti Anda di setiap situs tempat Anda masuk.\n\nPerhatikan tindakannya dan hentikan kapan saja dengan tombol ◼.\n\nLanjutkan?',
 
   'sp.input.ask_placeholder': 'Tanyakan apa saja tentang halaman ini...',

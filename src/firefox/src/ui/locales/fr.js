@@ -76,7 +76,6 @@ export default {
   'sp.inspection': 'WebBrain a commencé à inspecter cette page',
 
   'sp.greeting.html': 'Bonjour ! Je suis <strong>WebBrain</strong>. Je peux lire cette page, répondre à des questions, cliquer sur des boutons, remplir des formulaires et automatiser des tâches en plusieurs étapes.',
-  'sp.greeting.hint': 'Essayez : « Résume cette page » ou « Trouve tous les liens à propos des tarifs »',
   'sp.help_message': 'Comment puis-je vous aider avec cette page ?',
   'sp.cleared_message': 'Conversation effacée. Comment puis-je vous aider ?',
 
@@ -84,7 +83,7 @@ export default {
   'sp.mode.ask.title': 'Posez des questions sur la page — aucune modification',
   'sp.mode.act': 'Agir',
   'sp.mode.act.title': 'Laissez WebBrain cliquer, taper et naviguer à votre place',
-  'sp.mode.act.warning': 'Mode Agir : WebBrain interagira avec les pages à votre place. Utilisez-le à vos propres risques.',
+  'sp.mode.act.warning': 'Mode Agir : utilisez-le à vos propres risques.',
   'sp.mode.act.confirm': 'Le mode Agir permet à WebBrain de cliquer, taper, défiler et naviguer à votre place.\n\nIl s\'exécute dans votre session de navigateur authentifiée et a donc le même accès que vous sur chaque site auquel vous êtes connecté.\n\nSurveillez ce qu\'il fait et arrêtez-le à tout moment avec le bouton ◼.\n\nContinuer ?',
 
   'sp.input.ask_placeholder': 'Posez une question sur cette page...',

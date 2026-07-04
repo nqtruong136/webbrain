@@ -76,7 +76,6 @@ export default {
   'sp.inspection': 'WebBrain がこのページの解析を開始しました',
 
   'sp.greeting.html': 'こんにちは！<strong>WebBrain</strong> です。このページを読み、質問に答え、ボタンを押し、フォームに入力し、複数ステップのタスクを自動化できます。',
-  'sp.greeting.hint': 'お試し:「このページを要約して」または「料金に関するリンクを全部探して」',
   'sp.help_message': 'このページで何をお手伝いしましょうか？',
   'sp.cleared_message': '会話をクリアしました。何かお手伝いできますか？',
 
@@ -84,7 +83,7 @@ export default {
   'sp.mode.ask.title': 'ページについて質問する — 変更は行いません',
   'sp.mode.act': '操作',
   'sp.mode.act.title': 'WebBrain にクリック・入力・操作を任せる',
-  'sp.mode.act.warning': '操作モード：WebBrain があなたの代わりにページを操作します。自己責任でご利用ください。',
+  'sp.mode.act.warning': '操作モード：自己責任でご利用ください。',
   'sp.mode.act.confirm': '操作モードでは WebBrain があなたの代わりにクリック・入力・スクロール・遷移を行います。\n\nログイン済みのブラウザセッション内で動くため、あなたがログインしている各サイトで、あなたと同じアクセス権を持ちます。\n\n動作を見守り、◼ ボタンでいつでも停止してください。\n\n続行しますか？',
 
   'sp.input.ask_placeholder': 'このページについて何でも聞いてください...',

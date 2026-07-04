@@ -76,7 +76,6 @@ export default {
   'sp.inspection': 'WebBrain empezó a inspeccionar esta página',
 
   'sp.greeting.html': '¡Hola! Soy <strong>WebBrain</strong>. Puedo leer esta página, responder preguntas, hacer clic en botones, rellenar formularios y automatizar tareas de varios pasos.',
-  'sp.greeting.hint': 'Prueba: «Resume esta página» o «Busca todos los enlaces sobre precios»',
   'sp.help_message': '¿Cómo puedo ayudarte con esta página?',
   'sp.cleared_message': 'Conversación borrada. ¿En qué puedo ayudarte?',
 
@@ -84,7 +83,7 @@ export default {
   'sp.mode.ask.title': 'Haz preguntas sobre la página — sin hacer cambios',
   'sp.mode.act': 'Actuar',
   'sp.mode.act.title': 'Deja que WebBrain haga clic, escriba y navegue por ti',
-  'sp.mode.act.warning': 'Modo Actuar: WebBrain interactuará con las páginas en tu nombre. Úsalo bajo tu propia responsabilidad.',
+  'sp.mode.act.warning': 'Modo Actuar: Úsalo bajo tu propia responsabilidad.',
   'sp.mode.act.confirm': 'El modo Actuar permite a WebBrain hacer clic, escribir, desplazar y navegar en tu nombre.\n\nSe ejecuta dentro de tu sesión autenticada del navegador, por lo que tiene el mismo acceso que tú en cada sitio en el que has iniciado sesión.\n\nObserva lo que hace y detenlo en cualquier momento con el botón ◼.\n\n¿Continuar?',
 
   'sp.input.ask_placeholder': 'Pregunta lo que quieras sobre esta página...',

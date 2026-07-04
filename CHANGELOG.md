@@ -4,6 +4,13 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / browser manifest versions.
 
+## [20.5.5] - 2026-07-04
+
+### Changed
+- UX refinements: shortened the Chrome and Firefox Act-mode warning banner across all app locales to focus on the risk notice.
+- Removed the verbose tool-log button from the Chrome and Firefox sidepanel header to reduce clutter; verbose mode remains available from Settings and the `/verbose` slash command.
+- Updated release metadata, Settings subtitle versions, Chrome / Firefox manifests, package versions, and browser architecture docs for 20.5.5.
+
 ## [20.5.2] - 2026-07-04
 
 ### Changed
