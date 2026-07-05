@@ -17956,6 +17956,44 @@ test('store-review-prompt: positive ratings route to store URLs; feedback URL en
   assert.equal(buildFeedbackUrlCh({ rating: 2 }), buildFeedbackUrlFx({ rating: 2 }));
 });
 
+const STORE_REVIEW_LOCALE_KEYS = [
+  'sp.review.rating_title',
+  'sp.review.rating_body',
+  'sp.review.stars_label',
+  'sp.review.star_1',
+  'sp.review.star_2',
+  'sp.review.star_3',
+  'sp.review.star_4',
+  'sp.review.star_5',
+  'sp.review.positive_title',
+  'sp.review.positive_body',
+  'sp.review.open_store',
+  'sp.review.negative_title',
+  'sp.review.negative_body',
+  'sp.review.feedback_placeholder',
+  'sp.review.send_feedback',
+  'sp.review.thanks_title',
+  'sp.review.thanks_body',
+  'sp.review.not_now',
+  'sp.review.never',
+  'sp.review.close',
+];
+
+test('store-review-prompt: all locales include review prompt strings', () => {
+  for (const [label, dirRel] of [
+    ['chrome', 'src/chrome/src/ui/locales'],
+    ['firefox', 'src/firefox/src/ui/locales'],
+  ]) {
+    for (const file of fs.readdirSync(path.join(ROOT, dirRel)).filter(f => f.endsWith('.js'))) {
+      const locale = fs.readFileSync(path.join(ROOT, dirRel, file), 'utf8');
+      for (const key of STORE_REVIEW_LOCALE_KEYS) {
+        const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        assert.match(locale, new RegExp(`['"]${escapedKey}['"]:\\s*['"][^'"]+['"]`), `${label}/${file}: missing ${key}`);
+      }
+    }
+  }
+});
+
 test('sidepanel wires store review prompt after successful agent completion', () => {
   for (const [label, panelRel, htmlRel, localeRel] of [
     ['chrome', 'src/chrome/src/ui/sidepanel.js', 'src/chrome/src/ui/sidepanel.html', 'src/chrome/src/ui/locales/en.js'],
@@ -17974,6 +18012,7 @@ test('sidepanel wires store review prompt after successful agent completion', ()
     assert.match(panel, /mode !== 'ask'[\s\S]*?updatesContainStoreReviewFailure\(response\.updates\)[\s\S]*?parseSubscribeError/, `${label}: Ask completions should require a clean content response`);
     assert.match(panel, /function setStoreReviewStarPreview\(rating\)/, `${label}: star preview helper should exist`);
     assert.match(panel, /mouseenter', previewRating[\s\S]*?focus', previewRating[\s\S]*?mouseleave'[\s\S]*?setStoreReviewStarPreview\(storeReviewSelectedRating\)/, `${label}: star hover and focus should preview cumulative rating`);
+    assert.match(html, /data-i18n-aria-label="sp\.review\.star_5"/, `${label}: star aria labels should be localized`);
     assert.match(panel, /getStoreUrl\(getExtensionStoreKey\(\)\)/, `${label}: store link should pick chrome vs firefox URL`);
     assert.match(locale, /'sp\.review\.rating_title'/, `${label}: review strings should be localized`);
   }
