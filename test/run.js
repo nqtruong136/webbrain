@@ -675,6 +675,18 @@ test('matches gmail.com under mail.google.com', () => {
   assert.equal(a?.name, 'gmail');
 });
 
+test('matches google search across TLDs and includes udm=14, without hijacking other google apps', () => {
+  assert.equal(getActiveAdapter('https://www.google.com/search?q=test')?.name, 'google-search');
+  assert.equal(getActiveAdapter('https://google.co.uk/search?q=test')?.name, 'google-search');
+  assert.equal(getActiveAdapter('https://www.google.com.tr/search?q=x')?.name, 'google-search');
+  // must NOT hijack other google properties
+  assert.equal(getActiveAdapter('https://mail.google.com/mail/u/0/#inbox')?.name, 'gmail');
+  assert.notEqual(getActiveAdapter('https://docs.google.com/document/d/abc/edit')?.name, 'google-search');
+  assert.notEqual(getActiveAdapter('https://www.google.com/maps/place/x')?.name, 'google-search');
+  const a = getActiveAdapter('https://www.google.com/search?q=webbrain');
+  assert.match(a?.notes || '', /udm=14/);
+});
+
 test('matches twitter.com and x.com', () => {
   assert.equal(getActiveAdapter('https://twitter.com/elonmusk')?.name, 'twitter');
   assert.equal(getActiveAdapter('https://x.com/elonmusk')?.name, 'twitter');
