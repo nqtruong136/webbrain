@@ -12423,6 +12423,8 @@ test('submit detector source covers submit controls, Enter, set_field, iframes, 
     assert.match(agent, /name === 'set_field' && !args\?\.submit/, `${label}: set_field({submit:true}) precheck missing`);
     assert.match(agent, /set_field\(\{submit:true\}\)/, `${label}: set_field submit reason missing`);
     assert.match(agent, /Enter key in a form field/, `${label}: Enter-in-form-field detection missing`);
+    assert.match(agent, /Enter key on a submit button\/control/, `${label}: Enter-on-focused-submit detection missing`);
+    assert.match(agent, /toolName === 'press_keys'[\s\S]*isSubmitControl\(target\)[\s\S]*Enter key on a submit button\/control[\s\S]*isFormField\(target\)/, `${label}: focused submit controls should be checked before form fields for Enter`);
     assert.match(agent, /name === 'iframe_click' \|\| name === 'press_keys'/, `${label}: iframe/all-frame probing missing`);
     assert.match(agent, /allFrames/, `${label}: iframe equivalent submit checks should use allFrames`);
     assert.match(agent, /requestSubmit\|submit/, `${label}: execute_js submit/requestSubmit detection missing`);

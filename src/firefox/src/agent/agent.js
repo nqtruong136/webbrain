@@ -3704,6 +3704,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         return submitInfo(form, 'set_field({submit:true})', target, args.text || '');
       }
       if (toolName === 'press_keys') {
+        if (target && isSubmitControl(target)) {
+          return submitInfo(formForSubmitControl(target), 'Enter key on a submit button/control');
+        }
         const field = isFormField(target) ? target : null;
         const form = field?.form || field?.closest?.('form') || null;
         return form ? submitInfo(form, 'Enter key in a form field') : null;
