@@ -2802,7 +2802,9 @@ async function sendMessage(extraChatParams) {
       }
     } else if (renderToCurrentTab && currentTabId === tabId && res?.content && assistantEl) {
       const textEl = assistantEl.querySelector('.message-text');
-      if (textEl && !textEl.textContent.trim()) {
+      if (textEl && getStreamedAssistantText(textEl) === String(res.content)) {
+        renderAssistantTextUpdate(assistantEl, res.content);
+      } else if (textEl && !textEl.textContent.trim()) {
         if (!renderSubscribeError(textEl, res.content)) {
           textEl.innerHTML = formatMarkdown(res.content);
         }
@@ -2815,6 +2817,7 @@ async function sendMessage(extraChatParams) {
     }
   } finally {
     if (renderToCurrentTab && currentTabId === tabId) finalizeSteps(assistantEl);
+    clearAssistantTextStreamState(assistantEl);
     const wasAborted = abortRequested;
     if (renderToCurrentTab) {
       isProcessing = false;
@@ -2896,11 +2899,11 @@ function handleAgentUpdateMessage(msg) {
           const nextText = textEl.textContent + data.content;
           if (looksLikeRawToolCallText(nextText)) {
             textEl.textContent = '';
-            delete textEl.dataset.streamedAssistantText;
+            clearStreamedAssistantText(textEl);
             textEl.dataset.suppressToolCallStream = 'true';
           } else {
             textEl.textContent = nextText;
-            textEl.dataset.streamedAssistantText = nextText;
+            streamedAssistantTextByEl.set(textEl, nextText);
           }
         }
       }
@@ -3407,11 +3410,30 @@ function looksLikeRawToolCallText(text) {
   return /<\/?(?:tool_call|function|parameter)\b|<\|\/?tool_call|ref_id\s*["']?\s*[:=]\s*["']?ref_\d+/i.test(String(text || ''));
 }
 
+const streamedAssistantTextByEl = new WeakMap();
+
+function getStreamedAssistantText(textEl) {
+  return streamedAssistantTextByEl.get(textEl) || textEl?.dataset?.streamedAssistantText || '';
+}
+
+function clearStreamedAssistantText(textEl) {
+  if (!textEl) return;
+  streamedAssistantTextByEl.delete(textEl);
+  delete textEl.dataset.streamedAssistantText;
+}
+
+function clearAssistantTextStreamState(assistantEl) {
+  const textEl = assistantEl?.querySelector('.message-text');
+  if (!textEl) return;
+  clearStreamedAssistantText(textEl);
+  delete textEl.dataset.suppressToolCallStream;
+}
+
 function renderAssistantTextUpdate(assistantEl, content) {
   const textEl = assistantEl.querySelector('.message-text');
   if (!textEl) return;
 
-  const streamedText = textEl.dataset.streamedAssistantText || '';
+  const streamedText = getStreamedAssistantText(textEl);
   const isDuplicateStreamFinal = streamedText && streamedText === String(content);
 
   if (verboseMode && !isDuplicateStreamFinal) {
@@ -3429,7 +3451,7 @@ function renderAssistantTextUpdate(assistantEl, content) {
     textEl.innerHTML = formatMarkdown(content);
   }
 
-  delete textEl.dataset.streamedAssistantText;
+  clearStreamedAssistantText(textEl);
   delete textEl.dataset.suppressToolCallStream;
 
   // Add copy button if not already present
@@ -3444,12 +3466,12 @@ function clearTransientAssistantTextForToolCall() {
   if (!textEl) return;
   const text = textEl.textContent || '';
   if (!text.trim()) {
-    delete textEl.dataset.streamedAssistantText;
+    clearStreamedAssistantText(textEl);
     delete textEl.dataset.suppressToolCallStream;
     return;
   }
   textEl.textContent = '';
-  delete textEl.dataset.streamedAssistantText;
+  clearStreamedAssistantText(textEl);
   delete textEl.dataset.suppressToolCallStream;
 }
 
@@ -3653,7 +3675,9 @@ async function continueAgent() {
 
     if (currentTabId === tabId && res?.content && assistantEl) {
       const textEl = assistantEl.querySelector('.message-text');
-      if (textEl && !textEl.textContent.trim()) {
+      if (textEl && getStreamedAssistantText(textEl) === String(res.content)) {
+        renderAssistantTextUpdate(assistantEl, res.content);
+      } else if (textEl && !textEl.textContent.trim()) {
         if (!renderSubscribeError(textEl, res.content)) {
           textEl.innerHTML = formatMarkdown(res.content);
         }
@@ -3666,6 +3690,7 @@ async function continueAgent() {
     }
   } finally {
     if (currentTabId === tabId) finalizeSteps(assistantEl);
+    clearAssistantTextStreamState(assistantEl);
     isProcessing = false;
     abortRequested = false;
     syncSendButtonState();
