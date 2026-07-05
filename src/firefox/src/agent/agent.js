@@ -3420,6 +3420,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       } else if (globalThis.browser?.tabs?.executeScript) {
         const probeSource = Agent._submitActionProbe.toString();
         const safeName = ['click', 'click_ax', 'iframe_click', 'set_field', 'press_keys', 'execute_js'].includes(name) ? name : '';
+        const serializedSafeName = JSON.stringify(safeName).replace(/[<>\u2028\u2029/]/g, ch => (
+          ch === '<' ? '\\u003C'
+            : ch === '>' ? '\\u003E'
+            : ch === '/' ? '\\u002F'
+            : ch === '\u2028' ? '\\u2028'
+            : '\\u2029'
+        ));
         const serializedArgs = JSON.stringify(args || {}).replace(/[<>\u2028\u2029/]/g, ch => (
           ch === '<' ? '\\u003C'
             : ch === '>' ? '\\u003E'
@@ -3427,7 +3434,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             : ch === '\u2028' ? '\\u2028'
             : '\\u2029'
         ));
-        const code = `(() => { const __wbSubmitProbe = (${probeSource}); return __wbSubmitProbe(${JSON.stringify(safeName)}, ${serializedArgs}); })()`;
+        const code = `(() => { const __wbSubmitProbe = (${probeSource}); return __wbSubmitProbe(${serializedSafeName}, ${serializedArgs}); })()`;
         rawResults = await browser.tabs.executeScript(tabId, { code, allFrames });
       }
       const detected = (Array.isArray(rawResults) ? rawResults : [])
