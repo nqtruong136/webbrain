@@ -15659,6 +15659,17 @@ const ADAPTERS = [
 - View switching: 1=day, 2=week, 3=month, 4=year, 5=schedule, 6=4-day.`,
   },
   {
+    name: 'google-search',
+    category: 'general',
+    match: (url) => /^https?:\/\/(www\.)?google\.[a-z.]{2,}\/search\b/.test(url),
+    notes: `
+- For clean, parseable results append \`&udm=14\` to the search URL (e.g. \`google.com/search?q=...&udm=14\`). This is the "Web" filter — it drops the AI Overview, knowledge panel, "People also ask", and most widgets, leaving a plain list of result links that is far easier to extract than the default page. (\`udm=2\` is the Images tab if you need images instead.)
+- On the DEFAULT results page the organic results sit under the main results container (\`#rso\` inside \`#search\`); each is a heading link + snippet. Skip the AI Overview / ads block at the very top — don't quote it as "the top result".
+- Put constraints in the query instead of post-filtering: \`site:\`, \`filetype:\`, \`intitle:\`, \`"exact phrase"\`, \`-exclude\`, and \`before:\`/\`after:\` for dates.
+- Do NOT rely on \`&num=100\` to load more results per page — Google removed that in 2025; paginate via the "Next" link / \`&start=10\` (20, 30…).
+- Results are personalized and localized (location, sign-in, history); you can't fully neutralize that from the URL, so flag it when the user needs unbiased results.`,
+  },
+  {
     name: 'slack',
     category: 'general',
     match: (url) => /^https?:\/\/app\.slack\.com\//.test(url) || /\.slack\.com\//.test(url),
