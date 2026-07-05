@@ -3803,7 +3803,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   // Bare acknowledgments carry no task identity; the anchor walk must not
   // treat "ok" between steps as a task switch.
   _isProgressAckText(text) {
-    return /^(?:ok(?:ay)?|yes|yep|yeah|sure|thanks|thank\s+you|great|good|nice|cool|perfect|got\s+it|sounds\s+good|alright|fine)\b[\s\S]{0,12}$/i.test(text);
+    return /^(?:ok(?:ay)?|yes|yep|yeah|sure|thanks|thank\s+you|great|good|nice|cool|perfect|got\s+it|sounds\s+good|alright|fine)[\s\d.,!?;:~*+-]*$/i.test(text);
   }
 
   // Latest user task message that is NOT a continuation phrase ("continue",
@@ -3995,7 +3995,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       confidence: 1,
     }, {
       sessionId,
-      taskText: this._latestTaskText(tabId),
+      // Anchor, not latest: a session persisted during a "continue" turn must
+      // carry the real task identity, not the continuation phrase.
+      taskText: this._progressTaskAnchorText(tabId) || this._latestTaskText(tabId),
       source: 'ledger',
     });
   }
@@ -4025,7 +4027,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // "continue" refers to the latest non-continuation task, so a cached
       // session from an older, different task must not be revived by it.
       const anchored = session && this._progressSessionMatchesAnchoredTask(tabId, session) ? session : null;
-      return anchored || this._deriveProgressSessionForCurrentTask(tabId);
+      return anchored || this._deriveProgressSessionForCurrentTask(tabId, opts.readOnly ? { persist: false } : {});
     }
     if (!this._progressSessionMatchesTask(session, taskText, pageScope)) return null;
     if (pageScope && !session.pageScope) {
@@ -4819,7 +4821,12 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     let keepUnstamped = false;
     if (unstamped.length) {
       if (this._currentTaskIsProgressContinuation(tabId)) {
-        keepUnstamped = true;
+        // "continue" resumes unstamped legacy rows only while the anchored
+        // task is still the original one; continuing after an unrelated task
+        // must not resurrect them.
+        const anchor = this._progressTaskTextKey(this._progressTaskAnchorText(tabId));
+        const original = this._progressTaskTextKey(this._originalTaskText(tabId));
+        keepUnstamped = !anchor || anchor === original;
       } else {
         const latestTask = this._progressTaskTextKey(this._latestTaskText(tabId));
         const originalTask = this._progressTaskTextKey(this._originalTaskText(tabId));
@@ -4837,7 +4844,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   _progressRowsForResumeGuard(tabId) {
     const taskKey = this._progressTaskKeyHash(tabId);
-    let session = this._currentProgressSession(tabId);
+    let session = this._currentProgressSession(tabId, { readOnly: true });
     if (!session) {
       // Rebuild after a restart, read-only: guard/snapshot paths must not
       // write session state (progress_read is a read tool).

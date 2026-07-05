@@ -14506,6 +14506,75 @@ test('continue after an unrelated task does not revive the cached older session'
   }
 });
 
+test('ack filter skips filler but not short tasks that start with an ack word', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    assert.equal(agent._isProgressAckText('ok'), true, `${AgentClass.name}: bare ok is filler`);
+    assert.equal(agent._isProgressAckText('ok 29'), true, `${AgentClass.name}: ok + number is filler`);
+    assert.equal(agent._isProgressAckText('sounds good!'), true, `${AgentClass.name}: ack + punctuation is filler`);
+    assert.equal(agent._isProgressAckText('ok star repo'), false, `${AgentClass.name}: ack + task words is a task`);
+    assert.equal(agent._isProgressAckText('sure follow 5 accounts'), false, `${AgentClass.name}: ack-prefixed instruction is a task`);
+
+    const tabId = AgentClass === AgentCh ? 851 : 852;
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'collect emails from this list' },
+      { role: 'assistant', content: 'Done with the first batch.' },
+      { role: 'user', content: 'ok star repo' },
+    ]);
+    assert.equal(agent._progressTaskAnchorText(tabId), 'ok star repo', `${AgentClass.name}: an ack-prefixed task must become the new anchor`);
+  }
+});
+
+test('continue after an unrelated task does not resurrect unstamped legacy rows', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 853 : 854;
+    agent.conversationModes.set(tabId, 'act');
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: "follow 100 accounts i don't follow yet here" },
+      { role: 'assistant', content: 'Paused.' },
+      { role: 'user', content: 'Check the deployment again in one minute.' },
+      { role: 'assistant', content: 'Checked.' },
+      { role: 'user', content: 'continue' },
+    ]);
+    agent.progressLedgers.set(tabId, [
+      { id: 'legacy_pending', label: 'legacy_pending', action: 'follow', status: 'pending' },
+    ]);
+
+    const guarded = agent._legacyUnscopedProgressRowsForResumeGuard(tabId, agent.progressLedgers.get(tabId));
+    assert.deepEqual(guarded, [], `${AgentClass.name}: continue anchored to an unrelated task must not resurrect the old unstamped ledger`);
+  }
+});
+
+test('currentTaskOnly read on a continuation turn stays read-only', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 855 : 856;
+    agent.conversationModes.set(tabId, 'act');
+    agent._persist = () => {};
+    agent.conversations.set(tabId, [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: "follow 100 accounts i don't follow yet here" },
+    ]);
+    allowProgress(agent, tabId, ['follow']);
+    agent._progressUpdate(tabId, {
+      items: [{ id: 'next_real', label: 'next_real', action: 'follow', status: 'pending' }],
+    });
+    const sessionId = agent.progressSessions.get(tabId)?.sessionId;
+    agent.progressSessions.delete(tabId);
+    agent.conversations.get(tabId).push(
+      { role: 'assistant', content: 'Paused.' },
+      { role: 'user', content: 'continue' },
+    );
+
+    const read = agent._progressRead(tabId, { currentTaskOnly: true });
+    assert.equal(read.sessionId, sessionId, `${AgentClass.name}: continuation currentTaskOnly read should still find the task's rows`);
+    assert.equal(agent.progressSessions.get(tabId), undefined, `${AgentClass.name}: a continuation-turn read must not persist a session`);
+  }
+});
+
 test('currentTaskOnly progress_read does not mutate session state', async () => {
   for (const AgentClass of [AgentCh, AgentFx]) {
     const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
