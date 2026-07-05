@@ -16157,6 +16157,17 @@ const ADAPTERS = [
 - Checkout gates: there is a "minimum sepet tutarı" (minimum basket total) before you can order, and a "teslimat ücreti" (delivery fee) may apply — surface both before promising a total.
 - Stock is real-time and thin (fast delivery from a small local stock), so an item can go out of stock between adding and checkout — re-check the cart before finalizing.`,
   },
+  {
+    name: 'yemeksepeti',
+    category: 'general',
+    match: (url) => /^https?:\/\/(www\.)?yemeksepeti\.com\//.test(url),
+    notes: `
+- Yemeksepeti is Türkiye's largest FOOD-DELIVERY platform (order from restaurants); login-first for ordering. Turkish labels: "Adres" = delivery address, "Restoranlar" = restaurants, "Sepete Ekle" = add to cart, "Sepetim" = cart, "Giriş Yap" = log in.
+- LOCATION-FIRST trap: set a delivery "Adres" BEFORE anything — which restaurants appear, their menus, and whether they deliver all depend on the address; without one you can't see real options.
+- Restaurant-scoped cart: you order from ONE restaurant at a time. Pick a "Restoran", then add menu items — you cannot combine items from two restaurants in a single order.
+- Availability gates: a restaurant may be "Kapalı" (closed — can't order now) and each has a "minimum sepet tutarı" (minimum order total) plus a delivery fee. Check the open status and the minimum before promising delivery.
+- "Yemeksepeti Mahalle" (grocery/market quick delivery) is a separate flow from restaurant food ordering — don't expect restaurant menus there.`,
+  },
 
   {
     name: 'apple',
