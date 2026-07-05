@@ -7673,6 +7673,7 @@ test('completion confetti is default-on and success-only in sidepanel completion
     assert.match(panel, /completionConfettiEnabled = changes\.completionConfetti\.newValue !== false/, `${label}: sidepanel should live-sync completion confetti setting`);
     assert.match(panel, /function triggerCompletionConfetti\(\)/, `${label}: sidepanel should define the confetti animation trigger`);
     assert.match(panel, /function updatesContainSuccessfulDone\(updates\)/, `${label}: live completion success should be derived from done tool updates`);
+    assert.match(panel, /function updatesContainStoreReviewFailure\(updates\)/, `${label}: review prompt should ignore failed Ask completions`);
     assert.match(panel, /function isSuccessfulAskCompletion\(mode, response\)/, `${label}: sidepanel should classify successful Ask replies separately`);
     assert.match(panel, /if \(success\) triggerCompletionConfetti\(\);/, `${label}: confetti should only fire for successful completions`);
     assert.match(panel, /result\?\.outcome === 'success'/, `${label}: live done success should require explicit success outcome`);
@@ -17936,6 +17937,7 @@ test('store-review-prompt: eligibility requires successful tasks and cooling per
   );
   const shown = markStoreReviewShownCh(eligibleBase, { now });
   assert.equal(shouldShowStoreReviewCh(shown, { now, onboardingComplete: true }), false);
+  assert.equal(shouldShowStoreReviewCh({ ...shown, ratedAt: now, rating: 5 }, { now: now + MS_DAY, onboardingComplete: true }), false);
   assert.equal(
     shouldShowStoreReviewCh(shown, { now: now + (STORE_REVIEW_DISMISS_DAYS + 1) * MS_DAY, onboardingComplete: true }),
     true,
@@ -17969,7 +17971,7 @@ test('sidepanel wires store review prompt after successful agent completion', ()
     assert.match(panel, /from '\.\/store-review-prompt\.js'/, `${label}: sidepanel should import store-review-prompt`);
     assert.match(panel, /void maybePromptStoreReviewAfterSuccess\(\)/, `${label}: successful completion should trigger review prompt check`);
     assert.match(panel, /storeReviewSuccess:\s*currentTabId === tabId && promptEligibleCompletion/, `${label}: review prompt should count Ask completions separately from confetti success`);
-    assert.match(panel, /mode !== 'ask'[\s\S]*?attachment_rejected[\s\S]*?parseSubscribeError/, `${label}: Ask completions should require a clean content response`);
+    assert.match(panel, /mode !== 'ask'[\s\S]*?updatesContainStoreReviewFailure\(response\.updates\)[\s\S]*?parseSubscribeError/, `${label}: Ask completions should require a clean content response`);
     assert.match(panel, /function setStoreReviewStarPreview\(rating\)/, `${label}: star preview helper should exist`);
     assert.match(panel, /mouseenter', previewRating[\s\S]*?focus', previewRating[\s\S]*?mouseleave'[\s\S]*?setStoreReviewStarPreview\(storeReviewSelectedRating\)/, `${label}: star hover and focus should preview cumulative rating`);
     assert.match(panel, /getStoreUrl\(getExtensionStoreKey\(\)\)/, `${label}: store link should pick chrome vs firefox URL`);
