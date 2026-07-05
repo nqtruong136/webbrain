@@ -12392,6 +12392,22 @@ test('chrome submit detector fail-closes CDP-only submit selector targets', () =
   assert.match(agent, /selector resolves to a submit control in shadow DOM/, 'chrome: CDP selector fallback should force submit confirmation for CDP-only submit controls');
 });
 
+test('firefox submit detector serializes static probe as a function expression', () => {
+  const agent = fs.readFileSync(path.join(ROOT, 'src/firefox/src/agent/agent.js'), 'utf8');
+  assert.match(agent, /let probeSource = Agent\._submitActionProbe\.toString\(\);/, 'firefox: submit probe source should be normalized before injection');
+  assert.match(agent, /probeSource = `function \$\{probeSource\}`;/, 'firefox: static method source should be converted to a function expression');
+  assert.match(agent, /const __wbSubmitProbe = \(\$\{probeSource\}\);/, 'firefox: injected probe should evaluate the normalized function expression');
+});
+
+test('chrome submit detector probes iframe coordinate clicks in child frames', () => {
+  const agent = fs.readFileSync(path.join(ROOT, 'src/chrome/src/agent/agent.js'), 'utf8');
+  assert.match(agent, /_iframeRectsForCoordinate/, 'chrome: coordinate submit probing should locate iframe rectangles under the click');
+  assert.match(agent, /__wbTopLevelCoordinateFrames/, 'chrome: iframe coordinate rectangles should be passed into the page probe');
+  assert.match(agent, /allFrames = true;/, 'chrome: iframe coordinate submit probing should run in child frames');
+  assert.match(agent, /Number\(args\.x\) - Number\(frame\?\.left\)/, 'chrome: child-frame probing should translate top-level x coordinates');
+  assert.match(agent, /Number\(args\.y\) - Number\(frame\?\.top\)/, 'chrome: child-frame probing should translate top-level y coordinates');
+});
+
 test('submit probe index resolver stays aligned with content click ordering', () => {
   const cases = [
     ['chrome', 'src/chrome/src/content/content.js', /return queryInteractive\(\)\[index\] \|\| null/],

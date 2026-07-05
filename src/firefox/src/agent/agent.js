@@ -3422,7 +3422,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         });
         rawResults = Array.isArray(rawResults) ? rawResults.map(item => item?.result) : [];
       } else if (globalThis.browser?.tabs?.executeScript) {
-        const probeSource = Agent._submitActionProbe.toString();
+        let probeSource = Agent._submitActionProbe.toString();
+        if (!/^\s*(?:async\s+)?function\b/.test(probeSource)) {
+          probeSource = `function ${probeSource}`;
+        }
         const safeName = ['click', 'click_ax', 'iframe_click', 'set_field', 'press_keys', 'execute_js'].includes(name) ? name : '';
         const serializedSafeName = JSON.stringify(safeName).replace(/[<>\u2028\u2029/]/g, ch => (
           ch === '<' ? '\\u003C'

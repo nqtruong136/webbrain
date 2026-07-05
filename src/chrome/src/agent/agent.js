@@ -4142,13 +4142,21 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
 
     try {
-      const allFrames = name === 'iframe_click' || name === 'press_keys';
+      let probeArgs = args || {};
+      let allFrames = name === 'iframe_click' || name === 'press_keys';
+      if (name === 'click' && args?.x != null && args?.y != null && globalThis.chrome?.scripting?.executeScript) {
+        const frameCoordinateRects = await this._iframeRectsForCoordinate(tabId, args.x, args.y);
+        if (frameCoordinateRects.length) {
+          probeArgs = { ...(args || {}), __wbTopLevelCoordinateFrames: frameCoordinateRects };
+          allFrames = true;
+        }
+      }
       let rawResults = [];
       if (globalThis.chrome?.scripting?.executeScript) {
         rawResults = await chrome.scripting.executeScript({
           target: { tabId, ...(allFrames ? { allFrames: true } : {}) },
           func: Agent._submitActionProbe,
-          args: [name, args || {}],
+          args: [name, probeArgs],
         });
         rawResults = Array.isArray(rawResults) ? rawResults.map(item => item?.result) : [];
       } else if (globalThis.browser?.tabs?.executeScript) {
@@ -4193,6 +4201,56 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       );
     }
     return null;
+  }
+
+  async _iframeRectsForCoordinate(tabId, x, y) {
+    try {
+      if (!globalThis.chrome?.scripting?.executeScript) return [];
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (rawX, rawY) => {
+          const px = Number(rawX);
+          const py = Number(rawY);
+          if (!Number.isFinite(px) || !Number.isFinite(py)) return [];
+          return Array.from(document.querySelectorAll('iframe, frame'))
+            .map((frame, index) => {
+              try {
+                const rect = frame.getBoundingClientRect();
+                if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+                if (px < rect.left || py < rect.top || px > rect.right || py > rect.bottom) return null;
+                const rawUrl = frame.getAttribute('src') || frame.src || '';
+                let url = '';
+                let host = '';
+                try {
+                  if (rawUrl) {
+                    const parsed = new URL(rawUrl, location.href);
+                    url = parsed.href;
+                    host = parsed.hostname;
+                  }
+                } catch {}
+                return {
+                  left: rect.left,
+                  top: rect.top,
+                  width: rect.width,
+                  height: rect.height,
+                  url,
+                  host,
+                  index,
+                };
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean)
+            .slice(0, 10);
+        },
+        args: [x, y],
+      });
+      const rects = Array.isArray(results) ? results[0]?.result : null;
+      return Array.isArray(rects) ? rects.slice(0, 10) : [];
+    } catch {
+      return [];
+    }
   }
 
   async _detectCdpSubmitSelector(tabId, selector, host) {
@@ -4430,6 +4488,41 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         return Number.isFinite(index) ? all[index] || null : null;
       }
       if (args.x != null && args.y != null) {
+        const frameRects = Array.isArray(args.__wbTopLevelCoordinateFrames) ? args.__wbTopLevelCoordinateFrames : [];
+        const isTopWindow = (() => {
+          try { return window.top === window; } catch { return false; }
+        })();
+        if (!isTopWindow && frameRects.length) {
+          const currentUrl = url.toLowerCase();
+          const currentHost = host.toLowerCase().replace(/^www\./, '');
+          const matchesFrame = (frame) => {
+            const frameUrl = compact(frame?.url || '', 1000).toLowerCase();
+            let frameHost = compact(frame?.host || '', 300).toLowerCase().replace(/^www\./, '');
+            if (!frameHost && frameUrl) {
+              try { frameHost = new URL(frameUrl).hostname.toLowerCase().replace(/^www\./, ''); } catch {}
+            }
+            return (!!frameUrl && (currentUrl === frameUrl || currentUrl.startsWith(frameUrl)))
+              || (!!frameHost && (currentHost === frameHost || currentHost.endsWith(`.${frameHost}`)));
+          };
+          const matchingRects = frameRects.filter(matchesFrame);
+          const candidateRects = matchingRects.length ? matchingRects : (frameRects.length === 1 ? frameRects : []);
+          let fallbackTarget = null;
+          for (const frame of candidateRects) {
+            const localX = Number(args.x) - Number(frame?.left);
+            const localY = Number(args.y) - Number(frame?.top);
+            const width = Number(frame?.width);
+            const height = Number(frame?.height);
+            if (!Number.isFinite(localX) || !Number.isFinite(localY)) continue;
+            if (Number.isFinite(width) && (localX < 0 || localX > width)) continue;
+            if (Number.isFinite(height) && (localY < 0 || localY > height)) continue;
+            try {
+              const target = doc.elementFromPoint(localX, localY);
+              if (!fallbackTarget && target) fallbackTarget = target;
+              if (isSubmitControl(target)) return target;
+            } catch {}
+          }
+          if (fallbackTarget) return fallbackTarget;
+        }
         try { return doc.elementFromPoint(Number(args.x), Number(args.y)); } catch { return null; }
       }
       if (args.text) {
