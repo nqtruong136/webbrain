@@ -16136,6 +16136,17 @@ const ADAPTERS = [
 - Sort with the "Sıralama" dropdown ("En düşük fiyat" = price low→high, "En yüksek fiyat", "En yeniler", "En çok değerlendirilen"); set filters in the left rail ("Marka" brand, "Fiyat" price, "Satıcı" seller, "Kargo" shipping) rather than editing URL params.
 - "Hepsiexpress" (quick grocery/market delivery) and "Hepsiburada Seyahat" (travel) are separate flows from the main product catalog — don't expect the standard product/cart layout there.`,
   },
+  {
+    name: 'n11',
+    category: 'general',
+    match: (url) => /^https?:\/\/(www\.)?n11\.com\//.test(url),
+    notes: `
+- n11 is a Turkish e-commerce MARKETPLACE where products are sold by third-party stores ("mağaza"). Turkish labels: "Sepete Ekle" = add to cart, "Sepetim" = cart, "Giriş Yap" = log in, "Favorilerim" = wishlist (needs login), "Sıralama" = sort, "Filtrele"/"Filtreler" = filters.
+- Seller/store trap: each listing is fulfilled by a specific "mağaza" with its own "Mağaza Puanı" (store rating), price, and shipping. The same product may be cheaper from another store — check before quoting a price, and surface a very low store rating to the user.
+- Variant trap: for fashion/multi-option products, pick "Renk"/"Beden" (color/size) BEFORE "Sepete Ekle" — the add won't register until a required option is selected.
+- Price trap: coupons and "n11 Cüzdan" (wallet) balance can change the final total at checkout, so the listed price isn't always what the user pays — confirm the cart total.
+- Sort with the "Sıralama" dropdown ("En düşük fiyat" = price low→high, "En yüksek fiyat", "En yeniler"); set filters in the left rail ("Marka" brand, "Fiyat" price, store) rather than guessing URL params.`,
+  },
 
   {
     name: 'apple',

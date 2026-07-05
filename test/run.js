@@ -707,6 +707,16 @@ test('matches hepsiburada.com and includes marketplace guidance', () => {
   assert.match(a?.notes || '', /Diğer Satıcılar/);
 });
 
+test('matches n11.com and includes marketplace guidance', () => {
+  assert.equal(getActiveAdapter('https://www.n11.com/')?.name, 'n11');
+  assert.equal(getActiveAdapter('https://n11.com/telefon')?.name, 'n11');
+  // lookalike / suffix domains must NOT match
+  assert.notEqual(getActiveAdapter('https://n11.com.phishing.example/')?.name, 'n11');
+  const a = getActiveAdapter('https://www.n11.com/arama?q=telefon');
+  assert.match(a?.notes || '', /marketplace/i);
+  assert.match(a?.notes || '', /mağaza/i);
+});
+
 test('matches stripe dashboard', () => {
   const a = getActiveAdapter('https://dashboard.stripe.com/payments');
   assert.equal(a?.name, 'stripe');
