@@ -2948,6 +2948,26 @@ test('scheduled clarify resumes hide suggested actions immediately', () => {
   }
 });
 
+test('scheduled clarify cards hide suggested actions before rendering prompts', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const renderIdx = panel.indexOf('function renderClarifyCard(data) {');
+    const scheduledIdIdx = panel.indexOf('const scheduledJobId =', renderIdx);
+    const hideIdx = panel.indexOf('if (scheduledJobId) hideRecommendedActions();', scheduledIdIdx);
+    const appendIdx = panel.indexOf('content.appendChild(card);', scheduledIdIdx);
+    const scrollIdx = panel.indexOf('scrollToBottom();', scheduledIdIdx);
+    assert.notEqual(renderIdx, -1, `${label}: renderClarifyCard missing`);
+    assert.notEqual(scheduledIdIdx, -1, `${label}: scheduled clarify detection missing`);
+    assert.notEqual(hideIdx, -1, `${label}: scheduled clarify cards should hide suggested actions`);
+    assert.notEqual(appendIdx, -1, `${label}: clarify card append missing`);
+    assert.notEqual(scrollIdx, -1, `${label}: clarify card scroll missing`);
+    assert.equal(scheduledIdIdx < hideIdx && hideIdx < appendIdx && hideIdx < scrollIdx, true, `${label}: suggestions should hide before scheduled clarify prompts render and scroll`);
+  }
+});
+
 // ────────────────────────────────────────────────────────────────────────
 // Credential-field detection
 // ────────────────────────────────────────────────────────────────────────

@@ -3460,6 +3460,7 @@ function renderClarifyCard(data) {
   const tabId = data?.scheduledTabId ?? data?.tabId ?? currentTabId;
   if (tabId == null) return;
   const scheduledJobId = data?.scheduledJobId ? String(data.scheduledJobId) : '';
+  if (scheduledJobId) hideRecommendedActions();
   let assistantEl = currentAssistantEl;
   if (scheduledJobId && data.forceNewScheduledCard) {
     assistantEl = addMessage('assistant', '');
