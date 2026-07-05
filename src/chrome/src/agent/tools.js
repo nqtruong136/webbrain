@@ -1375,7 +1375,7 @@ TOOLS — use ONLY these:
 - set_field({ref_id, text}): Focus + clear + type in one call. PREFERRED for forms.
 - click({text}): Click by visible text. Fallback when no ref_id.
 - type_text({text}): Type into the focused element. Click the field first.
-- press_keys({key}): Press Escape, Tab, or Enter.
+- press_keys({key}): Press Escape, Tab, Enter, ArrowUp, ArrowDown, ArrowLeft, or ArrowRight.
 - navigate({url}): Go to a URL.
 - new_tab({url}): Open a URL in a new tab.
 - wait_for_element({selector}): Wait for an element to appear.
