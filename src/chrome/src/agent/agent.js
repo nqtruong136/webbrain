@@ -75,6 +75,7 @@ export class Agent {
     this._progressSessionCounter = 0;
     this.conversationModes = new Map(); // tabId -> 'ask' | 'act' | 'dev'
     this.conversationIds = new Map(); // tabId -> stable conversationId (regenerated on clearConversation)
+    this.plannerFollowUpSkipTabs = new Set(); // tabIds allowed one short follow-up after an approved try-mode plan
     this.hydratedTabs = new Set(); // tabIds we've already pulled from storage
     this.persistTimers = new Map(); // tabId -> debounce handle
     this.abortFlags = new Map(); // tabId -> boolean
@@ -287,6 +288,7 @@ export class Agent {
   }
 
   clearScratchpad(tabId) {
+    this.plannerFollowUpSkipTabs.delete(tabId);
     const messages = this.conversations.get(tabId);
     if (!messages) {
       return { success: true, existed: false, note: 'scratchpad already empty' };
@@ -3924,6 +3926,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   _shouldSkipPlannerForShortFollowUp(tabId, priorMessages, enriched, plannerMode) {
     if (plannerMode !== 'try') return false;
+    if (!this.plannerFollowUpSkipTabs.has(tabId)) return false;
     if (!this._hasApprovedPlannerHandoff(priorMessages)) return false;
     if (this._messageHasPlannerFollowUpAttachmentBlocks(enriched)) return false;
     const text = this._plannerFollowUpText(enriched);
@@ -3945,10 +3948,15 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     const priorMessages = runPlanner ? messages.slice() : null;
     messages.push(enriched);
     this._persist(tabId);
-    if (!runPlanner) return { proceed: true };
-    if (this._shouldSkipPlannerForShortFollowUp(tabId, priorMessages, enriched, plannerMode)) {
+    if (!runPlanner) {
+      if (this._isActionMode(mode)) this.plannerFollowUpSkipTabs.delete(tabId);
       return { proceed: true };
     }
+    if (this._shouldSkipPlannerForShortFollowUp(tabId, priorMessages, enriched, plannerMode)) {
+      this.plannerFollowUpSkipTabs.delete(tabId);
+      return { proceed: true };
+    }
+    this.plannerFollowUpSkipTabs.delete(tabId);
 
     const historyDigest = this._buildPlannerHistoryDigest(priorMessages);
     const gate = await this._runPlannerGate(tabId, enriched, onUpdate, costState, runId, historyDigest, tabInfo, plannerMode);
@@ -3973,6 +3981,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         // Note: the "Plan approved — running…" confirmation is rendered locally
         // by submitPlanReview in the sidepanel, so there's no plan_approved
         // agent_update to emit here (no handler consumed it).
+        if (plannerMode === 'try') this.plannerFollowUpSkipTabs.add(tabId);
       }
       this._persist(tabId);
     }
@@ -5000,6 +5009,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this._cancelClarifications(tabId, 'conversation cleared');
     this._cancelPendingPlans(tabId, 'conversation cleared');
     this.conversations.delete(tabId);
+    this.plannerFollowUpSkipTabs.delete(tabId);
     this.progressLedgers.delete(tabId);
     this.progressPageScopes.delete(tabId);
     this.progressSessions.delete(tabId);

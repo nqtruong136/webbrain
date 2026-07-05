@@ -17849,23 +17849,38 @@ test('planner gate: approving plan appends without deleting scratchpad facts', a
   });
 });
 
-test('planner gate: skips short follow-up turns after an approved plan in try mode', async () => {
+test('planner gate: skips one short follow-up after a newly approved try-mode plan', async () => {
   await withPlannerBrowserGlobals(async () => {
     for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
       const tabId = label === 'chrome' ? 9203 : 9204;
       const agent = new AgentClass({ getActive: () => ({}) });
       agent.setPlanBeforeActMode('try');
-      agent.conversations.set(tabId, [
-        { role: 'system', content: 'system' },
-        { role: 'user', content: 'help me revise this message' },
-        agent._buildScratchpadMessage('[Approved plan — pinned by planner]\n\n### Summary\nRevise the current draft.'),
-      ]);
+      agent.conversations.set(tabId, [{ role: 'system', content: 'system' }]);
 
       let plannerCalls = 0;
       agent._runPlannerGate = async () => {
         plannerCalls += 1;
-        return { proceed: true };
+        return plannerCalls === 1
+          ? {
+            proceed: true,
+            approvedScratchpadText: '[Approved plan — pinned by planner]\n\n### Summary\nRevise the current draft.',
+          }
+          : { proceed: true };
       };
+
+      const initial = await agent._maybeRunPlannerGate(
+        tabId,
+        agent.conversations.get(tabId),
+        { role: 'user', content: 'help me revise this message' },
+        () => {},
+        'act',
+        null,
+        null,
+      );
+
+      assert.equal(initial.proceed, true, `${label} should proceed after approving the initial plan`);
+      assert.equal(plannerCalls, 1, `${label} should run the planner for the initial act turn`);
+      assert.equal(agent.plannerFollowUpSkipTabs.has(tabId), true, `${label} should arm one short follow-up skip`);
 
       const followUp = "you get the idea, just make it send ready BUT don't send";
       const outcome = await agent._maybeRunPlannerGate(
@@ -17879,13 +17894,28 @@ test('planner gate: skips short follow-up turns after an approved plan in try mo
       );
 
       assert.equal(outcome.proceed, true, `${label} should proceed`);
-      assert.equal(plannerCalls, 0, `${label} should not run a fresh planner call for a short planned follow-up`);
+      assert.equal(plannerCalls, 1, `${label} should not run a fresh planner call for a short planned follow-up`);
       assert.equal(agent.conversations.get(tabId).at(-1).content, followUp, `${label} should still append the follow-up turn`);
+      assert.equal(agent.plannerFollowUpSkipTabs.has(tabId), false, `${label} should consume the one short follow-up skip`);
+
+      const secondFollowUp = await agent._maybeRunPlannerGate(
+        tabId,
+        agent.conversations.get(tabId),
+        { role: 'user', content: 'same again' },
+        () => {},
+        'act',
+        null,
+        null,
+      );
+
+      assert.equal(secondFollowUp.proceed, true, `${label} second short follow-up should proceed`);
+      assert.equal(plannerCalls, 2, `${label} second short follow-up should run the planner`);
+      assert.equal(agent.plannerFollowUpSkipTabs.has(tabId), false, `${label} second short follow-up should not leave a skip armed`);
     }
   });
 });
 
-test('planner gate: short-follow-up skip keeps planner for first, long, URL, attachment, and strict turns', async () => {
+test('planner gate: short-follow-up skip keeps planner for stale, first, long, URL, attachment, and strict turns', async () => {
   await withPlannerBrowserGlobals(async () => {
     for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
       const scenarios = [
@@ -17896,20 +17926,30 @@ test('planner gate: short-follow-up skip keeps planner for first, long, URL, att
           message: { role: 'user', content: 'do it' },
         },
         {
+          name: 'stale approved plan short follow-up',
+          seedApprovedPlan: true,
+          seedFollowUpSkip: false,
+          mode: 'try',
+          message: { role: 'user', content: 'do it' },
+        },
+        {
           name: 'long planned follow-up',
           seedApprovedPlan: true,
+          seedFollowUpSkip: true,
           mode: 'try',
           message: { role: 'user', content: 'x'.repeat(101) },
         },
         {
           name: 'planned follow-up with URL',
           seedApprovedPlan: true,
+          seedFollowUpSkip: true,
           mode: 'try',
           message: { role: 'user', content: 'open https://example.com' },
         },
         {
           name: 'planned follow-up with attachment block',
           seedApprovedPlan: true,
+          seedFollowUpSkip: true,
           mode: 'try',
           message: {
             role: 'user',
@@ -17922,6 +17962,7 @@ test('planner gate: short-follow-up skip keeps planner for first, long, URL, att
         {
           name: 'strict short planned follow-up',
           seedApprovedPlan: true,
+          seedFollowUpSkip: true,
           mode: 'strict',
           message: { role: 'user', content: 'do it' },
         },
@@ -17939,6 +17980,7 @@ test('planner gate: short-follow-up skip keeps planner for first, long, URL, att
           baseMessages.push(agent._buildScratchpadMessage('[Approved plan — pinned by planner]\n\n### Summary\nOriginal plan.'));
         }
         agent.conversations.set(tabId, baseMessages);
+        if (scenario.seedFollowUpSkip) agent.plannerFollowUpSkipTabs.add(tabId);
 
         let plannerCalls = 0;
         agent._runPlannerGate = async () => {
@@ -17958,7 +18000,37 @@ test('planner gate: short-follow-up skip keeps planner for first, long, URL, att
 
         assert.equal(outcome.proceed, true, `${label}: ${scenario.name} should proceed`);
         assert.equal(plannerCalls, 1, `${label}: ${scenario.name} should run the planner`);
+        assert.equal(agent.plannerFollowUpSkipTabs.has(tabId), false, `${label}: ${scenario.name} should clear any stale short-follow-up skip`);
       }
+    }
+  });
+});
+
+test('planner gate: clearing scratchpad or conversation clears short-follow-up allowance', async () => {
+  await withPlannerBrowserGlobals(async () => {
+    for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+      const tabId = label === 'chrome' ? 9250 : 9251;
+      const agent = new AgentClass({ getActive: () => ({}) });
+      const seedMessages = () => [
+        { role: 'system', content: 'system' },
+        agent._buildScratchpadMessage('[Approved plan — pinned by planner]\n\n### Summary\nOriginal plan.'),
+      ];
+
+      agent.conversations.set(tabId, seedMessages());
+      agent.plannerFollowUpSkipTabs.add(tabId);
+      const clearedScratchpad = agent.clearScratchpad(tabId);
+      assert.equal(clearedScratchpad.existed, true, `${label} should clear the seeded scratchpad`);
+      assert.equal(agent.plannerFollowUpSkipTabs.has(tabId), false, `${label} scratchpad clear should clear the skip allowance`);
+
+      agent.plannerFollowUpSkipTabs.add(tabId);
+      const clearedMissingScratchpad = agent.clearScratchpad(tabId);
+      assert.equal(clearedMissingScratchpad.existed, false, `${label} second scratchpad clear should be a no-op`);
+      assert.equal(agent.plannerFollowUpSkipTabs.has(tabId), false, `${label} no-op scratchpad clear should still clear the skip allowance`);
+
+      agent.conversations.set(tabId, seedMessages());
+      agent.plannerFollowUpSkipTabs.add(tabId);
+      agent.clearConversation(tabId);
+      assert.equal(agent.plannerFollowUpSkipTabs.has(tabId), false, `${label} conversation clear should clear the skip allowance`);
     }
   });
 });
