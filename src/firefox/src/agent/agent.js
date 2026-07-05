@@ -3498,7 +3498,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           const byId = typeof root.getElementById === 'function' ? root.getElementById(rawId) : null;
           if (byId) return byId;
         } catch {}
-        try { return root.querySelector(`[id="${rawId.replace(/"/g, '\\"')}"]`); } catch {}
+        try {
+          if (typeof CSS !== 'undefined' && CSS && typeof CSS.escape === 'function') {
+            return root.querySelector(`#${CSS.escape(rawId)}`);
+          }
+          const escapedRawId = rawId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+          return root.querySelector(`[id="${escapedRawId}"]`);
+        } catch {}
       }
       try {
         const escaped = selector.replace(/(^|[^\\]):/g, '$1\\:');
