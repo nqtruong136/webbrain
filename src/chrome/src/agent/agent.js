@@ -4435,9 +4435,28 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       reason,
       ...summarizeForm(form, pendingEl, pendingValue),
     });
+    const labelControlFor = (el) => {
+      if (!el || el.nodeType !== 1 || String(el.tagName || '').toUpperCase() !== 'LABEL') return null;
+      let target = null;
+      try {
+        if (el.htmlFor) target = doc.getElementById(el.htmlFor);
+      } catch {}
+      try {
+        if (!target) target = el.querySelector('button,input,textarea,select');
+      } catch {}
+      try {
+        if (!target && el.nextElementSibling) {
+          const next = el.nextElementSibling;
+          if (/^(BUTTON|INPUT|TEXTAREA|SELECT)$/i.test(next.tagName || '')) target = next;
+          else target = next.querySelector?.('button,input,textarea,select') || null;
+        }
+      } catch {}
+      return target && target.nodeType === 1 ? target : null;
+    };
     const isSubmitControl = (el) => {
-      if (!el || el.nodeType !== 1) return false;
-      const candidate = el.closest?.('button,input,[role="button"],[onclick],[data-action]') || el;
+      const target = labelControlFor(el) || el;
+      if (!target || target.nodeType !== 1) return false;
+      const candidate = target.closest?.('button,input,[role="button"],[onclick],[data-action]') || target;
       const tag = String(candidate.tagName || '').toLowerCase();
       const type = String(candidate.getAttribute?.('type') || candidate.type || '').toLowerCase();
       const role = String(candidate.getAttribute?.('role') || '').toLowerCase();
@@ -4450,7 +4469,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       return false;
     };
     const formForSubmitControl = (el) => {
-      const candidate = el?.closest?.('button,input') || el;
+      const target = labelControlFor(el) || el;
+      const candidate = target?.closest?.('button,input') || target;
       return candidate?.form || candidate?.closest?.('form') || null;
     };
     const isFormField = (el) => {

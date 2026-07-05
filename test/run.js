@@ -12440,8 +12440,11 @@ test('submit detector source covers submit controls, Enter, set_field, iframes, 
     assert.match(agent, /return deepQuerySelector\(doc, args\.selector\)/, `${label}: selector submit probing should use the deep selector resolver`);
     assert.match(agent, /const safeQuerySelector = \(root, selector\)/, `${label}: selector submit probing should use the safe selector fallback`);
     assert.match(agent, /selector\.startsWith\('#'\)[\s\S]*const rawId = selector\.slice\(1\)\.replace[\s\S]*root\.getElementById\(rawId\)/, `${label}: safe selector fallback should handle bare ID selectors`);
-    assert.match(agent, /root\.querySelector\(`\[id="\$\{rawId\.replace/, `${label}: safe selector fallback should retry ID attribute selectors`);
+    assert.match(agent, /rawId\.replace\([\s\S]*\/"\/g[\s\S]*\)/, `${label}: safe selector fallback should escape quotes and backslashes`);
+    assert.match(agent, /root\.querySelector\(`(?:#\$\{CSS\.escape\(rawId\)\}|\[id="\$\{(?:rawId\.replace|escapedRawId))/, `${label}: safe selector fallback should retry ID selectors`);
     assert.match(agent, /const escaped = selector\.replace[\s\S]*return root\.querySelector\(escaped\)/, `${label}: safe selector fallback should retry escaped colons`);
+    assert.match(agent, /const labelControlFor = \(el\) => \{[\s\S]*String\(el\.tagName \|\| ''\)\.toUpperCase\(\) !== 'LABEL'[\s\S]*el\.htmlFor[\s\S]*doc\.getElementById\(el\.htmlFor\)[\s\S]*button,input,textarea,select/, `${label}: submit probe should resolve labels to associated controls`);
+    assert.match(agent, /const target = labelControlFor\(el\) \|\| el;[\s\S]*const candidate = target\.closest\?\.\('button,input,\[role="button"\],\[onclick\],\[data-action\]'\)/, `${label}: submit-control detection should inspect label-backed controls`);
     assert.match(agent, /const findTopmostModal = \(\) => \{[\s\S]*dialog\[open\][\s\S]*\[role="dialog"\]\[aria-modal="true"\][\s\S]*\[class\*="DialogOverlay"\]/, `${label}: text submit probing should mirror modal scoping`);
     assert.match(agent, /Array\.from\(\(findTopmostModal\(\) \|\| doc\)\.querySelectorAll/, `${label}: text submit probing should search inside the topmost modal when present`);
   }
