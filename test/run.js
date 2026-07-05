@@ -727,6 +727,16 @@ test('matches getir.com and includes quick-commerce guidance', () => {
   assert.match(a?.notes || '', /Adres/);
 });
 
+test('matches yemeksepeti.com and includes food-delivery guidance', () => {
+  assert.equal(getActiveAdapter('https://www.yemeksepeti.com/')?.name, 'yemeksepeti');
+  assert.equal(getActiveAdapter('https://yemeksepeti.com/istanbul')?.name, 'yemeksepeti');
+  // lookalike / suffix domains must NOT match
+  assert.notEqual(getActiveAdapter('https://yemeksepeti.com.phishing.example/')?.name, 'yemeksepeti');
+  const a = getActiveAdapter('https://www.yemeksepeti.com/');
+  assert.match(a?.notes || '', /food-delivery/i);
+  assert.match(a?.notes || '', /Restoran/);
+});
+
 test('matches stripe dashboard', () => {
   const a = getActiveAdapter('https://dashboard.stripe.com/payments');
   assert.equal(a?.name, 'stripe');
