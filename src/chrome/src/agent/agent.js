@@ -4148,9 +4148,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         });
         rawResults = Array.isArray(rawResults) ? rawResults.map(item => item?.result) : [];
       } else if (globalThis.browser?.tabs?.executeScript) {
-        const probeSource = Agent._submitActionProbe.toString();
-        const code = `(() => { const __wbSubmitProbe = { ${probeSource} }; return __wbSubmitProbe._submitActionProbe(${JSON.stringify(name)}, ${JSON.stringify(args || {})}); })()`;
-        rawResults = await browser.tabs.executeScript(tabId, { code, allFrames });
+        const code = `(() => {
+          const [__wbName, __wbArgs] = arguments;
+          const __wbSubmitProbe = {
+            _submitActionProbe: ${Agent._submitActionProbe.toString()}
+          };
+          return __wbSubmitProbe._submitActionProbe(__wbName, __wbArgs);
+        })()`;
+        rawResults = await browser.tabs.executeScript(tabId, { code, allFrames, args: [name, args || {}] });
       }
       const detected = (Array.isArray(rawResults) ? rawResults : [])
         .find(item => item && item.isSubmit === true);
