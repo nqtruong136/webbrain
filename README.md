@@ -345,6 +345,13 @@ All providers normalize to a common response format:
  </picture>
 </a>
 
+## Contributors
+
+<a href="https://github.com/webbrain-one/webbrain/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=webbrain-one/webbrain" />
+</a>
+
+Made with [contrib.rocks](https://contrib.rocks).
 
 ## License
 
