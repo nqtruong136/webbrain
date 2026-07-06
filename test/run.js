@@ -2895,6 +2895,96 @@ test('suggested actions live in chat body not input area', () => {
   }
 });
 
+test('suggested actions do not overlay chat messages', () => {
+  for (const [label, cssRel] of [
+    ['chrome', 'src/chrome/styles/sidepanel.css'],
+    ['firefox', 'src/firefox/styles/sidepanel.css'],
+  ]) {
+    const css = fs.readFileSync(path.join(ROOT, cssRel), 'utf8');
+    const match = css.match(/\.recommended-actions\s*\{([\s\S]*?)\n\}/);
+    assert.ok(match, `${label}: recommended actions CSS missing`);
+    const body = match[1];
+    assert.equal(/position\s*:\s*absolute\b/.test(body), false, `${label}: suggested actions must stay in normal chat flow`);
+    assert.equal(/inset\s*:\s*0\b/.test(body), false, `${label}: suggested actions must not cover the chat container`);
+    assert.equal(/z-index\s*:/.test(body), false, `${label}: suggested actions must not layer above messages`);
+  }
+});
+
+test('scheduled runs hide suggested actions immediately', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const runningIdx = panel.indexOf("} else if (event === 'running') {");
+    const isProcessingIdx = panel.indexOf('isProcessing = true;', runningIdx);
+    const hideIdx = panel.indexOf('hideRecommendedActions();', runningIdx);
+    const addAssistantIdx = panel.indexOf("currentAssistantEl = addMessage('assistant', '');", runningIdx);
+    assert.notEqual(runningIdx, -1, `${label}: scheduled running branch missing`);
+    assert.notEqual(isProcessingIdx, -1, `${label}: scheduled running branch should mark processing`);
+    assert.notEqual(hideIdx, -1, `${label}: scheduled running branch should hide suggested actions`);
+    assert.notEqual(addAssistantIdx, -1, `${label}: scheduled running branch should render assistant message`);
+    assert.equal(isProcessingIdx < hideIdx && hideIdx < addAssistantIdx, true, `${label}: suggestions should hide before scheduled output renders`);
+  }
+});
+
+test('scheduled clarify resumes hide suggested actions immediately', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const submitIdx = panel.indexOf('function submitClarify(');
+    const scheduledIdx = panel.indexOf('if (isScheduledClarify) {', submitIdx);
+    const isProcessingIdx = panel.indexOf('isProcessing = true;', scheduledIdx);
+    const hideIdx = panel.indexOf('hideRecommendedActions();', scheduledIdx);
+    const activityIdx = panel.indexOf("showActivity(t('sp.activity.thinking'));", scheduledIdx);
+    assert.notEqual(submitIdx, -1, `${label}: submitClarify missing`);
+    assert.notEqual(scheduledIdx, -1, `${label}: scheduled clarify branch missing`);
+    assert.notEqual(isProcessingIdx, -1, `${label}: scheduled clarify should mark processing`);
+    assert.notEqual(hideIdx, -1, `${label}: scheduled clarify should hide suggested actions`);
+    assert.notEqual(activityIdx, -1, `${label}: scheduled clarify should show resumed activity`);
+    assert.equal(isProcessingIdx < hideIdx && hideIdx < activityIdx, true, `${label}: suggestions should hide before scheduled clarify activity resumes`);
+  }
+});
+
+test('scheduled clarify cards hide suggested actions before rendering prompts', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const renderIdx = panel.indexOf('function renderClarifyCard(data) {');
+    const scheduledIdIdx = panel.indexOf('const scheduledJobId =', renderIdx);
+    const hideIdx = panel.indexOf('if (scheduledJobId) hideRecommendedActions();', scheduledIdIdx);
+    const appendIdx = panel.indexOf('content.appendChild(card);', scheduledIdIdx);
+    const scrollIdx = panel.indexOf('scrollToBottom();', scheduledIdIdx);
+    assert.notEqual(renderIdx, -1, `${label}: renderClarifyCard missing`);
+    assert.notEqual(scheduledIdIdx, -1, `${label}: scheduled clarify detection missing`);
+    assert.notEqual(hideIdx, -1, `${label}: scheduled clarify cards should hide suggested actions`);
+    assert.notEqual(appendIdx, -1, `${label}: clarify card append missing`);
+    assert.notEqual(scrollIdx, -1, `${label}: clarify card scroll missing`);
+    assert.equal(scheduledIdIdx < hideIdx && hideIdx < appendIdx && hideIdx < scrollIdx, true, `${label}: suggestions should hide before scheduled clarify prompts render and scroll`);
+  }
+});
+
+test('hiding suggested actions cancels pending refreshes', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const match = panel.match(/function hideRecommendedActions\(\) \{([\s\S]*?)\n\}/);
+    assert.ok(match, `${label}: hideRecommendedActions missing`);
+    const body = match[1];
+    const invalidateIdx = body.indexOf('recommendationsRequestId += 1;');
+    const clearIdx = body.indexOf('recommendedActionsListEl.replaceChildren();');
+    assert.notEqual(invalidateIdx, -1, `${label}: hideRecommendedActions should invalidate pending refreshes`);
+    assert.notEqual(clearIdx, -1, `${label}: hideRecommendedActions should clear rendered suggestions`);
+    assert.equal(invalidateIdx < clearIdx, true, `${label}: pending refreshes should be invalidated before clearing suggestions`);
+  }
+});
+
 // ────────────────────────────────────────────────────────────────────────
 // Credential-field detection
 // ────────────────────────────────────────────────────────────────────────
