@@ -1229,7 +1229,7 @@ function renderProviders() {
       fields: [
         { key: 'apiKey', labelKey: 'st.provider.field.api_key', type: 'password', placeholder: 'hf_...' },
         { key: 'model', labelKey: 'st.provider.field.model', type: 'text', placeholder: 'zai-org/GLM-5.2',
-          suggestions: ['zai-org/GLM-5.2', 'Qwen/Qwen3.6-27B', 'moonshotai/Kimi-K2.5-Instruct'] },
+          suggestions: ['zai-org/GLM-5.2', 'Qwen/Qwen3.6-27B'] },
         { key: 'baseUrl', labelKey: 'st.provider.field.api_base_url', type: 'text', placeholder: 'https://router.huggingface.co/v1' },
         PROMPT_TIER_FIELD,
       ],
