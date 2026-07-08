@@ -818,6 +818,7 @@ test('user memory browser wiring is mirrored and non-blocking', () => {
     assert.doesNotMatch(background, /await enqueueUserMemoryExtractionAfterTurn/, `${label}: chat path must not await extraction enqueue`);
     assert.match(background, /agent\._isCostAllowanceError\?\.\(error\)/, `${label}: extraction cost limit should be silent`);
     assert.match(background, /async function markUserMemoryExtractionJobFailed\(jobId\)[\s\S]*attempts: attempts \+ 1/, `${label}: extraction jobs should retry once`);
+    assert.match(background, /await markUserMemoryExtractionJobFailed\(job\.id\);\s*scheduleUserMemoryExtractionDrain\(\);\s*return;/, `${label}: retryable extraction failures should reschedule the drain`);
 
     for (const command of ['/remember', '/show-memory', '/forget-memory']) {
       assert.match(sidepanel, new RegExp(command.replace('/', '\\/')), `${label}: sidepanel missing ${command}`);

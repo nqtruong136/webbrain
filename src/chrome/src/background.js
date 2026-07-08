@@ -353,6 +353,7 @@ async function drainUserMemoryExtractionQueue() {
           return;
         }
         await markUserMemoryExtractionJobFailed(job.id);
+        scheduleUserMemoryExtractionDrain();
         return;
       }
     }
