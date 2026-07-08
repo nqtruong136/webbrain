@@ -20,6 +20,7 @@ export default {
   'sp.record.transcribe_failed': 'Transcription failed: {error}',
   'sp.record.summarize': 'Summarize',
   'sp.btn.language': 'Language',
+  'sp.btn.history': 'Chat history',
   'sp.btn.settings': 'Settings',
   'sp.btn.clear': 'New conversation (clear history)',
   'sp.btn.send': 'Send',

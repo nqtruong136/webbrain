@@ -15,6 +15,11 @@ const btnRefresh = document.getElementById('btn-refresh');
 const btnExport = document.getElementById('btn-export');
 const btnDelete = document.getElementById('btn-delete');
 const btnClearAll = document.getElementById('btn-clear-all');
+const initialUrlFilter = new URLSearchParams(location.search).get('url') || '';
+
+if (initialUrlFilter) {
+  filterText.value = initialUrlFilter;
+}
 
 let allRecords = [];
 let allRuns = [];

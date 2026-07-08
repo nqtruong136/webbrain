@@ -10,6 +10,7 @@ export default {
   'sp.status.failed': 'Connection failed',
   'sp.btn.verbose': 'Toggle verbose tool log',
   'sp.btn.language': 'Language',
+  'sp.btn.history': 'Chat history',
   'sp.btn.settings': 'Settings',
   'sp.btn.clear': 'New conversation (clear history)',
   'sp.btn.send': 'Send',

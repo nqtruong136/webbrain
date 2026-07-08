@@ -97,6 +97,7 @@ export default {
   'sp.status.failed': 'Bağlantı başarısız',
   'sp.btn.verbose': 'Ayrıntılı araç günlüğünü aç/kapat',
   'sp.btn.language': 'Dil',
+  'sp.btn.history': 'Sohbet geçmişi',
   'sp.btn.settings': 'Ayarlar',
   'sp.btn.clear': 'Yeni konuşma (geçmişi sil)',
   'sp.btn.send': 'Gönder',

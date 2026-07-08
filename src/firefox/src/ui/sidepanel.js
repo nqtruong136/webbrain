@@ -318,6 +318,7 @@ const inputHighlightEl = document.getElementById('input-highlight');
 const sendBtn = document.getElementById('btn-send');
 const micBtn = document.getElementById('btn-mic');
 const clearBtn = document.getElementById('btn-clear');
+const historyBtn = document.getElementById('btn-history');
 const settingsBtn = document.getElementById('btn-settings');
 const verboseBtn = document.getElementById('btn-verbose');
 const providerSelect = document.getElementById('provider-select');
@@ -5197,6 +5198,29 @@ providerSelect.addEventListener('change', async () => {
     return;
   }
   await testConnection({ providerId });
+});
+
+async function openChatHistoryPage() {
+  let url = browser.runtime.getURL('src/ui/history.html');
+  try {
+    const tabInfo = await getTabInfoForHistory(currentTabId);
+    if (tabInfo?.url) {
+      const pageUrl = new URL(url);
+      pageUrl.searchParams.set('url', tabInfo.url);
+      url = pageUrl.toString();
+    }
+  } catch {
+    // Opening the unfiltered history page is still useful.
+  }
+  try {
+    await browser.tabs.create({ url });
+  } catch {
+    window.open(url, '_blank', 'noopener');
+  }
+}
+
+historyBtn?.addEventListener('click', () => {
+  void openChatHistoryPage();
 });
 
 settingsBtn.addEventListener('click', () => {
