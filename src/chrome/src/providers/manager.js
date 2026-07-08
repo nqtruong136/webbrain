@@ -1,6 +1,7 @@
 import { LlamaCppProvider } from './llamacpp.js';
 import { OpenAICompatibleProvider } from './openai.js';
 import { AnthropicProvider, AnthropicOAuthProvider } from './anthropic.js';
+import { signOutClaude } from './oauth-claude.js';
 // Static, NOT dynamic: this module runs in the MV3 service worker, where
 // `await import()` throws "import() is disallowed on ServiceWorkerGlobalScope".
 // The provider modules above already import this statically, so it's in the SW
@@ -60,6 +61,11 @@ export class ProviderManager {
     delete configs.webbrain;
     delete configs.openai_subscription;
     delete configs.claude_subscription;
+    // The claude_subscription provider entry above is gone and its
+    // settings-UI sign-out control with it, so purge any leftover OAuth
+    // token bundle here — otherwise a previously-signed-in user's raw
+    // access/refresh tokens would sit in storage with no UI path to clear them.
+    await signOutClaude();
     if (configs[WEBBRAIN_CLOUD_PROVIDER_ID]) {
       configs[WEBBRAIN_CLOUD_PROVIDER_ID].deviceGuid = await this._getDeviceGuid(data[WEBBRAIN_DEVICE_GUID_KEY]);
     }
