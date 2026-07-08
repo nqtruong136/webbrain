@@ -6439,6 +6439,45 @@ test('sidepanel deletes durable history when clearing conversations', () => {
   }
 });
 
+test('sidepanel ignores stale async history snapshot saves', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    assert.match(panel, /const chatHistorySaveSeqByTab = new Map\(\);[\s\S]*?let chatHistorySaveSeq = 0;/, `${label}: history snapshots should track per-tab save sequence`);
+    assert.match(panel, /function nextChatHistorySaveSeqForTab\(tabId\) \{[\s\S]*?chatHistorySaveSeq \+= 1;[\s\S]*?chatHistorySaveSeqByTab\.set\(numericTabId, chatHistorySaveSeq\);[\s\S]*?return chatHistorySaveSeq;[\s\S]*?\}/, `${label}: history snapshot sequence helper missing`);
+
+    const persistStart = panel.indexOf('async function persistChatHistorySnapshot(tabId, { refreshTabInfo = false } = {}) {');
+    assert.notEqual(persistStart, -1, `${label}: persistChatHistorySnapshot missing`);
+    const persistBody = panel.slice(persistStart, panel.indexOf('\n}\n\nfunction scheduleHistoryPersist', persistStart) + 2);
+    const userCheckIdx = persistBody.indexOf("if (!messages.some((message) => message.role === 'user')) return;");
+    const stampIdx = persistBody.indexOf('const saveSeq = nextChatHistorySaveSeqForTab(numericTabId);');
+    const hydrateIdx = persistBody.indexOf('await hydrateChatHistoryIdentity(numericTabId, agentMode, { refreshTabInfo });');
+    const staleGuardIdx = persistBody.indexOf('if (chatHistorySaveSeqByTab.get(numericTabId) !== saveSeq) return;');
+    const saveIdx = persistBody.indexOf('await saveChatHistoryRecord({');
+    assert.notEqual(userCheckIdx, -1, `${label}: snapshots should skip conversations without user messages`);
+    assert.notEqual(stampIdx, -1, `${label}: snapshots should stamp async saves`);
+    assert.notEqual(hydrateIdx, -1, `${label}: snapshots should hydrate identity before saving`);
+    assert.notEqual(staleGuardIdx, -1, `${label}: snapshots should skip stale async saves`);
+    assert.notEqual(saveIdx, -1, `${label}: snapshots should save only after stale guard`);
+    assert.equal(userCheckIdx < stampIdx && stampIdx < hydrateIdx && hydrateIdx < staleGuardIdx && staleGuardIdx < saveIdx, true, `${label}: stale snapshot guard must run before writing history`);
+
+    const resetMatch = panel.match(/async function resetChatHistoryStateForTab\(tabId\) \{([\s\S]*?)\n\}/);
+    assert.ok(resetMatch, `${label}: resetChatHistoryStateForTab missing`);
+    const resetBody = resetMatch[1];
+    const invalidateIdx = resetBody.indexOf('nextChatHistorySaveSeqForTab(numericTabId);');
+    const hydrateMissingIdx = resetBody.indexOf('await hydrateChatHistoryIdentity(numericTabId, agentMode);');
+    const recordSetIdx = resetBody.indexOf('const recordIdsToDelete = new Set([');
+    const mapDeleteIdx = resetBody.indexOf('chatHistorySaveSeqByTab.delete(numericTabId);');
+    assert.notEqual(invalidateIdx, -1, `${label}: reset should invalidate in-flight history saves`);
+    assert.notEqual(hydrateMissingIdx, -1, `${label}: reset should hydrate restored ids after invalidating saves`);
+    assert.notEqual(recordSetIdx, -1, `${label}: reset should collect record ids after invalidating saves`);
+    assert.notEqual(mapDeleteIdx, -1, `${label}: reset should clear save sequence state after deleting history`);
+    assert.equal(invalidateIdx < hydrateMissingIdx && hydrateMissingIdx < recordSetIdx && recordSetIdx < mapDeleteIdx, true, `${label}: clear/reset must invalidate stale saves before async deletion work`);
+  }
+});
+
 test('chrome sidepanel persists tab chat to the tab captured before debounce', () => {
   const panel = fs.readFileSync(path.join(ROOT, 'src/chrome/src/ui/sidepanel.js'), 'utf8');
   const start = panel.indexOf('function schedulePersist() {');

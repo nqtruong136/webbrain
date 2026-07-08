@@ -828,7 +828,9 @@ const chatHistoryRecordIdsByTab = new Map();
 const chatHistoryConversationIdsByTab = new Map();
 const chatHistoryCreatedAtByTab = new Map();
 const chatHistoryTabInfoByTab = new Map();
+const chatHistorySaveSeqByTab = new Map();
 let chatHistoryFallbackSeq = 0;
+let chatHistorySaveSeq = 0;
 let historyPersistTimer = null;
 let historyPersistTimerTabId = null;
 
@@ -888,6 +890,14 @@ function fallbackHistoryRecordId(tabId) {
   return chatHistoryRecordIdsByTab.get(numericTabId);
 }
 
+function nextChatHistorySaveSeqForTab(tabId) {
+  const numericTabId = Number(tabId);
+  if (!Number.isFinite(numericTabId)) return 0;
+  chatHistorySaveSeq += 1;
+  chatHistorySaveSeqByTab.set(numericTabId, chatHistorySaveSeq);
+  return chatHistorySaveSeq;
+}
+
 async function getTabInfoForHistory(tabId) {
   const numericTabId = Number(tabId);
   if (!Number.isFinite(numericTabId)) return { url: '', tabTitle: '' };
@@ -936,10 +946,12 @@ async function persistChatHistorySnapshot(tabId, { refreshTabInfo = false } = {}
   if (!Number.isFinite(numericTabId) || renderedTabId !== numericTabId) return;
   const messages = extractChatHistoryMessages(messagesEl);
   if (!messages.some((message) => message.role === 'user')) return;
+  const saveSeq = nextChatHistorySaveSeqForTab(numericTabId);
   if (!chatHistoryCreatedAtByTab.has(numericTabId)) {
     chatHistoryCreatedAtByTab.set(numericTabId, Date.now());
   }
   await hydrateChatHistoryIdentity(numericTabId, agentMode, { refreshTabInfo });
+  if (chatHistorySaveSeqByTab.get(numericTabId) !== saveSeq) return;
   const tabInfo = chatHistoryTabInfoByTab.get(numericTabId) || {};
   const recordId = chatHistoryRecordIdsByTab.get(numericTabId) || fallbackHistoryRecordId(numericTabId);
   const conversationId = chatHistoryConversationIdsByTab.get(numericTabId) || null;
@@ -988,6 +1000,7 @@ async function resetChatHistoryStateForTab(tabId) {
     historyPersistTimer = null;
     historyPersistTimerTabId = null;
   }
+  nextChatHistorySaveSeqForTab(numericTabId);
   if (
     !chatHistoryRecordIdsByTab.has(numericTabId) &&
     !chatHistoryConversationIdsByTab.has(numericTabId) &&
@@ -1009,6 +1022,7 @@ async function resetChatHistoryStateForTab(tabId) {
   chatHistoryConversationIdsByTab.delete(numericTabId);
   chatHistoryCreatedAtByTab.delete(numericTabId);
   chatHistoryTabInfoByTab.delete(numericTabId);
+  chatHistorySaveSeqByTab.delete(numericTabId);
 }
 
 function saveInputDraftForTab(tabId, text) {
