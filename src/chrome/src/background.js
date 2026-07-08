@@ -183,20 +183,64 @@ const USER_MEMORY_EXTRACTION_MAX_QUEUE = 10;
 const USER_MEMORY_EXTRACTION_DELAY_MS = 1200;
 let userMemoryExtractionDrainPromise = null;
 let userMemoryExtractionTimer = null;
+let userMemoryExtractionQueueLock = Promise.resolve();
 
 async function loadUserMemoryExtractionQueue() {
   const stored = await chrome.storage.local.get(USER_MEMORY_EXTRACTION_QUEUE_KEY);
   const queue = Array.isArray(stored[USER_MEMORY_EXTRACTION_QUEUE_KEY])
     ? stored[USER_MEMORY_EXTRACTION_QUEUE_KEY]
     : [];
-  return queue.slice(0, USER_MEMORY_EXTRACTION_MAX_QUEUE);
+  return queue.slice(-USER_MEMORY_EXTRACTION_MAX_QUEUE);
 }
 
 async function saveUserMemoryExtractionQueue(queue) {
   await chrome.storage.local.set({
     [USER_MEMORY_EXTRACTION_QUEUE_KEY]: Array.isArray(queue)
-      ? queue.slice(0, USER_MEMORY_EXTRACTION_MAX_QUEUE)
+      ? queue.slice(-USER_MEMORY_EXTRACTION_MAX_QUEUE)
       : [],
+  });
+}
+
+async function withUserMemoryExtractionQueueLock(task) {
+  const run = userMemoryExtractionQueueLock.then(task, task);
+  userMemoryExtractionQueueLock = run.catch(() => {});
+  return run;
+}
+
+async function updateUserMemoryExtractionQueue(updater) {
+  return withUserMemoryExtractionQueueLock(async () => {
+    const queue = await loadUserMemoryExtractionQueue();
+    const nextQueue = await updater(queue);
+    await saveUserMemoryExtractionQueue(Array.isArray(nextQueue) ? nextQueue : queue);
+    return nextQueue;
+  });
+}
+
+async function peekUserMemoryExtractionJob() {
+  let job = null;
+  await withUserMemoryExtractionQueueLock(async () => {
+    const queue = await loadUserMemoryExtractionQueue();
+    job = queue[0] || null;
+  });
+  return job;
+}
+
+async function removeUserMemoryExtractionJob(jobId) {
+  if (!jobId) return;
+  await updateUserMemoryExtractionQueue((queue) => {
+    return queue.filter((job) => job?.id !== jobId);
+  });
+}
+
+async function markUserMemoryExtractionJobFailed(jobId) {
+  if (!jobId) return;
+  await updateUserMemoryExtractionQueue((queue) => {
+    return queue.map((job) => {
+      if (job?.id !== jobId) return job;
+      const attempts = Number(job.attempts || 0);
+      if (attempts >= 1) return null;
+      return { ...job, attempts: attempts + 1 };
+    }).filter(Boolean);
   });
 }
 
@@ -216,17 +260,18 @@ async function enqueueUserMemoryExtraction(payload = {}) {
   const userText = normalizeUserMemoryText(payload.userText, 2000);
   const assistantText = normalizeUserMemoryText(payload.assistantText, 2000);
   if (!userText || !assistantText) return { queued: false, reason: 'empty' };
-  const queue = await loadUserMemoryExtractionQueue();
-  queue.push({
-    id: `memjob_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    userText,
-    assistantText,
-    mode: ['ask', 'act', 'dev'].includes(payload.mode) ? payload.mode : 'ask',
-    succeeded: payload.succeeded !== false,
-    attempts: 0,
-    createdAt: Date.now(),
+  await updateUserMemoryExtractionQueue((queue) => {
+    queue.push({
+      id: `memjob_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      userText,
+      assistantText,
+      mode: ['ask', 'act', 'dev'].includes(payload.mode) ? payload.mode : 'ask',
+      succeeded: payload.succeeded !== false,
+      attempts: 0,
+      createdAt: Date.now(),
+    });
+    return queue;
   });
-  await saveUserMemoryExtractionQueue(queue.slice(-USER_MEMORY_EXTRACTION_MAX_QUEUE));
   scheduleUserMemoryExtractionDrain();
   return { queued: true };
 }
@@ -245,12 +290,8 @@ async function drainUserMemoryExtractionQueue() {
     while (true) {
       const stored = await chrome.storage.local.get(USER_MEMORY_AUTO_CAPTURE_KEY);
       if (stored[USER_MEMORY_AUTO_CAPTURE_KEY] !== true) return;
-      const queue = await loadUserMemoryExtractionQueue();
-      const job = queue.shift();
-      if (!job) {
-        await saveUserMemoryExtractionQueue([]);
-        return;
-      }
+      const job = await peekUserMemoryExtractionJob();
+      if (!job) return;
 
       try {
         await customSkillsReady;
@@ -271,16 +312,13 @@ async function drainUserMemoryExtractionQueue() {
           await userMemoryStore.save(applied.store);
           await syncAgentUserMemoryFromStorage();
         }
-        await saveUserMemoryExtractionQueue(queue);
+        await removeUserMemoryExtractionJob(job.id);
       } catch (error) {
         if (agent._isCostAllowanceError?.(error)) {
-          await saveUserMemoryExtractionQueue(queue);
+          await removeUserMemoryExtractionJob(job.id);
           return;
         }
-        if (Number(job.attempts || 0) < 1) {
-          queue.push({ ...job, attempts: Number(job.attempts || 0) + 1 });
-        }
-        await saveUserMemoryExtractionQueue(queue);
+        await markUserMemoryExtractionJobFailed(job.id);
         return;
       }
     }

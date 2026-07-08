@@ -801,10 +801,16 @@ test('user memory browser wiring is mirrored and non-blocking', () => {
       assert.match(background, new RegExp(`case '${action}'`), `${label}: ${action} route missing`);
     }
     assert.match(background, new RegExp(`${runtime}\\.storage\\.local\\.get\\(USER_MEMORY_AUTO_CAPTURE_KEY\\)`), `${label}: auto-capture should be settings-gated`);
+    assert.match(background, /let userMemoryExtractionQueueLock = Promise\.resolve\(\);/, `${label}: extraction queue writes should be serialized`);
+    assert.match(background, /async function updateUserMemoryExtractionQueue\(updater\)[\s\S]*withUserMemoryExtractionQueueLock/, `${label}: extraction queue mutations should use the lock`);
+    assert.match(background, /await updateUserMemoryExtractionQueue\(\(queue\) => \{[\s\S]*queue\.push\(\{[\s\S]*createdAt: Date\.now\(\),[\s\S]*return queue;/, `${label}: enqueue should append through serialized queue update`);
+    assert.match(background, /const job = await peekUserMemoryExtractionJob\(\);/, `${label}: drain should not shift a stale queue snapshot before extraction`);
+    assert.match(background, /await removeUserMemoryExtractionJob\(job\.id\);/, `${label}: completed extraction should remove jobs from the current queue by id`);
+    assert.doesNotMatch(background, /const queue = await loadUserMemoryExtractionQueue\(\);[\s\S]*const job = queue\.shift\(\);/, `${label}: drain must not hold and save a stale queue snapshot`);
     assert.match(background, /queueMicrotask\(\(\) => \{[\s\S]*enqueueUserMemoryExtraction\(payload\)/, `${label}: extraction enqueue should be off-path`);
     assert.doesNotMatch(background, /await enqueueUserMemoryExtractionAfterTurn/, `${label}: chat path must not await extraction enqueue`);
     assert.match(background, /agent\._isCostAllowanceError\?\.\(error\)/, `${label}: extraction cost limit should be silent`);
-    assert.match(background, /attempts: Number\(job\.attempts \|\| 0\) \+ 1/, `${label}: extraction jobs should retry once`);
+    assert.match(background, /async function markUserMemoryExtractionJobFailed\(jobId\)[\s\S]*attempts: attempts \+ 1/, `${label}: extraction jobs should retry once`);
 
     for (const command of ['/remember', '/show-memory', '/forget-memory']) {
       assert.match(sidepanel, new RegExp(command.replace('/', '\\/')), `${label}: sidepanel missing ${command}`);
