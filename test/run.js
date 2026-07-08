@@ -6354,6 +6354,7 @@ test('sidepanel hydrates restored history ids before fallback records', () => {
     assert.ok(htmlHelper.includes("wrapper.innerHTML = String(html || '');"), `${label}: restored history helper should inspect the restored HTML`);
     assert.ok(htmlHelper.includes("classList?.contains('message')"), `${label}: restored history helper should look for message elements`);
     assert.ok(htmlHelper.includes("classList.contains('user')"), `${label}: restored history hydration should only run for chats with user messages`);
+    assert.match(panel, /async function hydrateRestoredChatHistory\(tabId, html\) \{[\s\S]*?if \(!html \|\| !chatHistoryHtmlHasUserMessage\(html\)\) return;[\s\S]*?await hydrateChatHistoryIdentity\(tabId, agentMode\);[\s\S]*?\}/, `${label}: restored chat helper should hydrate history ids before DOM restore`);
     assert.match(panel, /async function hydrateChatHistoryIdentity\(tabId, mode = agentMode, \{ allowFallback = false, refreshTabInfo = false \} = \{\}\) \{[\s\S]*?sendToBackground\('ensure_conversation_id'[\s\S]*?chatHistoryConversationIdsByTab\.set\(numericTabId, identity\.conversationId\);[\s\S]*?chatHistoryRecordIdsByTab\.set\(numericTabId, identity\.conversationId\);[\s\S]*?else if \(allowFallback && !chatHistoryRecordIdsByTab\.has\(numericTabId\)\) \{[\s\S]*?fallbackHistoryRecordId\(numericTabId\);/, `${label}: history identity helper should hydrate conversation ids before allowing fallback records`);
     assert.match(panel, /async function prepareChatHistoryForTurn\(tabId, mode\) \{\s*await hydrateChatHistoryIdentity\(tabId, mode, \{ allowFallback: true, refreshTabInfo: true \}\);\s*\}/, `${label}: send and continue preflight should use the shared history identity helper`);
 
@@ -6361,8 +6362,8 @@ test('sidepanel hydrates restored history ids before fallback records', () => {
     assert.ok(switchMatch, `${label}: switchToTab body missing`);
     const switchBody = switchMatch[1];
     const loadIdx = switchBody.indexOf('const html = await loadTabChat(newTabId);');
-    const restoredHasUserIdx = switchBody.indexOf('if (html && chatHistoryHtmlHasUserMessage(html)) {');
-    const hydrateRestoredIdx = switchBody.indexOf('await hydrateChatHistoryIdentity(newTabId, agentMode);');
+    const restoredHasUserIdx = switchBody.indexOf('if (html) {');
+    const hydrateRestoredIdx = switchBody.indexOf('await hydrateRestoredChatHistory(newTabId, html);');
     const postHydrateGuardIdx = switchBody.indexOf('if (currentTabId !== newTabId) return;', hydrateRestoredIdx);
     const restoreDomIdx = switchBody.indexOf('messagesEl.innerHTML = html;');
     assert.notEqual(loadIdx, -1, `${label}: switchToTab should load persisted tab chat`);
@@ -6371,6 +6372,19 @@ test('sidepanel hydrates restored history ids before fallback records', () => {
     assert.notEqual(postHydrateGuardIdx, -1, `${label}: switchToTab should drop stale restores after async history hydration`);
     assert.notEqual(restoreDomIdx, -1, `${label}: switchToTab should restore chat HTML`);
     assert.equal(loadIdx < restoredHasUserIdx && restoredHasUserIdx < hydrateRestoredIdx && hydrateRestoredIdx < postHydrateGuardIdx && postHydrateGuardIdx < restoreDomIdx, true, `${label}: restored chat ids must hydrate before the MutationObserver sees restored HTML`);
+
+    const initMatch = panel.match(/async function init\(\) \{([\s\S]*?)\n  \/\/ Start observing the messages container/);
+    assert.ok(initMatch, `${label}: init restore block missing`);
+    const initBody = initMatch[1];
+    const initLoadIdx = initBody.indexOf('const html = await loadTabChat(restoreTabId);');
+    const initHydrateIdx = initBody.indexOf('await hydrateRestoredChatHistory(restoreTabId, html);');
+    const initGuardIdx = initBody.indexOf('if (currentTabId === restoreTabId) {', initHydrateIdx);
+    const initDomIdx = initBody.indexOf('messagesEl.innerHTML = html;', initGuardIdx);
+    assert.notEqual(initLoadIdx, -1, `${label}: init should load restored tab chat`);
+    assert.notEqual(initHydrateIdx, -1, `${label}: init should hydrate restored chat history ids`);
+    assert.notEqual(initGuardIdx, -1, `${label}: init should recheck the active tab after hydration`);
+    assert.notEqual(initDomIdx, -1, `${label}: init should restore chat HTML after hydration`);
+    assert.equal(initLoadIdx < initHydrateIdx && initHydrateIdx < initGuardIdx && initGuardIdx < initDomIdx, true, `${label}: startup restore must hydrate ids before restoring HTML`);
 
     const persistMatch = panel.match(/async function persistChatHistorySnapshot\(tabId, \{ refreshTabInfo = false \} = \{\}\) \{([\s\S]*?)\n\}/);
     assert.ok(persistMatch, `${label}: persistChatHistorySnapshot missing`);
@@ -6401,12 +6415,14 @@ test('sidepanel deletes durable history when clearing conversations', () => {
     const conversationRecordIdx = resetBody.indexOf('chatHistoryConversationIdsByTab.get(numericTabId)');
     const deleteIdx = resetBody.indexOf('deleteChatHistoryRecord(recordId)');
     const mapDeleteIdx = resetBody.indexOf('chatHistoryRecordIdsByTab.delete(numericTabId)');
+    const hydrateMissingIdx = resetBody.indexOf('await hydrateChatHistoryIdentity(numericTabId, agentMode);');
     assert.notEqual(recordSetIdx, -1, `${label}: reset should collect durable record ids before clearing maps`);
     assert.notEqual(activeRecordIdx, -1, `${label}: reset should delete the active history record id`);
     assert.notEqual(conversationRecordIdx, -1, `${label}: reset should also delete the conversation id record`);
+    assert.notEqual(hydrateMissingIdx, -1, `${label}: reset should hydrate restored ids before collecting records to delete`);
     assert.notEqual(deleteIdx, -1, `${label}: reset should delete IndexedDB history records`);
     assert.notEqual(mapDeleteIdx, -1, `${label}: reset should clear in-memory history ids`);
-    assert.equal(recordSetIdx < deleteIdx && activeRecordIdx < deleteIdx && conversationRecordIdx < deleteIdx && deleteIdx < mapDeleteIdx, true, `${label}: durable history must be deleted before in-memory ids are dropped`);
+    assert.equal(hydrateMissingIdx < recordSetIdx && recordSetIdx < deleteIdx && activeRecordIdx < deleteIdx && conversationRecordIdx < deleteIdx && deleteIdx < mapDeleteIdx, true, `${label}: durable history must be hydrated and deleted before in-memory ids are dropped`);
 
     const helperStart = panel.indexOf('async function renderClearedConversationForTab(tabId)');
     assert.notEqual(helperStart, -1, `${label}: clear helper should be async`);

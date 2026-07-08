@@ -1153,6 +1153,11 @@ function chatHistoryHtmlHasUserMessage(html) {
   ));
 }
 
+async function hydrateRestoredChatHistory(tabId, html) {
+  if (!html || !chatHistoryHtmlHasUserMessage(html)) return;
+  await hydrateChatHistoryIdentity(tabId, agentMode);
+}
+
 function fallbackHistoryRecordId(tabId) {
   const numericTabId = Number(tabId);
   if (!chatHistoryRecordIdsByTab.has(numericTabId)) {
@@ -1263,6 +1268,14 @@ async function resetChatHistoryStateForTab(tabId) {
     clearTimeout(historyPersistTimer);
     historyPersistTimer = null;
     historyPersistTimerTabId = null;
+  }
+  if (
+    !chatHistoryRecordIdsByTab.has(numericTabId) &&
+    !chatHistoryConversationIdsByTab.has(numericTabId) &&
+    sameTabId(renderedTabId, numericTabId) &&
+    extractChatHistoryMessages(messagesEl).some((message) => message.role === 'user')
+  ) {
+    await hydrateChatHistoryIdentity(numericTabId, agentMode);
   }
   const recordIdsToDelete = new Set([
     chatHistoryRecordIdsByTab.get(numericTabId),
@@ -2126,10 +2139,13 @@ async function init() {
   if (restoreTabId != null) {
     const html = await loadTabChat(restoreTabId);
     if (currentTabId === restoreTabId && html) {
-      messagesEl.innerHTML = html;
-      messagesEl.querySelectorAll('[data-bound]').forEach(el => delete el.dataset.bound);
-      rebindRestoredMessageControls();
-      scrollToBottom();
+      await hydrateRestoredChatHistory(restoreTabId, html);
+      if (currentTabId === restoreTabId) {
+        messagesEl.innerHTML = html;
+        messagesEl.querySelectorAll('[data-bound]').forEach(el => delete el.dataset.bound);
+        rebindRestoredMessageControls();
+        scrollToBottom();
+      }
     }
   }
 
@@ -2239,8 +2255,8 @@ async function switchToTab(newTabId) {
     // Restore new tab's chat from memory or storage.
     const html = await loadTabChat(newTabId);
     if (currentTabId !== newTabId) return;
-    if (html && chatHistoryHtmlHasUserMessage(html)) {
-      await hydrateChatHistoryIdentity(newTabId, agentMode);
+    if (html) {
+      await hydrateRestoredChatHistory(newTabId, html);
       if (currentTabId !== newTabId) return;
     }
     renderedTabId = newTabId;
