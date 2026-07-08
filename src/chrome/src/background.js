@@ -1272,10 +1272,7 @@ async function handleMessage(msg, sender) {
         source: 'manual',
         confidence: 1,
       }));
-      if (result.changed) {
-        await chrome.storage.local.set({ [USER_MEMORY_ENABLED_KEY]: true });
-        await syncAgentUserMemoryFromStorage();
-      }
+      if (result.changed) await syncAgentUserMemoryFromStorage();
       return { ok: !!result.record, ...result };
     }
 

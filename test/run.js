@@ -800,6 +800,10 @@ test('user memory browser wiring is mirrored and non-blocking', () => {
     for (const action of ['get_user_memory', 'add_user_memory', 'update_user_memory', 'delete_user_memory', 'clear_user_memory', 'export_user_memory', 'import_user_memory', 'enqueue_user_memory_extraction']) {
       assert.match(background, new RegExp(`case '${action}'`), `${label}: ${action} route missing`);
     }
+    const addMemoryRoute = background.match(/case 'add_user_memory': \{([\s\S]*?)case 'update_user_memory':/);
+    assert.ok(addMemoryRoute, `${label}: add_user_memory route not found`);
+    assert.match(addMemoryRoute[1], /if \(result\.changed\) await syncAgentUserMemoryFromStorage\(\);/, `${label}: manual memory saves should refresh live prompts`);
+    assert.doesNotMatch(addMemoryRoute[1], new RegExp(`${runtime}\\.storage\\.local\\.set\\(\\{ \\[USER_MEMORY_ENABLED_KEY\\]: true \\}\\)`), `${label}: manual memory saves should not re-enable disabled memory`);
     assert.match(background, new RegExp(`${runtime}\\.storage\\.local\\.get\\(\\[\\s*USER_MEMORY_ENABLED_KEY,[\\s\\S]*USER_MEMORY_AUTO_CAPTURE_KEY`), `${label}: extraction should read both memory and auto-capture toggles`);
     assert.match(background, /async function isUserMemoryExtractionEnabled\(\)[\s\S]*stored\[USER_MEMORY_ENABLED_KEY\] !== false[\s\S]*stored\[USER_MEMORY_AUTO_CAPTURE_KEY\] === true/, `${label}: extraction should be gated by the main memory toggle`);
     assert.match(background, /if \(!await isUserMemoryExtractionEnabled\(\)\) return \{ queued: false, reason: 'disabled' \};/, `${label}: enqueue should not run when memory is disabled`);
