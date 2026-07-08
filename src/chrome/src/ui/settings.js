@@ -1260,8 +1260,8 @@ function renderProviders() {
     huggingface: {
       fields: [
         { key: 'apiKey', labelKey: 'st.provider.field.api_key', type: 'password', placeholder: 'hf_...' },
-        { key: 'model', labelKey: 'st.provider.field.model', type: 'text', placeholder: 'deepseek-ai/DeepSeek-V4',
-          suggestions: ['deepseek-ai/DeepSeek-V4', 'meta-llama/Llama-4-Scout-17B-16E-Instruct', 'zai-org/GLM-5.2', 'Qwen/Qwen3.6-27B', 'moonshotai/Kimi-K2.5-Instruct'] },
+        { key: 'model', labelKey: 'st.provider.field.model', type: 'text', placeholder: 'zai-org/GLM-5.2',
+          suggestions: ['zai-org/GLM-5.2', 'Qwen/Qwen3.6-27B', 'moonshotai/Kimi-K2.5-Instruct'] },
         { key: 'baseUrl', labelKey: 'st.provider.field.api_base_url', type: 'text', placeholder: 'https://router.huggingface.co/v1' },
         PROMPT_TIER_FIELD,
       ],

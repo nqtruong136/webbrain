@@ -363,7 +363,7 @@ export class ProviderManager {
         label: 'Hugging Face Inference',
         providerName: 'huggingface',
         baseUrl: 'https://router.huggingface.co/v1',
-        model: 'deepseek-ai/DeepSeek-V4',
+        model: 'zai-org/GLM-5.2',
         supportsStreamUsageOptions: true,
         apiKey: '',
         apiKeyUrl: 'https://huggingface.co/settings/tokens',
