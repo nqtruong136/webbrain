@@ -1239,6 +1239,16 @@ function renderProviders() {
         PROMPT_TIER_FIELD,
       ],
     },
+    azure_openai: {
+      fields: [
+        { key: 'baseUrl', labelKey: 'st.provider.field.api_base_url', type: 'text', placeholder: 'https://{resource}.openai.azure.com' },
+        { key: 'apiKey', labelKey: 'st.provider.field.api_key', type: 'password', placeholder: 'Azure API key' },
+        { key: 'model', label: 'Deployment name', type: 'text', placeholder: 'my-deployment' },
+        { key: 'apiVersion', label: 'API version', type: 'text', placeholder: '2024-10-21' },
+        { key: 'supportsVision', labelKey: 'st.provider.field.supports_vision', type: 'checkbox' },
+        ...COST_ESTIMATE_FIELDS,
+      ],
+    },
     openai: {
       fields: [
         { key: 'apiKey', labelKey: 'st.provider.field.api_key', type: 'password', placeholder: 'sk-...' },

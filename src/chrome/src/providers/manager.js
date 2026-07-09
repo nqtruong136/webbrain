@@ -1,5 +1,6 @@
 import { LlamaCppProvider } from './llamacpp.js';
 import { OpenAICompatibleProvider } from './openai.js';
+import { AzureOpenAIProvider } from './azure-openai.js';
 import { AnthropicProvider, AnthropicOAuthProvider } from './anthropic.js';
 import { signOutClaude } from './oauth-claude.js';
 // Static, NOT dynamic: this module runs in the MV3 service worker, where
@@ -16,7 +17,7 @@ const WEBBRAIN_CLOUD_LEGACY_CONTEXT_WINDOW = 256000;
 const WEBBRAIN_DEVICE_GUID_KEY = 'webbrainDeviceGuid';
 const OPENROUTER_DEFAULT_MODEL = 'openrouter/free';
 const OPENROUTER_LEGACY_DEFAULT_MODEL = 'stepfun/step-3.7-flash';
-const SUPPORTED_PROVIDER_TYPES = new Set(['llamacpp', 'openai', 'anthropic', 'anthropic_oauth']);
+const SUPPORTED_PROVIDER_TYPES = new Set(['llamacpp', 'openai', 'azure_openai', 'anthropic', 'anthropic_oauth']);
 const SAFE_PROVIDER_ID_RE = /^[A-Za-z0-9_-]+$/;
 const ROUTER_PROVIDER_IDS = ['openrouter', 'cloudflare', 'nvidia', 'groq', 'huggingface'];
 
@@ -205,6 +206,21 @@ export class ProviderManager {
         apiKey: '',
         supportsVision: true,
         enabled: true,
+      },
+      azure_openai: {
+        type: 'azure_openai',
+        category: 'cloud',
+        label: 'Azure OpenAI',
+        providerName: 'azure-openai',
+        // Azure endpoint root (no /openai/ path). Example:
+        // https://my-resource.openai.azure.com
+        baseUrl: 'https://{resource}.openai.azure.com',
+        // "model" is the Azure *deployment name*.
+        model: '',
+        apiVersion: '2024-10-21',
+        apiKey: '',
+        supportsVision: false,
+        enabled: false,
       },
       openai: {
         type: 'openai',
@@ -454,6 +470,8 @@ export class ProviderManager {
         return new LlamaCppProvider(normalizedConfig);
       case 'openai':
         return new OpenAICompatibleProvider(normalizedConfig);
+      case 'azure_openai':
+        return new AzureOpenAIProvider(normalizedConfig);
       case 'anthropic':
         return new AnthropicProvider(normalizedConfig);
       case 'anthropic_oauth':
