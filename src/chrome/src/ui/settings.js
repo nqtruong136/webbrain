@@ -1239,6 +1239,16 @@ function renderProviders() {
         PROMPT_TIER_FIELD,
       ],
     },
+    aws_bedrock: {
+      fields: [
+        { key: 'region', label: 'AWS region', type: 'text', placeholder: 'us-east-1' },
+        { key: 'accessKeyId', label: 'AWS Access Key ID', type: 'text', placeholder: 'AKIA...' },
+        { key: 'secretAccessKey', label: 'AWS Secret Access Key', type: 'password', placeholder: '********' },
+        { key: 'sessionToken', label: 'AWS Session Token', type: 'password', placeholder: 'optional (STS)' },
+        { key: 'model', label: 'Bedrock model id', type: 'text', placeholder: 'anthropic.claude-3-sonnet-20240229-v1:0' },
+        ...COST_ESTIMATE_FIELDS,
+      ],
+    },
     openai: {
       fields: [
         { key: 'apiKey', labelKey: 'st.provider.field.api_key', type: 'password', placeholder: 'sk-...' },
