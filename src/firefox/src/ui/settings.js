@@ -316,6 +316,7 @@ function boundedMaxAgentSteps(value) {
 // Filter + collapse state for the providers panel. See chrome/settings.js
 // for the rationale.
 let providerFilter = 'all';     // 'all' | 'local' | 'cloud' | 'router'
+let providerSearchQuery = '';
 const expandedProviders = new Set();
 let customSkills = [];
 const DEFAULT_SKILL_IDS = new Set(DEFAULT_SKILL_SOURCES.map((source) => source.id));
@@ -1311,6 +1312,28 @@ function effectivePromptTier(config) {
   return config.category === 'local' ? 'mid' : 'full';
 }
 
+function providerSearchTextForEntry(id, config, fieldDefs) {
+  const fieldText = fieldDefs.flatMap((field) => [
+    field.key,
+    field.labelKey ? t(field.labelKey) : field.label,
+    field.placeholderKey ? t(field.placeholderKey) : field.placeholder,
+    ...(field.suggestions || []),
+    ...(field.options || []).flatMap((option) => [
+      option.value,
+      option.labelKey ? t(option.labelKey) : option.label,
+    ]),
+  ]).filter(Boolean).join(' ');
+  return normalizeGeneralSearchText([
+    id,
+    config.label,
+    config.type,
+    config.category,
+    config.model,
+    config.baseUrl,
+    fieldText,
+  ].filter(Boolean).join(' '));
+}
+
 function renderProviders() {
   providersContainer.innerHTML = '';
 
@@ -1518,6 +1541,7 @@ function renderProviders() {
   providersContainer.appendChild(renderProviderFilterBar());
 
   const entries = Object.entries(providersData);
+  const providerQuery = normalizeGeneralSearchText(providerSearchQuery);
   let visibleCount = 0;
   for (const [id, config] of entries) {
     const isActive = id === activeProviderId;
@@ -1525,6 +1549,7 @@ function renderProviders() {
 
     const category = config.category || 'cloud';
     if (providerFilter !== 'all' && category !== providerFilter && !isActive) continue;
+    if (providerQuery && !providerSearchTextForEntry(id, config, fieldDefs).includes(providerQuery)) continue;
     visibleCount++;
 
     let fieldsHTML = '';
@@ -1655,7 +1680,9 @@ function renderProviders() {
   if (visibleCount === 0) {
     const empty = document.createElement('div');
     empty.className = 'provider-filter-empty';
-    empty.textContent = t('st.providers.filter.empty') || 'No providers in this category. Switch filter to All.';
+    empty.textContent = providerQuery
+      ? t('st.providers.search.empty')
+      : t('st.providers.filter.empty');
     providersContainer.appendChild(empty);
   }
 
@@ -1716,6 +1743,8 @@ function renderProviders() {
 function renderProviderFilterBar() {
   const bar = document.createElement('div');
   bar.className = 'provider-filter-bar';
+  const pills = document.createElement('div');
+  pills.className = 'provider-filter-pills';
   const filters = [
     { key: 'all',    labelKey: 'st.providers.filter.all' },
     { key: 'local',  labelKey: 'st.providers.filter.local' },
@@ -1739,8 +1768,31 @@ function renderProviderFilterBar() {
       await browser.storage.local.set({ providerFilter: f.key }).catch(() => {});
       renderProviders();
     });
-    bar.appendChild(btn);
+    pills.appendChild(btn);
   }
+  const search = document.createElement('div');
+  search.className = 'provider-search settings-search';
+  const input = document.createElement('input');
+  input.type = 'search';
+  input.id = 'input-provider-search';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.placeholder = t('st.providers.search.placeholder');
+  input.value = providerSearchQuery;
+  input.addEventListener('input', () => {
+    const selectionStart = input.selectionStart ?? input.value.length;
+    const selectionEnd = input.selectionEnd ?? input.value.length;
+    syncInputsIntoProvidersData();
+    providerSearchQuery = input.value;
+    renderProviders();
+    const next = document.getElementById('input-provider-search');
+    if (!next) return;
+    next.focus();
+    try { next.setSelectionRange(selectionStart, selectionEnd); } catch { /* ignore */ }
+  });
+  search.appendChild(input);
+  bar.appendChild(pills);
+  bar.appendChild(search);
   return bar;
 }
 
