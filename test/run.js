@@ -19640,6 +19640,7 @@ test('recommended action first tool executes before first model call', async () 
       const assistantToolIdx = requestMessages.findIndex((m) => m.role === 'assistant' && m.tool_calls?.[0]?.function?.name === 'read_page');
       const toolResultIdx = requestMessages.findIndex((m) => m.role === 'tool' && m.tool_call_id === 'recommended_summarize-page_first_tool');
       assert.ok(assistantToolIdx >= 0, `${label}: synthetic first-tool assistant call missing`);
+      assert.equal(requestMessages[assistantToolIdx].tool_calls[0].type, 'function', `${label}: synthetic first-tool call should use OpenAI function tool-call shape`);
       assert.ok(toolResultIdx > assistantToolIdx, `${label}: first-tool result should precede first model answer`);
     }
   });

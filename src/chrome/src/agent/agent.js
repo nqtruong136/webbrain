@@ -4045,6 +4045,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     const callId = `recommended_${firstTool.id.replace(/[^a-z0-9_-]/gi, '_')}_first_tool`;
     const toolCall = {
       id: callId,
+      type: 'function',
       function: {
         name: firstTool.tool,
         arguments: JSON.stringify(firstTool.args || {}),
