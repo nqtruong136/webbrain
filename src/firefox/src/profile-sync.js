@@ -162,14 +162,22 @@ export class ProfileSyncManager {
     return { version: 1, memory: normalizeUserMemoryStore(s[USER_MEMORY_STORAGE_KEY]), tombstones: meta.tombstones || {}, providers: s.providers || {}, activeProvider: s.activeProvider || '', auxiliaryProviders: { visionModel: s.visionModel || null, transcriptionModel: s.transcriptionModel || null }, profile: { enabled: !!s.profileEnabled, text: s.profileText || '' }, meta: { providersAt: meta.providersAt || 0, providerItemsAt: meta.providerItemsAt, activeProviderAt: meta.activeProviderAt, auxiliaryItemsAt: meta.auxiliaryItemsAt, profileAt: meta.profileAt || 0, memoryAt: meta.memoryAt || 0 } };
   }
   async request(path, options = {}) {
+    if (path === '/vault' && options.method === 'PUT') await this.ensureUploadConsent();
     const s = await this.storage.get(PROFILE_SYNC_KEYS.token); const token = s[PROFILE_SYNC_KEYS.token];
     const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }; if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(`${API}${path}`, { ...options, headers }); const body = res.status === 204 ? null : await res.json().catch(() => ({}));
     if (!res.ok) { const e = new Error(body?.error?.message || `Sync request failed (${res.status})`); e.status = res.status; e.body = body; throw e; } return { body, res };
   }
+  async ensureUploadConsent() {
+    const permissions = await browser.permissions.getAll();
+    if (!Object.hasOwn(permissions, 'data_collection')) return;
+    const granted = new Set(permissions.data_collection || []);
+    const required = ['personallyIdentifyingInfo', 'authenticationInfo', 'personalCommunications', 'websiteContent', 'technicalAndInteraction'];
+    if (required.some(type => !granted.has(type))) { this.lock(); const error = new Error('Cloud Sync data permission was revoked. Unlock to grant it again.'); error.consent = true; throw error; }
+  }
   async authStart(email) { const s = await this.storage.get(PROFILE_SYNC_KEYS.deviceGuid); const verifier = randomB64(32); const r = await this.request('/auth/start', { method: 'POST', body: JSON.stringify({ email, device_guid: s[PROFILE_SYNC_KEYS.deviceGuid], verifier }) }); return { ...r.body, verifier }; }
   async authStatus(challengeId, verifier) { const q = new URLSearchParams({ challenge_id: challengeId }); const r = await this.request(`/auth/status?${q}`, { headers: { 'X-WebBrain-Sync-Verifier': verifier } }); if (r.body.token) await this.storage.set({ [PROFILE_SYNC_KEYS.token]: r.body.token }); return r.body; }
-  async unlock(password, create = false, preferLocal = false) { this.sessionGeneration++; this.password = password; this.status = 'syncing'; try { await this.sync({ create, preferLocal }); this.status = 'current'; } catch (e) { this.password = null; this.key = null; this.status = e.status === 404 ? 'empty' : [402, 403].includes(e.status) ? 'subscription' : e instanceof TypeError ? 'offline' : 'error'; throw e; } return this.state(); }
+  async unlock(password, create = false, preferLocal = false) { this.sessionGeneration++; this.password = password; this.status = 'syncing'; try { await this.sync({ create, preferLocal }); this.status = 'current'; } catch (e) { this.password = null; this.key = null; this.status = e.consent ? 'locked' : e.status === 404 ? 'empty' : [402, 403].includes(e.status) ? 'subscription' : e instanceof TypeError ? 'offline' : 'error'; throw e; } return this.state(); }
   lock() { this.sessionGeneration++; clearTimeout(this.timer); this.timer = null; this.password = null; this.key = null; this.envelope = null; this.status = 'locked'; }
   noteChanges(changes) {
     this.changeQueue = this.changeQueue.then(() => this.updateChangeMetadata(changes), () => this.updateChangeMetadata(changes));
@@ -203,7 +211,7 @@ export class ProfileSyncManager {
     meta.auxiliaryItemsAt = { visionModel: now, transcriptionModel: now };
     await this.storage.set({ [PROFILE_SYNC_KEYS.metadata]: meta });
   }
-  schedule() { if (this.applying || !this.password) return; clearTimeout(this.timer); this.timer = setTimeout(() => this.sync().catch((e) => { this.status = [402, 403].includes(e.status) ? 'subscription' : e instanceof TypeError ? 'offline' : 'error'; }), 1500); }
+  schedule() { if (this.applying || !this.password) return; clearTimeout(this.timer); this.timer = setTimeout(() => this.sync().catch((e) => { this.status = e.consent ? 'locked' : [402, 403].includes(e.status) ? 'subscription' : e instanceof TypeError ? 'offline' : 'error'; }), 1500); }
   async apply(vault, conflicts) { this.applying = true; try { await this.storage.set({ [USER_MEMORY_STORAGE_KEY]: vault.memory, providers: vault.providers, activeProvider: vault.activeProvider, visionModel: vault.auxiliaryProviders?.visionModel || null, transcriptionModel: vault.auxiliaryProviders?.transcriptionModel || null, profileEnabled: vault.profile.enabled, profileText: vault.profile.text, [PROFILE_SYNC_KEYS.metadata]: { ...vault.meta, tombstones: vault.tombstones }, [PROFILE_SYNC_KEYS.recovery]: conflicts }); } finally { this.applying = false; } }
   sync(options = {}) {
     if (this.syncPromise) { this.syncAgain = true; return this.syncPromise; }

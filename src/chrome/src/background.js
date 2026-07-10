@@ -1369,8 +1369,9 @@ async function handleMessage(msg, sender) {
       const previous = await chrome.storage.local.get([PROFILE_SYNC_KEYS.enabled, PROFILE_SYNC_KEYS.metadata]);
       const reenable = previous[PROFILE_SYNC_KEYS.enabled] !== true && Object.keys(previous[PROFILE_SYNC_KEYS.metadata] || {}).length > 0;
       await chrome.storage.local.set({ [PROFILE_SYNC_KEYS.enabled]: true });
-      if (reenable) await profileSync.markAllLocalDataChanged();
-      const state = await profileSync.unlock(String(msg.password || ''), !!msg.create, reenable);
+      let state;
+      try { if (reenable) await profileSync.markAllLocalDataChanged(); state = await profileSync.unlock(String(msg.password || ''), !!msg.create, reenable); }
+      catch (error) { await chrome.storage.local.set({ [PROFILE_SYNC_KEYS.enabled]: previous[PROFILE_SYNC_KEYS.enabled] === true, [PROFILE_SYNC_KEYS.metadata]: previous[PROFILE_SYNC_KEYS.metadata] || {} }); throw error; }
       await providerManager.load();
       return { ok: true, ...state };
     }
