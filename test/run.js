@@ -20008,6 +20008,17 @@ test('profile sync merges independently edited provider configurations by item t
   assert.equal(vault.providers.anthropic.apiKey, 'new-anthropic');
 });
 
+test('profile sync keeps auxiliary timestamps independent from provider edits', async () => {
+  const { mergeProfileVaults } = await import(
+    'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')
+  );
+  const shared = { providers: { openai: {} }, activeProvider: 'openai', profile: {}, memory: { records: [] }, tombstones: {} };
+  const local = { ...shared, auxiliaryProviders: { visionModel: null, transcriptionModel: null }, meta: { providersAt: 30, providerItemsAt: { openai: 30 } } };
+  const remote = { ...shared, auxiliaryProviders: { visionModel: { apiKey: 'remote-vision' }, transcriptionModel: null }, meta: { providersAt: 20, auxiliaryItemsAt: { visionModel: 20 } } };
+  const { vault } = mergeProfileVaults(local, remote);
+  assert.equal(vault.auxiliaryProviders.visionModel.apiKey, 'remote-vision');
+});
+
 test('profile sync password change uploads a vault encrypted with the new password', async () => {
   const { ProfileSyncManager, decryptProfileVault } = await import(
     'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')
@@ -20077,7 +20088,7 @@ test('profile sync runs a follow-up pass when another sync joins an upload', asy
   const { ProfileSyncManager } = await import(
     'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')
   );
-  const manager = new ProfileSyncManager({});
+  const manager = new ProfileSyncManager({ get: async () => ({ profileSyncEnabled: true, profileSyncToken: 'token' }) });
   let release;
   let runs = 0;
   manager.runSync = async () => { runs++; if (runs === 1) await new Promise(resolve => { release = resolve; }); return { runs }; };
@@ -20109,6 +20120,20 @@ test('profile sync aborts an upload when the session locks in flight', async () 
   release();
   await assert.rejects(syncing, /locked/);
   assert.equal(uploads, 0);
+});
+
+test('profile sync clears stale cloud state before creating after a 404', async () => {
+  const { ProfileSyncManager } = await import(
+    'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')
+  );
+  const manager = new ProfileSyncManager({ get: async () => ({ profileSyncEnabled: true, profileSyncToken: 'token' }) });
+  manager.password = 'correct horse battery staple'; manager.revision = 42; manager.envelope = { vaultId: 'stale' }; manager.key = {};
+  manager.localVault = async () => ({ providers: {}, auxiliaryProviders: {}, profile: {}, memory: { records: [] }, tombstones: {}, meta: {} });
+  let putOptions;
+  manager.request = async (_path, options = {}) => { if (!options.method) { const error = new Error('missing'); error.status = 404; throw error; } putOptions = options; return { body: { revision: 43 } }; };
+  await manager.sync({ create: true });
+  assert.equal(putOptions.headers['If-Match'], undefined);
+  assert.notEqual(manager.envelope.vaultId, 'stale');
 });
 
 await run();
