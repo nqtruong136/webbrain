@@ -20012,4 +20012,43 @@ test('profile sync password change uploads a vault encrypted with the new passwo
   await assert.rejects(() => decryptProfileVault(uploaded, 'old password'), /Incorrect sync password/);
 });
 
+test('profile sync serializes metadata updates and re-reads local state before apply', async () => {
+  const { ProfileSyncManager, encryptProfileVault, decryptProfileVault } = await import(
+    'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')
+  );
+  let metadata = {};
+  const storage = {
+    get: async () => ({ profileSyncMetadataV1: structuredClone(metadata) }),
+    set: async values => { if (values.profileSyncMetadataV1) metadata = structuredClone(values.profileSyncMetadataV1); },
+  };
+  const manager = new ProfileSyncManager(storage);
+  manager.schedule = () => {};
+  await Promise.all([
+    manager.noteChanges({ providers: { newValue: {} } }),
+    manager.noteChanges({ profileText: { newValue: 'updated' } }),
+  ]);
+  assert.ok(metadata.providersAt);
+  assert.ok(metadata.profileAt);
+
+  const password = 'correct horse battery staple';
+  const remotePayload = { providers: { openai: { apiKey: 'remote' } }, activeProvider: 'openai', auxiliaryProviders: {}, profile: {}, memory: { records: [] }, tombstones: {}, meta: { providersAt: 5 } };
+  const { envelope } = await encryptProfileVault(remotePayload, password);
+  const initial = { ...remotePayload, providers: { openai: { apiKey: 'stale-local' } }, meta: { providersAt: 1 } };
+  const latest = { ...remotePayload, providers: { openai: { apiKey: 'new-local' } }, meta: { providersAt: 10 } };
+  let reads = 0;
+  let applied;
+  let uploaded;
+  manager.password = password;
+  manager.localVault = async () => structuredClone(reads++ === 0 ? initial : latest);
+  manager.apply = async vault => { applied = structuredClone(vault); };
+  manager.request = async (_path, options = {}) => {
+    if (!options.method) return { body: { envelope, revision: 1 } };
+    uploaded = JSON.parse(options.body).envelope;
+    return { body: { revision: 2 } };
+  };
+  await manager.sync();
+  assert.equal(applied.providers.openai.apiKey, 'new-local');
+  assert.equal((await decryptProfileVault(uploaded, password)).payload.providers.openai.apiKey, 'new-local');
+});
+
 await run();

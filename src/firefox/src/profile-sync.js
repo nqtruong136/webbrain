@@ -131,7 +131,7 @@ export function mergeProfileVaults(local, remote) {
 }
 
 export class ProfileSyncManager {
-  constructor(storage) { this.storage = storage; this.password = null; this.key = null; this.envelope = null; this.revision = null; this.timer = null; this.applying = false; this.status = 'disabled'; }
+  constructor(storage) { this.storage = storage; this.password = null; this.key = null; this.envelope = null; this.revision = null; this.timer = null; this.applying = false; this.status = 'disabled'; this.changeQueue = Promise.resolve(); this.syncPromise = null; }
   async state() { const s = await this.storage.get([PROFILE_SYNC_KEYS.enabled, PROFILE_SYNC_KEYS.token]); const enabled = s[PROFILE_SYNC_KEYS.enabled] === true; return { enabled, authenticated: !!s[PROFILE_SYNC_KEYS.token], unlocked: !!this.password, status: enabled && !this.password && this.status === 'disabled' ? 'locked' : this.status, revision: this.revision }; }
   async localVault() {
     const s = await this.storage.get([...PROFILE_SYNC_DATA_KEYS, PROFILE_SYNC_KEYS.metadata]); const meta = s[PROFILE_SYNC_KEYS.metadata] || {};
@@ -147,7 +147,11 @@ export class ProfileSyncManager {
   async authStatus(challengeId, verifier) { const q = new URLSearchParams({ challenge_id: challengeId }); const r = await this.request(`/auth/status?${q}`, { headers: { 'X-WebBrain-Sync-Verifier': verifier } }); if (r.body.token) await this.storage.set({ [PROFILE_SYNC_KEYS.token]: r.body.token }); return r.body; }
   async unlock(password, create = false) { this.password = password; this.status = 'syncing'; try { await this.sync({ create }); this.status = 'current'; } catch (e) { this.password = null; this.key = null; this.status = e.status === 404 ? 'empty' : [402, 403].includes(e.status) ? 'subscription' : e instanceof TypeError ? 'offline' : 'error'; throw e; } return this.state(); }
   lock() { this.password = null; this.key = null; this.envelope = null; this.status = 'locked'; }
-  async noteChanges(changes) {
+  noteChanges(changes) {
+    this.changeQueue = this.changeQueue.then(() => this.updateChangeMetadata(changes), () => this.updateChangeMetadata(changes));
+    return this.changeQueue;
+  }
+  async updateChangeMetadata(changes) {
     if (this.applying) return;
     const stored = await this.storage.get(PROFILE_SYNC_KEYS.metadata);
     const meta = stored[PROFILE_SYNC_KEYS.metadata] || {};
@@ -167,13 +171,18 @@ export class ProfileSyncManager {
   }
   schedule() { if (this.applying || !this.password) return; clearTimeout(this.timer); this.timer = setTimeout(() => this.sync().catch((e) => { this.status = [402, 403].includes(e.status) ? 'subscription' : e instanceof TypeError ? 'offline' : 'error'; }), 1500); }
   async apply(vault, conflicts) { this.applying = true; try { await this.storage.set({ [USER_MEMORY_STORAGE_KEY]: vault.memory, providers: vault.providers, activeProvider: vault.activeProvider, visionModel: vault.auxiliaryProviders?.visionModel || null, transcriptionModel: vault.auxiliaryProviders?.transcriptionModel || null, profileEnabled: vault.profile.enabled, profileText: vault.profile.text, [PROFILE_SYNC_KEYS.metadata]: { ...vault.meta, tombstones: vault.tombstones }, [PROFILE_SYNC_KEYS.recovery]: conflicts }); } finally { this.applying = false; } }
-  async sync({ create = false } = {}) {
+  sync(options = {}) {
+    if (this.syncPromise) return this.syncPromise;
+    this.syncPromise = this.runSync(options).finally(() => { this.syncPromise = null; });
+    return this.syncPromise;
+  }
+  async runSync({ create = false } = {}) {
     if (!this.password) throw new Error('Cloud Sync is locked'); this.status = 'syncing'; let local = await this.localVault();
     let remote = null; try { const got = await this.request('/vault'); remote = got.body; this.revision = remote.revision; } catch (e) { if (e.status !== 404 || !create) throw e; }
-    if (remote?.envelope) { const decrypted = await decryptProfileVault(remote.envelope, this.password); this.key = decrypted.key; this.envelope = remote.envelope; const merged = mergeProfileVaults(local, decrypted.payload); local = merged.vault; await this.apply(local, merged.conflicts); }
+    if (remote?.envelope) { const decrypted = await decryptProfileVault(remote.envelope, this.password); this.key = decrypted.key; this.envelope = remote.envelope; await this.changeQueue; local = await this.localVault(); const merged = mergeProfileVaults(local, decrypted.payload); local = merged.vault; await this.apply(local, merged.conflicts); }
     const encrypted = await encryptProfileVault(local, this.password, this.envelope ? { vaultId: this.envelope.vaultId, salt: unb64(this.envelope.kdf.salt), key: this.key } : {}); this.key = encrypted.key; this.envelope = encrypted.envelope;
     try { const put = await this.request('/vault', { method: 'PUT', headers: this.revision != null ? { 'If-Match': String(this.revision) } : {}, body: JSON.stringify({ envelope: encrypted.envelope }) }); this.revision = put.body.revision; }
-    catch (e) { if (e.status === 409) { this.revision = null; return this.sync(); } throw e; }
+    catch (e) { if (e.status === 409) { this.revision = null; return this.runSync(); } throw e; }
     this.status = 'current'; return this.state();
   }
   async changePassword(oldPassword, nextPassword) {
