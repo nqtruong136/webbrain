@@ -1212,6 +1212,7 @@ export class Agent {
   static NAV_TOOLS = new Set(['navigate', 'new_tab', 'go_back', 'go_forward']);
   static STATE_CHANGE_TOOLS = new Set(['navigate', 'new_tab', 'go_back', 'go_forward', 'click', 'click_ax', 'type_text', 'type_ax', 'set_field', 'press_keys', 'scroll', 'hover', 'drag_drop']);
   static NAV_PRONE_TOOLS = new Set(['click', 'click_ax', 'navigate', 'go_back', 'go_forward', 'execute_js', 'iframe_click']);
+  static RECOMMENDED_ACTION_FAST_PATH_IDS = new Set(['download-media']);
 
   // System prompt for the dedicated "vision model" sub-call. Kept terse and
   // format-oriented so the description is actually useful to the planning
@@ -3247,7 +3248,40 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return !this._plannerFollowUpHasExplicitUrl(text);
   }
 
-  async _maybeRunPlannerGate(tabId, messages, enriched, onUpdate, mode, costState, runId, tabInfo = null) {
+  _recommendedActionFastPathPlan(runOptions = {}) {
+    const action = runOptions?.recommendedAction;
+    if (!action || action.skipPlanner !== true) return null;
+    const id = sanitizePlannerText(action.id, 80, { collapseWhitespace: true });
+    if (!this.constructor.RECOMMENDED_ACTION_FAST_PATH_IDS.has(id)) return null;
+    const tool = sanitizePlannerText(action.tool, 80, { collapseWhitespace: true });
+    if (id === 'download-media' && tool !== 'download_public_media') return null;
+    const summary = sanitizePlannerText(action.summary || 'Run the selected recommended action.', 500, { collapseWhitespace: true });
+    const steps = Array.isArray(action.steps)
+      ? action.steps.map(step => sanitizePlannerText(step, 300, { collapseWhitespace: true })).filter(Boolean).slice(0, 5)
+      : [];
+    return { id, tool, summary, steps };
+  }
+
+  _formatRecommendedActionFastPathScratchpad(plan) {
+    const steps = plan.steps.length
+      ? plan.steps
+      : [`Call ${plan.tool || 'the intended tool'} for the selected recommended action.`];
+    const lines = [
+      '[Approved plan — pinned by recommended action]',
+      '',
+      '### Summary',
+      plan.summary,
+      '',
+      '### Steps',
+      ...steps.map((step, index) => `${index + 1}. ${step}`),
+    ];
+    if (plan.tool) {
+      lines.push('', '### Immediate tool', `- ${plan.tool}`);
+    }
+    return lines.join('\n').slice(0, 3000);
+  }
+
+  async _maybeRunPlannerGate(tabId, messages, enriched, onUpdate, mode, costState, runId, tabInfo = null, runOptions = {}) {
     const plannerMode = this._isActionMode(mode) ? this._plannerMode() : 'off';
     const runPlanner = plannerMode !== 'off';
 
@@ -3260,6 +3294,25 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this._persist(tabId);
     if (!runPlanner) {
       this.plannerFollowUpSkipTabs.delete(tabId);
+      return { proceed: true };
+    }
+    const fastPathPlan = this._recommendedActionFastPathPlan(runOptions);
+    if (fastPathPlan) {
+      this.plannerFollowUpSkipTabs.delete(tabId);
+      const scratchResult = this._scratchpadWrite(tabId, {
+        text: this._formatRecommendedActionFastPathScratchpad(fastPathPlan),
+      });
+      if (!scratchResult?.success) {
+        onUpdate('warning', { message: scratchResult?.error || 'Could not pin recommended action plan to scratchpad.' });
+      } else {
+        const scratchIdx = this._findScratchpadIndex(messages);
+        if (scratchIdx >= 0 && scratchIdx < messages.length - 1) {
+          const scratchMsg = messages[scratchIdx];
+          messages.splice(scratchIdx, 1);
+          messages.push(scratchMsg);
+        }
+      }
+      this._persist(tabId);
       return { proceed: true };
     }
     if (this._shouldSkipPlannerForShortFollowUp(tabId, priorMessages, enriched, plannerMode)) {
@@ -8023,13 +8076,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    * @param {function} onUpdate - callback(type, data) for streaming updates
    * @returns {Promise<string>} final text response
    */
-  async processMessage(tabId, userMessage, onUpdate = () => {}, mode = 'ask', attachments = []) {
+  async processMessage(tabId, userMessage, onUpdate = () => {}, mode = 'ask', attachments = [], runOptions = {}) {
     if (this._runningTabs.has(tabId)) {
       throw new Error('An agent run is already in progress for this tab.');
     }
     this._runningTabs.add(tabId);
     try {
-      return await this._processMessageInner(tabId, userMessage, onUpdate, mode, attachments);
+      return await this._processMessageInner(tabId, userMessage, onUpdate, mode, attachments, runOptions);
     } finally {
       this.currentCostState.delete(tabId);
       this._runningTabs.delete(tabId);
@@ -8092,7 +8145,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return { ok: true };
   }
 
-  async _processMessageInner(tabId, userMessage, onUpdate, mode, attachments = []) {
+  async _processMessageInner(tabId, userMessage, onUpdate, mode, attachments = [], runOptions = {}) {
     await this._hydrate(tabId);
     const messages = this.getConversation(tabId, mode);
     // Scheduled resumes get the live ledger appended at fire time, so the
@@ -8166,7 +8219,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
 
     const gateOutcome = await this._maybeRunPlannerGate(
-      tabId, messages, enriched, onUpdate, mode, costState, runId, plannerTabInfo,
+      tabId, messages, enriched, onUpdate, mode, costState, runId, plannerTabInfo, runOptions,
     );
     if (!gateOutcome.proceed) {
       _traceStatus = gateOutcome.reason === 'cost_limit' ? 'cost_limit' : 'cancelled';
@@ -8455,20 +8508,20 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   /**
    * Process a message with streaming output.
    */
-  async processMessageStream(tabId, userMessage, onUpdate = () => {}, mode = 'ask') {
+  async processMessageStream(tabId, userMessage, onUpdate = () => {}, mode = 'ask', runOptions = {}) {
     if (this._runningTabs.has(tabId)) {
       throw new Error('An agent run is already in progress for this tab.');
     }
     this._runningTabs.add(tabId);
     try {
-      return await this._processMessageStreamInner(tabId, userMessage, onUpdate, mode);
+      return await this._processMessageStreamInner(tabId, userMessage, onUpdate, mode, runOptions);
     } finally {
       this.currentCostState.delete(tabId);
       this._runningTabs.delete(tabId);
     }
   }
 
-  async _processMessageStreamInner(tabId, userMessage, onUpdate, mode) {
+  async _processMessageStreamInner(tabId, userMessage, onUpdate, mode, runOptions = {}) {
     await this._hydrate(tabId);
     const messages = this.getConversation(tabId, mode);
     const costState = this._newCostRunState();
@@ -8519,7 +8572,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
 
     const gateOutcome = await this._maybeRunPlannerGate(
-      tabId, messages, enriched, onUpdate, mode, costState, runId, plannerTabInfo,
+      tabId, messages, enriched, onUpdate, mode, costState, runId, plannerTabInfo, runOptions,
     );
     if (!gateOutcome.proceed) {
       return finish(gateOutcome.message || 'Task cancelled.', gateOutcome.reason === 'cost_limit' ? 'cost_limit' : 'cancelled');

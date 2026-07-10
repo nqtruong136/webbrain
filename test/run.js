@@ -3070,6 +3070,62 @@ test('actionable recommendations opt into Act mode', () => {
   assert.equal(buildRecommendedActionsCh(readOnlyPage).find((a) => a.id === 'summarize-page')?.mode, undefined);
 });
 
+test('public media recommendations carry immediate download_public_media fast paths', () => {
+  const pages = [
+    { url: 'https://x.com/someone/status/123', title: 'Post with video / X', media: { videoCount: 1, imageCount: 0 }, expectedKind: 'video' },
+    { url: 'https://www.tiktok.com/@user/video/123', title: 'TikTok video', media: { videoCount: 1, imageCount: 0 }, expectedKind: 'video' },
+    { url: 'https://www.reddit.com/r/pics/comments/abc/photo/', title: 'A photo post', media: { imageCount: 1, videoCount: 0 }, expectedKind: 'image' },
+    { url: 'https://www.linkedin.com/posts/example_123', title: 'LinkedIn public post video', media: { videoCount: 1, imageCount: 0 }, expectedKind: 'video' },
+    { url: 'https://threads.net/@user/post/abc', title: 'Threads photo', media: { imageCount: 1, videoCount: 0 }, expectedKind: 'image' },
+  ];
+
+  for (const buildRecommendedActions of [buildRecommendedActionsCh, buildRecommendedActionsFx]) {
+    for (const pageInfo of pages) {
+      const action = buildRecommendedActions(pageInfo).find((a) => a.id === 'download-media');
+      assert.equal(action?.mode, 'act', `download action should use Act mode for ${pageInfo.url}`);
+      assert.match(action?.prompt || '', /download_public_media first/, `download prompt should name the skill first for ${pageInfo.url}`);
+      assert.match(action?.prompt || '', /Do not make a separate plan/, `download prompt should avoid planner work for ${pageInfo.url}`);
+      assert.equal(action?.runOptions?.skipPlanner, true, `download action should skip planner for ${pageInfo.url}`);
+      assert.equal(action?.runOptions?.tool, 'download_public_media', `download action should pin the intended tool for ${pageInfo.url}`);
+      assert.ok(
+        action?.runOptions?.steps?.some((step) => step.includes(`kind:"${pageInfo.expectedKind}"`)),
+        `download action should carry ${pageInfo.expectedKind} args for ${pageInfo.url}`,
+      );
+    }
+
+    const unsupported = buildRecommendedActions({
+      url: 'https://www.snapchat.com/spotlight/abc',
+      title: 'Spotlight video',
+      media: { videoCount: 1, imageCount: 0 },
+    }).find((a) => a.id === 'download-media');
+    assert.equal(unsupported?.mode, 'act', 'unsupported social media still gets a generic download action');
+    assert.equal(unsupported?.runOptions, undefined, 'unsupported public-media host should not get the skill fast path');
+    assert.doesNotMatch(unsupported?.prompt || '', /download_public_media/, 'unsupported public-media host should not force the skill tool');
+  }
+});
+
+test('YouTube video recommendations start with transcript skill and keep media download fast path', () => {
+  const pages = [
+    { url: 'https://www.youtube.com/watch?v=abc123', title: 'Launch update video', media: { videoCount: 1, imageCount: 0 } },
+    { url: 'https://youtu.be/abc123', title: 'Launch update video', media: { videoCount: 1, imageCount: 0 } },
+    { url: 'https://m.youtube.com/shorts/abc123', title: 'Shorts video', media: { videoCount: 1, imageCount: 0 } },
+  ];
+
+  for (const buildRecommendedActions of [buildRecommendedActionsCh, buildRecommendedActionsFx]) {
+    for (const pageInfo of pages) {
+      const actions = buildRecommendedActions(pageInfo);
+      const transcript = actions.find((a) => a.id === 'summarize-youtube-video');
+      assert.equal(transcript?.label, 'Summarize this video', `expected transcript summary for ${pageInfo.url}`);
+      assert.equal(transcript?.mode, 'ask', `transcript summary should stay in Ask mode for ${pageInfo.url}`);
+      assert.match(transcript?.prompt || '', /read_youtube_transcript/, `transcript summary should name the skill for ${pageInfo.url}`);
+
+      const download = actions.find((a) => a.id === 'download-media');
+      assert.equal(download?.runOptions?.tool, 'download_public_media', `YouTube download should use public media skill for ${pageInfo.url}`);
+      assert.equal(download?.runOptions?.skipPlanner, true, `YouTube download should skip planner for ${pageInfo.url}`);
+    }
+  }
+});
+
 test('communication threads get reply, summary, and follow-up suggestions', () => {
   const pages = [
     { url: 'https://mail.google.com/mail/u/0/#inbox/FMfc123', title: 'Gmail - Thread', text: 'From Ada Subject Launch Reply' },
@@ -7229,12 +7285,14 @@ test('sidepanel drops stale recommended-action clicks after async act confirmati
     const staleGuard = '!ok || currentTabId !== tabId || isProcessing';
     const staleGuardIdx = body.indexOf(staleGuard);
     const inputIdx = body.indexOf('inputEl.value = prompt;');
+    const sendIdx = body.indexOf('sendMessage(action?.runOptions ? { recommendedAction: action.runOptions } : {});');
     assert.notEqual(captureIdx, -1, `${label}: recommended-action click should capture the initiating tab`);
     assert.notEqual(initialGuardIdx, -1, `${label}: recommended-action click should reject missing tabs before sending`);
     assert.notEqual(ensureIdx, -1, `${label}: act recommended-action click should await act confirmation`);
     assert.notEqual(staleGuardIdx, -1, `${label}: stale recommended-action clicks should be dropped after act confirmation`);
     assert.notEqual(inputIdx, -1, `${label}: recommended-action click composer write missing`);
-    assert.equal(captureIdx < initialGuardIdx && initialGuardIdx < ensureIdx && ensureIdx < staleGuardIdx && staleGuardIdx < inputIdx, true, `${label}: stale click guard must run after async act confirmation and before mutating the composer`);
+    assert.notEqual(sendIdx, -1, `${label}: recommended-action click should pass trusted run options to chat`);
+    assert.equal(captureIdx < initialGuardIdx && initialGuardIdx < ensureIdx && ensureIdx < staleGuardIdx && staleGuardIdx < inputIdx && inputIdx < sendIdx, true, `${label}: stale click guard must run after async act confirmation and before mutating the composer`);
   }
 });
 
@@ -8339,6 +8397,25 @@ test('background awaits context-menu prompt clear before agent chat starts', () 
     assert.notEqual(processIdx, -1, `${label}: chat handler should start an agent run`);
     assert.equal(clearIdx < processIdx, true, `${label}: context-menu prompt clear must finish before the agent run starts`);
     assert.doesNotMatch(chatBody, /contextMenuStorage\.clear\(msg\.contextMenuClear\.tabId,\s*msg\.contextMenuClear\.promptId\)\.catch\(\(\) => \{\}\)/, `${label}: context-menu clear should not be fire-and-forget`);
+  }
+});
+
+test('background forwards recommended-action run options to agent chat handlers', () => {
+  for (const [label, bgRel] of [
+    ['chrome', 'src/chrome/src/background.js'],
+    ['firefox', 'src/firefox/src/background.js'],
+  ]) {
+    const bg = fs.readFileSync(path.join(ROOT, bgRel), 'utf8');
+    const chatMatch = bg.match(/case 'chat': \{([\s\S]*?)\n\s+case 'chat_stream':/);
+    const streamMatch = bg.match(/case 'chat_stream': \{([\s\S]*?)\n\s+case 'continue':/);
+    assert.ok(chatMatch, `${label}: chat handler missing`);
+    assert.ok(streamMatch, `${label}: chat_stream handler missing`);
+    const chatBody = chatMatch[1];
+    const streamBody = streamMatch[1];
+    assert.ok(chatBody.includes('const runOptions = msg.recommendedAction ? { recommendedAction: msg.recommendedAction } : {};'), `${label}: chat handler should build recommended-action run options`);
+    assert.match(chatBody, /agent\.processMessage\([\s\S]*?, mode, msg\.attachments, runOptions\)/, `${label}: chat handler should pass run options to processMessage`);
+    assert.ok(streamBody.includes('const runOptions = msg.recommendedAction ? { recommendedAction: msg.recommendedAction } : {};'), `${label}: chat_stream handler should build recommended-action run options`);
+    assert.match(streamBody, /agent\.processMessageStream\([\s\S]*?, mode, runOptions\)/, `${label}: chat_stream handler should pass run options to processMessageStream`);
   }
 });
 
@@ -19228,6 +19305,90 @@ test('planner gate: approving plan appends without deleting scratchpad facts', a
       assert.ok(userIdx >= 0, `${label} user message present`);
       assert.ok(idx > userIdx, `${label} scratchpad should follow user task`);
       assert.equal(idx, agent.conversations.get(tabId).length - 1, `${label} scratchpad should be last`);
+    }
+  });
+});
+
+test('planner gate: trusted recommended media action skips planner and pins ready plan', async () => {
+  await withPlannerBrowserGlobals(async () => {
+    for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+      const tabId = label === 'chrome' ? 9207 : 9208;
+      const agent = new AgentClass({ getActive: () => ({}) });
+      agent.setPlanBeforeActMode('strict');
+      agent.setPlanReviewSettings({ mode: 'always' });
+      agent.conversations.set(tabId, [{ role: 'system', content: 'system' }]);
+      let plannerCalls = 0;
+      agent._runPlannerGate = async () => {
+        plannerCalls += 1;
+        throw new Error('recommended action fast path should not call planner');
+      };
+
+      const outcome = await agent._maybeRunPlannerGate(
+        tabId,
+        agent.conversations.get(tabId),
+        { role: 'user', content: 'Download this public media from the current page.' },
+        () => {},
+        'act',
+        null,
+        null,
+        null,
+        {
+          recommendedAction: {
+            id: 'download-media',
+            skipPlanner: true,
+            tool: 'download_public_media',
+            summary: 'Download the public media from the current page.',
+            steps: [
+              'Call download_public_media with kind:"video" and no url so it uses the active tab.',
+              'Report the saved downloadId/result.',
+            ],
+          },
+        },
+      );
+
+      assert.equal(outcome.proceed, true, `${label} should proceed`);
+      assert.equal(plannerCalls, 0, `${label} should skip the planner call`);
+      assert.equal(agent.plannerFollowUpSkipTabs.has(tabId), false, `${label} should not arm the ordinary planner follow-up skip`);
+
+      const messages = agent.conversations.get(tabId);
+      const idx = agent._findScratchpadIndex(messages);
+      assert.ok(idx >= 0, `${label} should pin a recommended-action scratchpad plan`);
+      const body = agent._extractScratchpadBody(messages[idx].content);
+      assert.match(body, /\[Approved plan — pinned by recommended action\]/, `${label} should mark first-party recommended plan`);
+      assert.match(body, /download_public_media/, `${label} should pin the intended immediate tool`);
+      assert.doesNotMatch(body, /pinned by planner/, `${label} should not pretend a planner generated this`);
+      const userIdx = messages.findIndex((m) => m.role === 'user' && /Download this public media/.test(m.content));
+      assert.ok(idx > userIdx, `${label} scratchpad should follow the user task`);
+
+      const rejectedTabId = tabId + 20;
+      const rejected = new AgentClass({ getActive: () => ({}) });
+      rejected.setPlanBeforeActMode('try');
+      rejected.conversations.set(rejectedTabId, [{ role: 'system', content: 'system' }]);
+      let fallbackPlannerCalls = 0;
+      rejected._runPlannerGate = async () => {
+        fallbackPlannerCalls += 1;
+        return { proceed: true };
+      };
+      const rejectedOutcome = await rejected._maybeRunPlannerGate(
+        rejectedTabId,
+        rejected.conversations.get(rejectedTabId),
+        { role: 'user', content: 'Do something else.' },
+        () => {},
+        'act',
+        null,
+        null,
+        null,
+        {
+          recommendedAction: {
+            id: 'download-media',
+            skipPlanner: true,
+            tool: 'download_social_media',
+            summary: 'Invalid fast path.',
+          },
+        },
+      );
+      assert.equal(rejectedOutcome.proceed, true, `${label} rejected fast path should still proceed through normal planner`);
+      assert.equal(fallbackPlannerCalls, 1, `${label} rejected fast path should run planner`);
     }
   });
 });

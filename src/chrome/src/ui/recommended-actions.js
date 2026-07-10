@@ -1,4 +1,5 @@
 const SOCIAL_HOST_RE = /(^|\.)(instagram\.com|tiktok\.com|x\.com|twitter\.com|facebook\.com|fb\.com|threads\.net|youtube\.com|youtu\.be|reddit\.com|pinterest\.com|snapchat\.com)$/i;
+const PUBLIC_MEDIA_HOST_RE = /(^|\.)(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|x\.com|twitter\.com|reddit\.com|redd\.it|facebook\.com|fb\.com|fb\.watch|pinterest\.com|pin\.it|linkedin\.com|threads\.net)$/i;
 const MEETING_HOST_RE = /(^|\.)(zoom\.us|meet\.google\.com|teams\.microsoft\.com|whereby\.com|webex\.com|gotomeeting\.com)$/i;
 const DATING_HOST_RE = /(^|\.)(tinder\.com|bumble\.com|hinge\.co|okcupid\.com|match\.com|pof\.com|badoo\.com|happn\.com|coffeemeetsbagel\.com)$/i;
 const SHOPPING_HOST_RE = /(^|\.)(amazon\.[a-z.]+|ebay\.[a-z.]+|etsy\.com|walmart\.com|target\.com|bestbuy\.com|shopify\.com|aliexpress\.com|mercadolibre\.[a-z.]+|mercadolivre\.com\.br|hepsiburada\.com|trendyol\.com|n11\.com|shopee\.[a-z.]+|lazada\.[a-z.]+)$/i;
@@ -57,6 +58,46 @@ function hasMedia(pageInfo = {}) {
   if ((media.videoCount || 0) > 0 || (media.imageCount || 0) > 0) return true;
   const text = `${pageInfo.title || ''} ${pageInfo.description || ''} ${pageInfo.url || ''}`;
   return /\b(video|photo|image|reel|shorts|watch)\b/i.test(text);
+}
+
+function isYouTubeVideoPage(host = '', path = '/', url = '') {
+  if (host === 'youtu.be') return /^\/[^/?#]+/.test(path);
+  if (host !== 'youtube.com' && !host.endsWith('.youtube.com')) return false;
+  if (/^\/(?:shorts|live|embed)\/[^/?#]+/i.test(path)) return true;
+  try {
+    const u = new URL(url);
+    return path === '/watch' && !!u.searchParams.get('v');
+  } catch {
+    return false;
+  }
+}
+
+function publicMediaKind(pageInfo = {}, path = '/') {
+  const media = pageInfo.media || {};
+  if ((media.videoCount || 0) > 0) return 'video';
+  if ((media.imageCount || 0) > 0) return 'image';
+  if (/\b(video|reel|shorts|watch|live)\b/i.test(`${path} ${pageInfo.title || ''}`)) return 'video';
+  if (/\b(photo|image|picture|pin)\b/i.test(`${path} ${pageInfo.title || ''}`)) return 'image';
+  return 'auto';
+}
+
+function publicMediaDownloadPrompt(kind = 'auto') {
+  const args = kind === 'auto' ? '{ "kind": "auto" }' : `{ "kind": "${kind}" }`;
+  return `Download this public media from the current page. Call download_public_media first with ${args} and omit url so it uses the active tab. Do not make a separate plan or inspect the DOM first. Only call download_social_media if download_public_media fails, then report the saved downloadId/result.`;
+}
+
+function publicMediaDownloadRunOptions(kind = 'auto') {
+  const args = kind === 'auto' ? 'kind:"auto"' : `kind:"${kind}"`;
+  return {
+    id: 'download-media',
+    skipPlanner: true,
+    tool: 'download_public_media',
+    summary: 'Download the public media from the current page.',
+    steps: [
+      `Call download_public_media with ${args} and no url so it uses the active tab.`,
+      'Report the saved downloadId/result. Use download_social_media only if download_public_media fails.',
+    ],
+  };
 }
 
 function hasCartOrPriceSignal(pageInfo = {}) {
@@ -227,12 +268,24 @@ export function buildRecommendedActions(pageInfo = {}, options = {}) {
     });
   }
 
-  if ((SOCIAL_HOST_RE.test(host) || /\b(post|status|reel|shorts|watch|pin)\b/i.test(path)) && hasMedia(pageInfo)) {
+  if (isYouTubeVideoPage(host, path, pageInfo.url || '')) {
+    addUnique(actions, {
+      id: 'summarize-youtube-video',
+      label: 'Summarize this video',
+      prompt: 'Use read_youtube_transcript for the current YouTube video first. Summarize the transcript in concise bullets with key points and timestamps when available. If the transcript tool is unavailable or returns no transcript, say that and use only the visible page context.',
+      mode: 'ask',
+    });
+  }
+
+  const publicMediaHost = PUBLIC_MEDIA_HOST_RE.test(host);
+  if ((publicMediaHost || SOCIAL_HOST_RE.test(host) || /\b(post|status|reel|shorts|watch|pin)\b/i.test(path)) && hasMedia(pageInfo)) {
+    const kind = publicMediaKind(pageInfo, path);
     addUnique(actions, {
       id: 'download-media',
       label: 'Download this video/photo',
-      prompt: 'Download the video or photo from this post.',
+      prompt: publicMediaHost ? publicMediaDownloadPrompt(kind) : 'Download the video or photo from this post.',
       mode: 'act',
+      ...(publicMediaHost ? { runOptions: publicMediaDownloadRunOptions(kind) } : {}),
     });
   }
 

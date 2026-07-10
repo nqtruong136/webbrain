@@ -2531,7 +2531,7 @@ async function runRecommendedAction(action) {
   }
   inputEl.value = prompt;
   autoResizeInput();
-  sendMessage();
+  sendMessage(action?.runOptions ? { recommendedAction: action.runOptions } : {});
 }
 
 // After restoring innerHTML the copy buttons need their click handlers re-bound,
