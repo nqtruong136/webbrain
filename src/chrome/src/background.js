@@ -1517,6 +1517,7 @@ async function handleMessage(msg, sender) {
       const updates = [];
       let userMemoryTurnContextTaken = false;
       try {
+        const runOptions = msg.recommendedAction ? { recommendedAction: msg.recommendedAction } : {};
         const result = await agent.processMessage(tabId, msg.text, (type, data) => {
           updates.push({ type, data });
           chrome.runtime.sendMessage({
@@ -1526,7 +1527,7 @@ async function handleMessage(msg, sender) {
             type,
             data,
           }).catch(() => {});
-        }, mode, msg.attachments);
+        }, mode, msg.attachments, runOptions);
 
         const userMemoryPayload = takeUserMemoryTurnExtractionPayload(tabId, {
           userText: msg.text,
@@ -1555,6 +1556,7 @@ async function handleMessage(msg, sender) {
       let userMemoryTurnContextTaken = false;
       let userMemoryTurnHadError = false;
       try {
+        const runOptions = msg.recommendedAction ? { recommendedAction: msg.recommendedAction } : {};
         const result = await agent.processMessageStream(tabId, msg.text, (type, data) => {
           if (type === 'error') userMemoryTurnHadError = true;
           chrome.runtime.sendMessage({
@@ -1564,7 +1566,7 @@ async function handleMessage(msg, sender) {
             type,
             data,
           }).catch(() => {});
-        }, mode);
+        }, mode, runOptions);
 
         const userMemoryPayload = takeUserMemoryTurnExtractionPayload(tabId, {
           userText: msg.text,
