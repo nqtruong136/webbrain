@@ -7363,13 +7363,19 @@ test('sidepanel drops stale recommended-action clicks after async act confirmati
     const staleGuard = '!ok || currentTabId !== tabId || isProcessing';
     const staleGuardIdx = body.indexOf(staleGuard);
     const inputIdx = body.indexOf('inputEl.value = prompt;');
-    const sendIdx = body.indexOf('sendMessage(action?.runOptions ? { recommendedAction: action.runOptions } : {});');
+    const sendIdx = body.indexOf('sendMessage(recommendedActionSendParams(action));');
+    const helperMatch = panel.match(/function recommendedActionSendParams\(action\) \{([\s\S]*?)\n\}/);
+    assert.ok(helperMatch, `${label}: recommendedActionSendParams missing`);
+    const helperBody = helperMatch[1];
     assert.notEqual(captureIdx, -1, `${label}: recommended-action click should capture the initiating tab`);
     assert.notEqual(initialGuardIdx, -1, `${label}: recommended-action click should reject missing tabs before sending`);
     assert.notEqual(ensureIdx, -1, `${label}: act recommended-action click should await act confirmation`);
     assert.notEqual(staleGuardIdx, -1, `${label}: stale recommended-action clicks should be dropped after act confirmation`);
     assert.notEqual(inputIdx, -1, `${label}: recommended-action click composer write missing`);
     assert.notEqual(sendIdx, -1, `${label}: recommended-action click should pass trusted run options to chat`);
+    assert.ok(helperBody.includes('const params = action?.runOptions ? { recommendedAction: action.runOptions } : {};'), `${label}: recommended-action send params should preserve trusted run options`);
+    assert.ok(helperBody.includes("if (['ask', 'act', 'dev'].includes(action?.mode)) {"), `${label}: recommended-action send params should only allow known modes`);
+    assert.ok(helperBody.includes('params.__mode = action.mode;'), `${label}: recommended-action send params should pass the declared action mode`);
     assert.equal(captureIdx < initialGuardIdx && initialGuardIdx < ensureIdx && ensureIdx < staleGuardIdx && staleGuardIdx < inputIdx && inputIdx < sendIdx, true, `${label}: stale click guard must run after async act confirmation and before mutating the composer`);
   }
 });
@@ -8077,13 +8083,19 @@ test('sidepanel preserves stale residual slash-command prompts without hidden ru
     ]) {
       assert.ok(modeHelper.includes(snippet), `${label}: modeForMessageText should handle ${commandLabel}`);
     }
-    const modeCapture = "const modeForSend = retryOptions?.mode || modeForMessageText(text);";
+    const modeOverride = "const modeOverride = ['ask', 'act', 'dev'].includes(extraChatParams?.__mode) ? extraChatParams.__mode : null;";
+    const modeCapture = "const modeForSend = retryOptions?.mode || modeOverride || modeForMessageText(text);";
     const apiCapture = 'const apiMutationsAllowedForSend = retryOptions';
+    const modeOverrideIdx = sendBody.indexOf(modeOverride);
+    const deleteModeIdx = sendBody.indexOf('delete chatExtraParams.__mode;');
     const modeCaptureIdx = sendBody.indexOf(modeCapture);
     const apiCaptureIdx = sendBody.indexOf(apiCapture);
     const parseIdx = sendBody.indexOf('text = await parseSlashCommands(text, tabId);');
+    assert.notEqual(modeOverrideIdx, -1, `${label}: recommended-action mode override should be captured before send mode selection`);
+    assert.notEqual(deleteModeIdx, -1, `${label}: internal recommended-action mode override should not leak into chat payload`);
     assert.notEqual(modeCaptureIdx, -1, `${label}: send mode should be captured from the initiating command before async slash parsing`);
     assert.notEqual(apiCaptureIdx, -1, `${label}: API override should be captured from the initiating tab before async slash parsing`);
+    assert.equal(modeOverrideIdx < modeCaptureIdx && deleteModeIdx < modeCaptureIdx, true, `${label}: recommended-action mode override should be captured and stripped before selecting send mode`);
     assert.equal(modeCaptureIdx < parseIdx && apiCaptureIdx < parseIdx, true, `${label}: stale-tab residual sends should not read visible-tab options after slash parsing`);
     assert.match(
       sendBody,

@@ -2495,7 +2495,15 @@ async function runRecommendedAction(action) {
   }
   inputEl.value = prompt;
   autoResizeInput();
-  sendMessage(action?.runOptions ? { recommendedAction: action.runOptions } : {});
+  sendMessage(recommendedActionSendParams(action));
+}
+
+function recommendedActionSendParams(action) {
+  const params = action?.runOptions ? { recommendedAction: action.runOptions } : {};
+  if (['ask', 'act', 'dev'].includes(action?.mode)) {
+    params.__mode = action.mode;
+  }
+  return params;
 }
 
 // After restoring innerHTML the copy buttons need their click handlers re-bound,
@@ -3487,8 +3495,10 @@ function updateApiBadge() {
 
 async function sendMessage(extraChatParams = {}) {
   const retryOptions = extraChatParams?.__retry || null;
+  const modeOverride = ['ask', 'act', 'dev'].includes(extraChatParams?.__mode) ? extraChatParams.__mode : null;
   const chatExtraParams = { ...(extraChatParams || {}) };
   delete chatExtraParams.__retry;
+  delete chatExtraParams.__mode;
   stopListening();
   let text = inputEl.value.trim();
   if (!text) return;
@@ -3526,7 +3536,7 @@ async function sendMessage(extraChatParams = {}) {
     }
     return enqueueQueuedComposerMessage(tabId, text);
   }
-  const modeForSend = retryOptions?.mode || modeForMessageText(text);
+  const modeForSend = retryOptions?.mode || modeOverride || modeForMessageText(text);
   const apiMutationsAllowedForSend = retryOptions
     ? !!retryOptions.apiMutationsAllowed
     : isApiMutationsAllowedForTab(tabId) || /^\/allow-api\b/i.test(text);
