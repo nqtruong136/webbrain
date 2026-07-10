@@ -19924,6 +19924,19 @@ test('profile sync encrypts provider secrets and rejects wrong passwords', async
   await assert.rejects(() => decryptProfileVault(envelope, 'wrong password'), /Incorrect sync password/);
 });
 
+test('profile sync preserves KDF iterations when reusing a derived key', async () => {
+  const { encryptProfileVault, decryptProfileVault } = await import(
+    'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')
+  );
+  const password = 'correct horse battery staple'; const payload = { providers: { openai: { apiKey: 'secret' } } };
+  const first = await encryptProfileVault(payload, password, { iterations: 1000 });
+  const decrypted = await decryptProfileVault(first.envelope, password);
+  const salt = Uint8Array.from(atob(first.envelope.kdf.salt), c => c.charCodeAt(0));
+  const second = await encryptProfileVault(payload, password, { vaultId: first.envelope.vaultId, salt, iterations: first.envelope.kdf.iterations, key: decrypted.key });
+  assert.equal(second.envelope.kdf.iterations, 1000);
+  assert.deepEqual((await decryptProfileVault(second.envelope, password)).payload, payload);
+});
+
 test('profile sync merge keeps newer provider/profile data and memory tombstones', async () => {
   const { mergeProfileVaults } = await import(
     'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')

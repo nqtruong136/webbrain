@@ -36,9 +36,10 @@ function aadFor(envelope) {
 export async function encryptProfileVault(payload, password, options = {}) {
   const salt = options.salt || crypto.getRandomValues(new Uint8Array(16));
   const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const iterations = Number(options.iterations || ITERATIONS);
   const envelope = { version: 1, vaultId: options.vaultId || crypto.randomUUID(),
-    kdf: { name: 'PBKDF2-HMAC-SHA-256', iterations: ITERATIONS, salt: b64(salt) }, nonce: b64(nonce) };
-  const key = options.key || await deriveProfileSyncKey(password, salt);
+    kdf: { name: 'PBKDF2-HMAC-SHA-256', iterations, salt: b64(salt) }, nonce: b64(nonce) };
+  const key = options.key || await deriveProfileSyncKey(password, salt, iterations);
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aadFor(envelope) }, key, enc.encode(JSON.stringify(payload)));
   return { envelope: { ...envelope, ciphertext: b64(new Uint8Array(ciphertext)) }, key };
 }
@@ -229,7 +230,7 @@ export class ProfileSyncManager {
     let runKey = this.key, runEnvelope = this.envelope;
     if (remote?.envelope) { const decrypted = await decryptProfileVault(remote.envelope, password); runKey = decrypted.key; runEnvelope = remote.envelope; await this.changeQueue; local = await this.localVault(); if (preferLocal) { const localIds = new Set((local.memory?.records || []).map(record => record.id)); local.tombstones = { ...(local.tombstones || {}) }; for (const record of decrypted.payload.memory?.records || []) if (!localIds.has(record.id)) local.tombstones[record.id] = Date.now(); } const merged = mergeProfileVaults(local, decrypted.payload); local = merged.vault; await this.apply(local, merged.conflicts); }
     if (generation !== this.sessionGeneration || this.password !== password) throw new Error('Cloud Sync was locked');
-    const encrypted = await encryptProfileVault(local, password, runEnvelope ? { vaultId: runEnvelope.vaultId, salt: unb64(runEnvelope.kdf.salt), key: runKey } : {});
+    const encrypted = await encryptProfileVault(local, password, runEnvelope ? { vaultId: runEnvelope.vaultId, salt: unb64(runEnvelope.kdf.salt), iterations: runEnvelope.kdf.iterations, key: runKey } : {});
     if (generation !== this.sessionGeneration || this.password !== password) throw new Error('Cloud Sync was locked');
     this.key = encrypted.key; this.envelope = encrypted.envelope;
     try { const put = await this.request('/vault', { method: 'PUT', headers: this.revision != null ? { 'If-Match': String(this.revision) } : {}, body: JSON.stringify({ envelope: encrypted.envelope }) }); this.revision = put.body.revision; }
