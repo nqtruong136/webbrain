@@ -7,9 +7,11 @@ import { AwsBedrockProvider } from './aws-bedrock.js';
 import {
   lmStudioContextWindowIsLive,
   parseLlamaCppPropsContextWindow,
+  parseLocalAiModelConfigContextWindow,
   parseLmStudioModelsContextWindow,
   parseOllamaPsContextWindow,
   parseOllamaShowContextWindow,
+  parseOpenAiModelListContextWindow,
   shouldApplyDetectedContextWindow,
 } from './context-windows.js';
 
@@ -732,12 +734,20 @@ export class ProviderManager {
         if (candidate.configBaseUrl !== observedBaseUrl) {
           if (await this._updateProviderBaseUrl(id, candidate.configBaseUrl, observedBaseUrl)) {
             result.baseUrl = candidate.configBaseUrl;
+          } else {
+            return result;
           }
         }
-        if (id !== 'llamacpp') return result;
         const active = this.providers.get(id) || provider;
+        if (
+          active.config.baseUrl !== candidate.configBaseUrl ||
+          active.config.model !== provider.config.model
+        ) {
+          return result;
+        }
         return this._attachDetectedContextWindow(id, active, result, {
           requestBaseUrl: candidate.requestBaseUrl,
+          modelListData: data,
         });
       } catch (e) {
         if (!firstFailure) firstFailure = { ok: false, error: e.message };
@@ -893,8 +903,9 @@ export class ProviderManager {
   }
 
   /**
-   * Best-effort local context detection. Only llama.cpp / Ollama / LM Studio
-   * report usable windows today; other local ids no-op. Returns
+   * Best-effort local context detection. Supported local servers expose usable
+   * runtime/configured windows through provider-specific metadata; others no-op.
+   * Returns
    * `{ contextWindow, shrinkOverride }` where shrinkOverride means the value
    * came from live/runtime allocation (safe to shrink a manual override).
    */
@@ -959,6 +970,31 @@ export class ProviderManager {
         const contextWindow = parseOllamaShowContextWindow(await res.json());
         if (contextWindow == null) return null;
         return { contextWindow, shrinkOverride: false };
+      }
+
+      if (id === 'vllm' || id === 'sglang') {
+        let data = options.modelListData || null;
+        if (!data) {
+          const openAiBase = /\/v1$/i.test(rawBaseUrl) ? rawBaseUrl : `${root}/v1`;
+          const res = await fetch(`${openAiBase}/models`, { method: 'GET', headers });
+          if (!res.ok) return null;
+          data = await res.json();
+        }
+        const contextWindow = parseOpenAiModelListContextWindow(data, model);
+        if (contextWindow == null) return null;
+        return { contextWindow, shrinkOverride: true };
+      }
+
+      if (id === 'localai') {
+        if (!model) return null;
+        const res = await fetch(`${root}/api/models/config-json/${encodeURIComponent(model)}`, {
+          method: 'GET',
+          headers,
+        });
+        if (!res.ok) return null;
+        const contextWindow = parseLocalAiModelConfigContextWindow(await res.json());
+        if (contextWindow == null) return null;
+        return { contextWindow, shrinkOverride: true };
       }
     } catch {
       return null;

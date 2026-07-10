@@ -153,6 +153,65 @@ export function parseLmStudioModelsContextWindow(data, preferredModel = '') {
   return null;
 }
 
+function openAiModelCardContextWindow(model) {
+  if (!model || typeof model !== 'object') return null;
+  return normalizeDetectedContextWindow(
+    model.max_model_len ??
+    model.maxModelLen ??
+    model.max_context_length ??
+    model.maxContextLength ??
+    model.context_window ??
+    model.contextWindow
+  );
+}
+
+/**
+ * OpenAI-compatible `GET /v1/models` extensions used by vLLM and SGLang.
+ * Prefer an exact preferred model match; if none is selected, use the first
+ * model card that carries explicit context metadata.
+ */
+export function parseOpenAiModelListContextWindow(data, preferredModel = '') {
+  const source = Array.isArray(data?.data) ? data.data : [];
+  if (!source.length) return null;
+
+  const want = String(preferredModel || '').trim();
+  const cards = source.filter((m) => m && typeof m === 'object' && m.id);
+
+  if (want) {
+    const preferred = cards.find((m) => modelIdsMatch(m.id, want));
+    return preferred ? openAiModelCardContextWindow(preferred) : null;
+  }
+
+  for (const model of cards) {
+    const n = openAiModelCardContextWindow(model);
+    if (n != null) return n;
+  }
+  return null;
+}
+
+/**
+ * LocalAI `GET /api/models/config-json/:name` — use configured runtime
+ * `context_size` only. Do not infer from architecture/model maxima.
+ */
+export function parseLocalAiModelConfigContextWindow(data) {
+  if (!data || typeof data !== 'object') return null;
+  const candidates = [
+    data.context_size,
+    data.contextSize,
+    data.config?.context_size,
+    data.config?.contextSize,
+    data.model_config?.context_size,
+    data.model_config?.contextSize,
+    data.parameters?.context_size,
+    data.parameters?.contextSize,
+  ];
+  for (const value of candidates) {
+    const n = normalizeDetectedContextWindow(value);
+    if (n != null) return n;
+  }
+  return null;
+}
+
 /**
  * True when LM Studio detection came from a loaded model's
  * `loaded_context_length` (safe to shrink a manual override).

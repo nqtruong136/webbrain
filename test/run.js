@@ -252,6 +252,8 @@ const {
   parseOllamaPsContextWindow: parseOllamaPsContextWindowCh,
   parseOllamaNumCtx: parseOllamaNumCtxCh,
   parseLmStudioModelsContextWindow: parseLmStudioModelsContextWindowCh,
+  parseOpenAiModelListContextWindow: parseOpenAiModelListContextWindowCh,
+  parseLocalAiModelConfigContextWindow: parseLocalAiModelConfigContextWindowCh,
   lmStudioContextWindowIsLive: lmStudioContextWindowIsLiveCh,
 } = await import(
   'file://' + path.join(ROOT, 'src/chrome/src/providers/context-windows.js').replace(/\\/g, '/')
@@ -265,6 +267,8 @@ const {
   parseOllamaPsContextWindow: parseOllamaPsContextWindowFx,
   parseOllamaNumCtx: parseOllamaNumCtxFx,
   parseLmStudioModelsContextWindow: parseLmStudioModelsContextWindowFx,
+  parseOpenAiModelListContextWindow: parseOpenAiModelListContextWindowFx,
+  parseLocalAiModelConfigContextWindow: parseLocalAiModelConfigContextWindowFx,
   lmStudioContextWindowIsLive: lmStudioContextWindowIsLiveFx,
 } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/providers/context-windows.js').replace(/\\/g, '/')
@@ -10505,7 +10509,7 @@ test('inferContextWindow: model-aware cloud/router defaults and local 16k fallba
   }
 });
 
-test('local context-window detection parsers: llama.cpp / Ollama / LM Studio', () => {
+test('local context-window detection parsers: local provider metadata', () => {
   const parsers = [
     {
       normalize: normalizeDetectedContextWindowCh,
@@ -10515,6 +10519,8 @@ test('local context-window detection parsers: llama.cpp / Ollama / LM Studio', (
       ollamaPs: parseOllamaPsContextWindowCh,
       ollamaNumCtx: parseOllamaNumCtxCh,
       lmstudio: parseLmStudioModelsContextWindowCh,
+      openAiList: parseOpenAiModelListContextWindowCh,
+      localAiConfig: parseLocalAiModelConfigContextWindowCh,
       lmLive: lmStudioContextWindowIsLiveCh,
     },
     {
@@ -10525,6 +10531,8 @@ test('local context-window detection parsers: llama.cpp / Ollama / LM Studio', (
       ollamaPs: parseOllamaPsContextWindowFx,
       ollamaNumCtx: parseOllamaNumCtxFx,
       lmstudio: parseLmStudioModelsContextWindowFx,
+      openAiList: parseOpenAiModelListContextWindowFx,
+      localAiConfig: parseLocalAiModelConfigContextWindowFx,
       lmLive: lmStudioContextWindowIsLiveFx,
     },
   ];
@@ -10633,6 +10641,33 @@ test('local context-window detection parsers: llama.cpp / Ollama / LM Studio', (
     assert.equal(p.lmLive({
       data: [{ id: 'chat-a', type: 'llm', state: 'not-loaded', max_context_length: 32768 }],
     }, 'chat-a'), false);
+
+    assert.equal(p.openAiList({
+      data: [
+        { id: 'other-model', max_model_len: 32768 },
+        { id: 'Qwen/Qwen3-4B', max_model_len: 65536 },
+      ],
+    }, 'Qwen/Qwen3-4B'), 65536);
+    assert.equal(p.openAiList({
+      data: [{ id: 'Qwen/Qwen3-4B', maxModelLen: '131072' }],
+    }, 'qwen/qwen3-4b'), 131072);
+    assert.equal(p.openAiList({
+      data: [{ id: 'Qwen/Qwen3-4B', max_model_len: 65536 }],
+    }, 'missing-model'), null);
+    assert.equal(p.openAiList({
+      data: [
+        { id: 'missing-window' },
+        { id: 'served-model', context_window: 12288 },
+      ],
+    }), 12288);
+    assert.equal(p.openAiList({ data: [{ id: 'served-model', context_length: 65536 }] }), null);
+
+    assert.equal(p.localAiConfig({ context_size: 8192 }), 8192);
+    assert.equal(p.localAiConfig({ contextSize: '24576' }), 24576);
+    assert.equal(p.localAiConfig({ config: { context_size: 12288 } }), 12288);
+    assert.equal(p.localAiConfig({ model_config: { contextSize: 32768 } }), 32768);
+    assert.equal(p.localAiConfig({ parameters: { context_size: 2048 } }), 4096);
+    assert.equal(p.localAiConfig({ model_max_context: 131072 }), null);
   }
 });
 
@@ -10931,6 +10966,98 @@ test('ProviderManager persists detected local context windows with safe apply po
             patch.providers?.lmstudio?.contextWindow === 8192
           ),
           `${label}: lmstudio selected-model persistence writes context window to storage`
+        );
+      }
+
+      // vLLM /v1/models includes max_model_len on model cards.
+      {
+        const writes = [];
+        globalThis[runtimeKey] = makeRuntime(writes);
+        globalThis.fetch = async (url) => {
+          const u = String(url);
+          if (u.endsWith('/models')) {
+            return jsonOk({
+              data: [
+                { id: 'other-model', max_model_len: 32768 },
+                { id: 'served-model', max_model_len: 65536 },
+              ],
+            });
+          }
+          return new Response('missing', { status: 404 });
+        };
+        const mgr = new PM();
+        const config = {
+          ...mgr._defaultConfigs().vllm,
+          model: 'served-model',
+          contextWindow: 16384,
+        };
+        mgr.providers.set('vllm', mgr._createProvider('vllm', config));
+        const result = await mgr.listProviderModels('vllm');
+        assert.equal(result.ok, true, `${label}: vllm list ok`);
+        assert.deepEqual(result.models, ['other-model', 'served-model']);
+        assert.equal(result.contextWindow, 65536, `${label}: vllm detects matching max_model_len`);
+        assert.equal(mgr.providers.get('vllm').config.contextWindow, 65536);
+        assert.ok(
+          writes.some((patch) => patch.providers?.vllm?.contextWindow === 65536),
+          `${label}: vllm persistence writes detected window to storage`
+        );
+      }
+
+      // SGLang model cards also expose max_model_len; treat it as runtime max.
+      {
+        const writes = [];
+        globalThis[runtimeKey] = makeRuntime(writes);
+        globalThis.fetch = async (url) => {
+          if (String(url).endsWith('/models')) {
+            return jsonOk({ data: [{ id: 'sglang-model', max_model_len: 8192 }] });
+          }
+          return new Response('missing', { status: 404 });
+        };
+        const mgr = new PM();
+        const config = {
+          ...mgr._defaultConfigs().sglang,
+          model: 'sglang-model',
+          contextWindow: 65536,
+        };
+        mgr.providers.set('sglang', mgr._createProvider('sglang', config));
+        const result = await mgr.detectProviderContextWindow('sglang', 'sglang-model');
+        assert.equal(result.ok, true, `${label}: sglang selected-model detection ok`);
+        assert.equal(result.contextWindow, 8192, `${label}: sglang shrinks stale manual override`);
+        assert.equal(mgr.providers.get('sglang').config.contextWindow, 8192);
+        assert.ok(
+          writes.some((patch) => patch.providers?.sglang?.contextWindow === 8192),
+          `${label}: sglang persistence writes detected window to storage`
+        );
+      }
+
+      // LocalAI exposes configured context_size through its model config API.
+      {
+        const writes = [];
+        const calls = [];
+        globalThis[runtimeKey] = makeRuntime(writes);
+        globalThis.fetch = async (url, init = {}) => {
+          calls.push({ url: String(url), headers: init.headers || {} });
+          if (String(url).endsWith('/api/models/config-json/owner%2Flocal-model')) {
+            return jsonOk({ context_size: 24576 });
+          }
+          return new Response('missing', { status: 404 });
+        };
+        const mgr = new PM();
+        const config = {
+          ...mgr._defaultConfigs().localai,
+          model: 'owner/local-model',
+          contextWindow: 16384,
+          apiKey: 'localai-secret',
+        };
+        mgr.providers.set('localai', mgr._createProvider('localai', config));
+        const result = await mgr.detectProviderContextWindow('localai', 'owner/local-model');
+        assert.equal(result.ok, true, `${label}: localai selected-model detection ok`);
+        assert.equal(result.contextWindow, 24576, `${label}: localai detects configured context_size`);
+        assert.equal(mgr.providers.get('localai').config.contextWindow, 24576);
+        assert.equal(calls[0].headers.Authorization, 'Bearer localai-secret');
+        assert.ok(
+          writes.some((patch) => patch.providers?.localai?.contextWindow === 24576),
+          `${label}: localai persistence writes detected window to storage`
         );
       }
 
