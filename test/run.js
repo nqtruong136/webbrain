@@ -19965,6 +19965,16 @@ test('profile sync preserves meaningful local legacy data when metadata ties at 
   assert.equal(conflicts.some(conflict => conflict.dataset === 'profile'), true);
 });
 
+test('profile sync treats saved credential-empty provider defaults as empty on legacy ties', async () => {
+  const { mergeProfileVaults } = await import(
+    'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')
+  );
+  const local = { providers: { openai: { apiKey: '', apiKeyUrl: 'https://example.test/key', model: 'default' } }, activeProvider: 'openai', profile: { enabled: false, text: '' }, memory: { records: [] }, tombstones: {}, meta: {} };
+  const remote = { providers: { openai: { apiKey: 'remote-secret', model: 'custom' } }, activeProvider: 'openai', profile: { enabled: false, text: '' }, memory: { records: [] }, tombstones: {}, meta: {} };
+  const { vault } = mergeProfileVaults(local, remote);
+  assert.deepEqual(vault.providers, remote.providers);
+});
+
 test('profile sync password change uploads a vault encrypted with the new password', async () => {
   const { ProfileSyncManager, decryptProfileVault } = await import(
     'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')

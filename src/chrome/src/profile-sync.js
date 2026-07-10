@@ -59,13 +59,26 @@ function newer(local, remote, localAt, remoteAt, conflicts, name) {
   // local state is genuinely empty/default. Meaningful legacy local state
   // remains the tie winner and the remote variant is retained as a conflict.
   const localIsEmpty = name === 'providers'
-    ? Object.keys(local || {}).length === 0
+    ? Object.keys(local || {}).length === 0 || (!hasProviderCredentials(local) && hasProviderCredentials(remote))
     : name === 'profile'
       ? !local?.enabled && !String(local?.text || '').trim()
       : local == null || local === '';
   if (localAt === 0 && remoteAt === 0 && localIsEmpty) return remote;
   if (remoteAt === localAt && stable(local) !== stable(remote)) conflicts.push({ dataset: name, local, remote, at: Date.now() });
   return local;
+}
+
+function hasProviderCredentials(providers) {
+  const visit = value => {
+    if (!value || typeof value !== 'object') return false;
+    return Object.entries(value).some(([key, child]) => {
+      const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const credentialField = normalized.includes('secret') || normalized.includes('password') || normalized.includes('token')
+        || (normalized.includes('key') && !normalized.endsWith('url'));
+      return credentialField && typeof child === 'string' && child.length > 0 || visit(child);
+    });
+  };
+  return visit(providers);
 }
 
 export function mergeProfileVaults(local, remote) {
