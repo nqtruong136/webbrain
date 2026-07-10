@@ -102,13 +102,31 @@ function mergeLegacyProviderState(local, remote, conflicts) {
   };
 }
 
+function itemTimestamp(meta, group, id) {
+  const items = meta?.[group];
+  return items ? Number(items[id] || 0) : Number(meta?.providersAt || 0);
+}
+
+function mergeProviderState(local, remote, lm, rm, conflicts) {
+  const providers = {};
+  for (const id of new Set([...Object.keys(remote.providers || {}), ...Object.keys(local.providers || {})])) {
+    providers[id] = newer(local.providers?.[id], remote.providers?.[id], itemTimestamp(lm, 'providerItemsAt', id), itemTimestamp(rm, 'providerItemsAt', id), conflicts, `providers.${id}`);
+    if (providers[id] === undefined) delete providers[id];
+  }
+  const auxiliaryProviders = {};
+  for (const id of ['visionModel', 'transcriptionModel']) auxiliaryProviders[id] = newer(local.auxiliaryProviders?.[id], remote.auxiliaryProviders?.[id], itemTimestamp(lm, 'auxiliaryItemsAt', id), itemTimestamp(rm, 'auxiliaryItemsAt', id), conflicts, `providers.${id}`) ?? null;
+  const localActiveAt = lm.activeProviderAt ?? (lm.providerItemsAt ? 0 : lm.providersAt || 0);
+  const remoteActiveAt = rm.activeProviderAt ?? (rm.providerItemsAt ? 0 : rm.providersAt || 0);
+  return { providers, auxiliaryProviders, activeProvider: newer(local.activeProvider || '', remote.activeProvider || '', localActiveAt, remoteActiveAt, conflicts, 'activeProvider') };
+}
+
 export function mergeProfileVaults(local, remote) {
   const conflicts = [];
   const out = structuredClone(local);
   const lm = local.meta || {}, rm = remote.meta || {};
   const providerState = (lm.providersAt || 0) === 0 && (rm.providersAt || 0) === 0
     ? mergeLegacyProviderState(local, remote, conflicts)
-    : newer({ providers: local.providers || {}, activeProvider: local.activeProvider || '', auxiliaryProviders: local.auxiliaryProviders || {} }, { providers: remote.providers || {}, activeProvider: remote.activeProvider || '', auxiliaryProviders: remote.auxiliaryProviders || {} }, lm.providersAt || 0, rm.providersAt || 0, conflicts, 'providers');
+    : mergeProviderState(local, remote, lm, rm, conflicts);
   out.providers = providerState.providers;
   out.activeProvider = providerState.activeProvider;
   out.auxiliaryProviders = providerState.auxiliaryProviders;
@@ -129,16 +147,17 @@ export function mergeProfileVaults(local, remote) {
   for (const [id, deletedAt] of Object.entries(tombstones)) if (deletedAt >= Number(byId.get(id)?.updatedAt || 0)) byId.delete(id);
   out.memory = normalizeUserMemoryStore({ ...(local.memory || {}), records: [...byId.values()] });
   out.tombstones = tombstones;
-  out.meta = { providersAt: Math.max(lm.providersAt || 0, rm.providersAt || 0), profileAt: Math.max(lm.profileAt || 0, rm.profileAt || 0), memoryAt: Math.max(lm.memoryAt || 0, rm.memoryAt || 0) };
+  const providerIds = new Set([...Object.keys(local.providers || {}), ...Object.keys(remote.providers || {}), ...Object.keys(lm.providerItemsAt || {}), ...Object.keys(rm.providerItemsAt || {})]); const auxiliaryIds = new Set(['visionModel', 'transcriptionModel', ...Object.keys(lm.auxiliaryItemsAt || {}), ...Object.keys(rm.auxiliaryItemsAt || {})]);
+  out.meta = { providersAt: Math.max(lm.providersAt || 0, rm.providersAt || 0), providerItemsAt: Object.fromEntries([...providerIds].map(id => [id, Math.max(itemTimestamp(lm, 'providerItemsAt', id), itemTimestamp(rm, 'providerItemsAt', id))])), activeProviderAt: Math.max(lm.activeProviderAt || 0, rm.activeProviderAt || 0), auxiliaryItemsAt: Object.fromEntries([...auxiliaryIds].map(id => [id, Math.max(itemTimestamp(lm, 'auxiliaryItemsAt', id), itemTimestamp(rm, 'auxiliaryItemsAt', id))])), profileAt: Math.max(lm.profileAt || 0, rm.profileAt || 0), memoryAt: Math.max(lm.memoryAt || 0, rm.memoryAt || 0) };
   return { vault: out, conflicts };
 }
 
 export class ProfileSyncManager {
-  constructor(storage) { this.storage = storage; this.password = null; this.key = null; this.envelope = null; this.revision = null; this.timer = null; this.applying = false; this.status = 'disabled'; this.changeQueue = Promise.resolve(); this.syncPromise = null; this.syncAgain = false; }
+  constructor(storage) { this.storage = storage; this.password = null; this.key = null; this.envelope = null; this.revision = null; this.timer = null; this.applying = false; this.status = 'disabled'; this.changeQueue = Promise.resolve(); this.syncPromise = null; this.syncAgain = false; this.sessionGeneration = 0; }
   async state() { const s = await this.storage.get([PROFILE_SYNC_KEYS.enabled, PROFILE_SYNC_KEYS.token]); const enabled = s[PROFILE_SYNC_KEYS.enabled] === true; return { enabled, authenticated: !!s[PROFILE_SYNC_KEYS.token], unlocked: !!this.password, status: enabled && !this.password && this.status === 'disabled' ? 'locked' : this.status, revision: this.revision }; }
   async localVault() {
     const s = await this.storage.get([...PROFILE_SYNC_DATA_KEYS, PROFILE_SYNC_KEYS.metadata]); const meta = s[PROFILE_SYNC_KEYS.metadata] || {};
-    return { version: 1, memory: normalizeUserMemoryStore(s[USER_MEMORY_STORAGE_KEY]), tombstones: meta.tombstones || {}, providers: s.providers || {}, activeProvider: s.activeProvider || '', auxiliaryProviders: { visionModel: s.visionModel || null, transcriptionModel: s.transcriptionModel || null }, profile: { enabled: !!s.profileEnabled, text: s.profileText || '' }, meta: { providersAt: meta.providersAt || 0, profileAt: meta.profileAt || 0, memoryAt: meta.memoryAt || 0 } };
+    return { version: 1, memory: normalizeUserMemoryStore(s[USER_MEMORY_STORAGE_KEY]), tombstones: meta.tombstones || {}, providers: s.providers || {}, activeProvider: s.activeProvider || '', auxiliaryProviders: { visionModel: s.visionModel || null, transcriptionModel: s.transcriptionModel || null }, profile: { enabled: !!s.profileEnabled, text: s.profileText || '' }, meta: { providersAt: meta.providersAt || 0, providerItemsAt: meta.providerItemsAt, activeProviderAt: meta.activeProviderAt, auxiliaryItemsAt: meta.auxiliaryItemsAt, profileAt: meta.profileAt || 0, memoryAt: meta.memoryAt || 0 } };
   }
   async request(path, options = {}) {
     const s = await this.storage.get(PROFILE_SYNC_KEYS.token); const token = s[PROFILE_SYNC_KEYS.token];
@@ -148,8 +167,8 @@ export class ProfileSyncManager {
   }
   async authStart(email) { const s = await this.storage.get(PROFILE_SYNC_KEYS.deviceGuid); const verifier = randomB64(32); const r = await this.request('/auth/start', { method: 'POST', body: JSON.stringify({ email, device_guid: s[PROFILE_SYNC_KEYS.deviceGuid], verifier }) }); return { ...r.body, verifier }; }
   async authStatus(challengeId, verifier) { const q = new URLSearchParams({ challenge_id: challengeId }); const r = await this.request(`/auth/status?${q}`, { headers: { 'X-WebBrain-Sync-Verifier': verifier } }); if (r.body.token) await this.storage.set({ [PROFILE_SYNC_KEYS.token]: r.body.token }); return r.body; }
-  async unlock(password, create = false) { this.password = password; this.status = 'syncing'; try { await this.sync({ create }); this.status = 'current'; } catch (e) { this.password = null; this.key = null; this.status = e.status === 404 ? 'empty' : [402, 403].includes(e.status) ? 'subscription' : e instanceof TypeError ? 'offline' : 'error'; throw e; } return this.state(); }
-  lock() { this.password = null; this.key = null; this.envelope = null; this.status = 'locked'; }
+  async unlock(password, create = false) { this.sessionGeneration++; this.password = password; this.status = 'syncing'; try { await this.sync({ create }); this.status = 'current'; } catch (e) { this.password = null; this.key = null; this.status = e.status === 404 ? 'empty' : [402, 403].includes(e.status) ? 'subscription' : e instanceof TypeError ? 'offline' : 'error'; throw e; } return this.state(); }
+  lock() { this.sessionGeneration++; this.password = null; this.key = null; this.envelope = null; this.status = 'locked'; }
   noteChanges(changes) {
     this.changeQueue = this.changeQueue.then(() => this.updateChangeMetadata(changes), () => this.updateChangeMetadata(changes));
     return this.changeQueue;
@@ -159,7 +178,9 @@ export class ProfileSyncManager {
     const stored = await this.storage.get(PROFILE_SYNC_KEYS.metadata);
     const meta = stored[PROFILE_SYNC_KEYS.metadata] || {};
     const now = Date.now();
-    if (changes.providers || changes.activeProvider || changes.visionModel || changes.transcriptionModel) meta.providersAt = now;
+    if (changes.providers) { meta.providersAt = now; meta.providerItemsAt = meta.providerItemsAt || {}; const before = changes.providers.oldValue || {}, after = changes.providers.newValue || {}; for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) if (stable(before[id]) !== stable(after[id])) meta.providerItemsAt[id] = now; }
+    if (changes.activeProvider) { meta.providersAt = now; meta.activeProviderAt = now; }
+    for (const id of ['visionModel', 'transcriptionModel']) if (changes[id]) { meta.providersAt = now; meta.auxiliaryItemsAt = meta.auxiliaryItemsAt || {}; meta.auxiliaryItemsAt[id] = now; }
     if (changes.profileEnabled || changes.profileText) meta.profileAt = now;
     if (changes[USER_MEMORY_STORAGE_KEY]) {
       meta.memoryAt = now; meta.tombstones = meta.tombstones || {};
@@ -185,10 +206,14 @@ export class ProfileSyncManager {
     return this.syncPromise;
   }
   async runSync({ create = false } = {}) {
-    if (!this.password) throw new Error('Cloud Sync is locked'); this.status = 'syncing'; let local = await this.localVault();
+    if (!this.password) throw new Error('Cloud Sync is locked'); const password = this.password; const generation = this.sessionGeneration; this.status = 'syncing'; let local = await this.localVault();
     let remote = null; try { const got = await this.request('/vault'); remote = got.body; this.revision = remote.revision; } catch (e) { if (e.status !== 404 || !create) throw e; }
-    if (remote?.envelope) { const decrypted = await decryptProfileVault(remote.envelope, this.password); this.key = decrypted.key; this.envelope = remote.envelope; await this.changeQueue; local = await this.localVault(); const merged = mergeProfileVaults(local, decrypted.payload); local = merged.vault; await this.apply(local, merged.conflicts); }
-    const encrypted = await encryptProfileVault(local, this.password, this.envelope ? { vaultId: this.envelope.vaultId, salt: unb64(this.envelope.kdf.salt), key: this.key } : {}); this.key = encrypted.key; this.envelope = encrypted.envelope;
+    let runKey = this.key, runEnvelope = this.envelope;
+    if (remote?.envelope) { const decrypted = await decryptProfileVault(remote.envelope, password); runKey = decrypted.key; runEnvelope = remote.envelope; await this.changeQueue; local = await this.localVault(); const merged = mergeProfileVaults(local, decrypted.payload); local = merged.vault; await this.apply(local, merged.conflicts); }
+    if (generation !== this.sessionGeneration || this.password !== password) throw new Error('Cloud Sync was locked');
+    const encrypted = await encryptProfileVault(local, password, runEnvelope ? { vaultId: runEnvelope.vaultId, salt: unb64(runEnvelope.kdf.salt), key: runKey } : {});
+    if (generation !== this.sessionGeneration || this.password !== password) throw new Error('Cloud Sync was locked');
+    this.key = encrypted.key; this.envelope = encrypted.envelope;
     try { const put = await this.request('/vault', { method: 'PUT', headers: this.revision != null ? { 'If-Match': String(this.revision) } : {}, body: JSON.stringify({ envelope: encrypted.envelope }) }); this.revision = put.body.revision; }
     catch (e) { if (e.status === 409) { this.revision = null; return this.runSync(); } throw e; }
     this.status = 'current'; return this.state();

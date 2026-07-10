@@ -19996,6 +19996,18 @@ test('profile sync preserves remote auxiliary providers when local legacy values
   assert.deepEqual(vault.auxiliaryProviders, remote.auxiliaryProviders);
 });
 
+test('profile sync merges independently edited provider configurations by item timestamp', async () => {
+  const { mergeProfileVaults } = await import(
+    'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')
+  );
+  const shared = { activeProvider: 'openai', auxiliaryProviders: {}, profile: {}, memory: { records: [] }, tombstones: {} };
+  const local = { ...shared, providers: { openai: { apiKey: 'old-openai' }, anthropic: { apiKey: 'new-anthropic' } }, meta: { providersAt: 20, providerItemsAt: { openai: 5, anthropic: 20 } } };
+  const remote = { ...shared, providers: { openai: { apiKey: 'new-openai' }, anthropic: { apiKey: 'old-anthropic' } }, meta: { providersAt: 15, providerItemsAt: { openai: 15, anthropic: 5 } } };
+  const { vault } = mergeProfileVaults(local, remote);
+  assert.equal(vault.providers.openai.apiKey, 'new-openai');
+  assert.equal(vault.providers.anthropic.apiKey, 'new-anthropic');
+});
+
 test('profile sync password change uploads a vault encrypted with the new password', async () => {
   const { ProfileSyncManager, decryptProfileVault } = await import(
     'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')
@@ -20075,6 +20087,28 @@ test('profile sync runs a follow-up pass when another sync joins an upload', asy
   release();
   await Promise.all([first, joined]);
   assert.equal(runs, 2);
+});
+
+test('profile sync aborts an upload when the session locks in flight', async () => {
+  const { ProfileSyncManager } = await import(
+    'file://' + path.join(ROOT, 'src/chrome/src/profile-sync.js').replace(/\\/g, '/')
+  );
+  const manager = new ProfileSyncManager({});
+  manager.password = 'correct horse battery staple';
+  manager.localVault = async () => ({ providers: {}, auxiliaryProviders: {}, profile: {}, memory: { records: [] }, tombstones: {}, meta: {} });
+  let release;
+  let uploads = 0;
+  manager.request = async (_path, options = {}) => {
+    if (options.method === 'PUT') { uploads++; return { body: { revision: 1 } }; }
+    await new Promise(resolve => { release = resolve; });
+    const error = new Error('missing'); error.status = 404; throw error;
+  };
+  const syncing = manager.sync({ create: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  manager.lock();
+  release();
+  await assert.rejects(syncing, /locked/);
+  assert.equal(uploads, 0);
 });
 
 await run();
