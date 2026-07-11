@@ -697,8 +697,8 @@ export default {
   "st.memory.reason.not_found": "Сохранённой записи с таким ID нет.",
   "st.memory.security_html": "<strong>Конфиденциальность:</strong> память пользователя хранится открытым текстом в этом профиле браузера. Когда она включена, активные записи памяти отправляются выбранному провайдеру LLM как часть системного промпта. Не храните здесь пароли, API-ключи, токены, коды восстановления или другие конфиденциальные секреты.",
   "hist.filter.clear": "Очистить фильтр и показать все разговоры",
-  "st.redaction.heading": "Screenshot redaction",
-  "st.redaction.toggle.label": "Redact sensitive content from screenshots",
-  "st.redaction.toggle.desc": "Before a screenshot is sent to a vision model, blur form fields and text that looks like an email or phone number. Runs entirely on your device — nothing is transmitted.",
-  "st.redaction.warning": "⚠️ Local, best-effort redaction only. It blurs password/text inputs and text matching email/phone patterns using DOM heuristics. It is NOT a security guarantee: content drawn on a canvas, PII inside images, or anything not recognized as a form field or email/phone text may still appear in the screenshot that the model sees.",
+  "st.redaction.heading": "Редактирование скриншотов",
+  "st.redaction.toggle.label": "Скрывать чувствительный контент на скриншотах",
+  "st.redaction.toggle.desc": "Перед отправкой скриншота модели зрения размывает поля форм и текст, похожий на email или номер телефона. Обнаружение выполняется полностью на вашем устройстве — ничего лишнего не передаётся.",
+  "st.redaction.warning": "⚠️ Работает по принципу «максимум усилий» и fail-open: если редактирование не может выполниться на странице (например, сразу после перехода, в просмотрщиках PDF или на ограниченных страницах браузера), скриншот всё равно отправляется неотредактированным. Обнаружение использует только эвристики DOM — текст, нарисованный на canvas, персональные данные внутри изображений или что-либо, не распознанное как поле формы или текст email/телефона, может остаться незамеченным, а текст страницы, отправляемый модели, этой настройкой не редактируется. Это НЕ гарантия безопасности. Для полной приватности используйте локальную/офлайн-модель (llama.cpp, Ollama): тогда скриншоты вообще не покидают ваше устройство и редактирование не требуется.",
 };

@@ -697,8 +697,8 @@ export default {
   "st.memory.reason.not_found": "Збереженого запису з таким ID немає.",
   "st.memory.security_html": "<strong>Конфіденційність:</strong> пам’ять користувача зберігається відкритим текстом у цьому профілі браузера. Коли її ввімкнено, активні записи пам’яті надсилаються вибраному провайдеру LLM як частина системного промпту. Не зберігайте тут паролі, ключі API, токени, коди відновлення чи інші конфіденційні секрети.",
   "hist.filter.clear": "Очистити фільтр і показати всі розмови",
-  "st.redaction.heading": "Screenshot redaction",
-  "st.redaction.toggle.label": "Redact sensitive content from screenshots",
-  "st.redaction.toggle.desc": "Before a screenshot is sent to a vision model, blur form fields and text that looks like an email or phone number. Runs entirely on your device — nothing is transmitted.",
-  "st.redaction.warning": "⚠️ Local, best-effort redaction only. It blurs password/text inputs and text matching email/phone patterns using DOM heuristics. It is NOT a security guarantee: content drawn on a canvas, PII inside images, or anything not recognized as a form field or email/phone text may still appear in the screenshot that the model sees.",
+  "st.redaction.heading": "Редагування знімків екрана",
+  "st.redaction.toggle.label": "Приховувати чутливий вміст на знімках екрана",
+  "st.redaction.toggle.desc": "Перед надсиланням знімка екрана моделі зору розмиває поля форм і текст, схожий на email чи номер телефону. Виявлення виконується повністю на вашому пристрої — нічого зайвого не передається.",
+  "st.redaction.warning": "⚠️ Працює за принципом «найкращих зусиль» і fail-open: якщо редагування не може виконатися на сторінці (наприклад, одразу після переходу, у переглядачах PDF або на обмежених сторінках браузера), знімок екрана все одно надсилається невідредагованим. Виявлення використовує лише евристики DOM — текст, намальований на canvas, персональні дані всередині зображень або будь-що, не розпізнане як поле форми чи текст email/телефону, може залишитися непоміченим, а текст сторінки, що надсилається моделі, цим налаштуванням не редагується. Це НЕ гарантія безпеки. Для повної приватності використовуйте локальну/офлайн-модель (llama.cpp, Ollama): тоді знімки екрана взагалі не покидають ваш пристрій і редагування стає непотрібним.",
 };

@@ -20,7 +20,15 @@
  * IMPORTANT LIMITATION: this is best-effort, regex/DOM heuristics. It is NOT a
  * security guarantee. Anything not rendered as a recognized element/text
  * (canvas-drawn text, images containing PII, etc.) may slip through. The UI
- * surfaces this disclaimer.
+ * surfaces this disclaimer. Also: the content script is injected via
+ * `match_about_blank`, which does not cover `srcdoc` iframes in Chrome (that
+ * needs `match_origin_as_fallback`) — PII rendered inside a srcdoc frame can
+ * pass through undetected.
+ *
+ * The EMAIL_RE/PHONE_RE heuristics below are a twin of `looksLikePiiText` in
+ * content/redaction-regions.js. Keep both in sync — the content script's
+ * pre-filter and this file's re-classification must agree, or a region
+ * selected by one side can be silently dropped by the other.
  *
  * The pure helpers (`selectRedactionRegions`, `mapRegionsToImage`,
  * `REGION_KIND`) contain no browser APIs so they can be unit-tested under

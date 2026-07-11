@@ -650,8 +650,8 @@ export default {
   "tr.event.result": "תוֹצָאָה",
   "tr.event.step": "שָׁלָב {step}",
   "sp.perm.verb.record": "להקליט את הכרטיסייה (ואת המיקרופון) באתר",
-  "st.redaction.heading": "Screenshot redaction",
-  "st.redaction.toggle.label": "Redact sensitive content from screenshots",
-  "st.redaction.toggle.desc": "Before a screenshot is sent to a vision model, blur form fields and text that looks like an email or phone number. Runs entirely on your device — nothing is transmitted.",
-  "st.redaction.warning": "⚠️ Local, best-effort redaction only. It blurs password/text inputs and text matching email/phone patterns using DOM heuristics. It is NOT a security guarantee: content drawn on a canvas, PII inside images, or anything not recognized as a form field or email/phone text may still appear in the screenshot that the model sees.",
+  "st.redaction.heading": "טשטוש צילומי מסך",
+  "st.redaction.toggle.label": "טשטש תוכן רגיש בצילומי מסך",
+  "st.redaction.toggle.desc": "לפני שצילום מסך נשלח למודל ראייה, מטשטש שדות טופס וטקסט שנראה כמו אימייל או מספר טלפון. הזיהוי פועל כולו במכשיר שלך — שום דבר נוסף לא מועבר.",
+  "st.redaction.warning": "⚠️ זהו טשטוש במאמץ סביר (best-effort) מסוג fail-open: אם הטשטוש לא יכול לפעול בדף מסוים (למשל מיד אחרי ניווט, בצפייה בקבצי PDF, או בדפי דפדפן מוגבלים), צילום המסך עדיין יישלח ללא טשטוש. הזיהוי מסתמך רק על היוריסטיקות DOM — טקסט המצויר על canvas, מידע אישי בתוך תמונות, או כל דבר שלא מזוהה כשדה טופס או כטקסט אימייל/טלפון עלול לחמוק, וטקסט הדף הנשלח למודל אינו מטושטש על ידי הגדרה זו. זו אינה ערבות אבטחה. לפרטיות מלאה, השתמש במודל מקומי/לא מקוון (llama.cpp, Ollama): כך צילומי מסך לעולם לא יעזבו את המכשיר שלך והטשטוש כבר לא יידרש.",
 };

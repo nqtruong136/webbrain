@@ -60,7 +60,6 @@ const strictSecretToggle = document.getElementById('toggle-strict-secret');
 const allowLocalNetworkToggle = document.getElementById('toggle-allow-local-network');
 const scheduledTasksToggle = document.getElementById('toggle-scheduled-tasks');
 const scheduledConfirmToggle = document.getElementById('toggle-scheduled-confirm');
-const redactionToggle = document.getElementById('toggle-screenshot-redaction');
 const visionBaseUrlInput = document.getElementById('vision-base-url');
 const visionApiKeyInput = document.getElementById('vision-api-key');
 const visionModelInput = document.getElementById('vision-model');
@@ -398,14 +397,6 @@ async function init() {
   if (scheduledTasksToggle) scheduledTasksToggle.checked = stored.scheduledTasksEnabled !== false;
   if (scheduledConfirmToggle) scheduledConfirmToggle.checked = stored.scheduledRequireConsequentialConfirmation !== false;
 
-  // Load screenshot redaction toggle (issue #312) — off by default.
-  if (redactionToggle) redactionToggle.checked = stored.screenshotRedaction === true;
-  if (redactionToggle) {
-    redactionToggle.addEventListener('change', async () => {
-      await browser.storage.local.set({ screenshotRedaction: redactionToggle.checked });
-    });
-  }
-
   // Load vision model config
   const visionStored = await browser.storage.local.get(['visionModel']);
   const vision = visionStored.visionModel || {};
@@ -437,6 +428,7 @@ async function init() {
   // Load site permissions (capability × origin grants) + the master switch
   await initPermissionGateToggle();
   await renderPermissions();
+  await initScreenshotRedactionToggle();
 
   // Load providers
   const res = await sendToBackground('get_providers');
@@ -461,6 +453,19 @@ async function initPermissionGateToggle() {
   toggle.addEventListener('change', async () => {
     await browser.storage.local.set({ [GATE_KEY]: toggle.checked });
     if (warning) warning.style.display = toggle.checked ? 'none' : '';
+  });
+}
+
+// Screenshot redaction (issue #312): local, best-effort PII blurring on
+// screenshots BEFORE they are sent to a vision model. OFF by default.
+const REDACTION_KEY = 'screenshotRedaction';
+async function initScreenshotRedactionToggle() {
+  const toggle = document.getElementById('toggle-screenshot-redaction');
+  if (!toggle) return;
+  const stored = await browser.storage.local.get(REDACTION_KEY);
+  toggle.checked = stored[REDACTION_KEY] === true; // OFF by default
+  toggle.addEventListener('change', async () => {
+    await browser.storage.local.set({ [REDACTION_KEY]: toggle.checked });
   });
 }
 

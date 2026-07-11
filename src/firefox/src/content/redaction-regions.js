@@ -1,7 +1,15 @@
 /**
  * Lightweight, all-frame DOM region collector for local screenshot redaction.
- * Runs in the extension's isolated world and returns geometry only; form values
- * never leave their frame.
+ * Runs in the extension's isolated world. Form field *values* never leave
+ * their frame — only rects and kinds are reported. Matched email/phone
+ * *text* is the exception: it rides along in the `text` field so the agent
+ * can re-classify it, but it never leaves the local background/service
+ * worker (no network transmission).
+ *
+ * The email/phone regex heuristics below (`looksLikePiiText`) are a twin of
+ * `EMAIL_RE`/`PHONE_RE` in agent/screenshot-redaction.js. Keep both in sync —
+ * this file's pre-filter and the agent's re-classification must agree, or
+ * regions selected here can be silently dropped downstream.
  */
 (function () {
   'use strict';
@@ -53,7 +61,7 @@
     const MAX_REGIONS = 400;
     try {
       const fields = document.querySelectorAll(
-        'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="range"]):not([type="color"]), textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]'
+        'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="range"]):not([type="color"]), textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]'
       );
       for (const el of fields) {
         if (selected.length >= MAX_REGIONS) break;
@@ -61,7 +69,7 @@
         if (!visible(r)) continue;
         const tag = (el.tagName || '').toLowerCase();
         const type = tag === 'input' ? String(el.type || 'text').toLowerCase() : tag;
-        const kind = tag === 'textarea' || el.isContentEditable ? 'textarea' : 'input';
+        const kind = tag === 'select' ? 'select' : (tag === 'textarea' || el.isContentEditable ? 'textarea' : 'input');
         selected.push({ kind, type, rect: toRect(r) });
       }
 

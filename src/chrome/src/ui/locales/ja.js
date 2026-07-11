@@ -697,8 +697,8 @@ export default {
   "st.memory.reason.not_found": "その ID の保存済みメモリはありません。",
   "st.memory.security_html": "<strong>プライバシー:</strong> ユーザーメモリは、このブラウザープロフィールにプレーンテキストで保存されます。有効にすると、有効なメモリ記録がシステムプロンプトの一部として、設定した LLM プロバイダーに送信されます。パスワード、API キー、トークン、復旧コード、機密情報は保存しないでください。",
   "hist.filter.clear": "フィルターを消去してすべての会話を表示",
-  "st.redaction.heading": "Screenshot redaction",
-  "st.redaction.toggle.label": "Redact sensitive content from screenshots",
-  "st.redaction.toggle.desc": "Before a screenshot is sent to a vision model, blur form fields and text that looks like an email or phone number. Runs entirely on your device — nothing is transmitted.",
-  "st.redaction.warning": "⚠️ Local, best-effort redaction only. It blurs password/text inputs and text matching email/phone patterns using DOM heuristics. It is NOT a security guarantee: content drawn on a canvas, PII inside images, or anything not recognized as a form field or email/phone text may still appear in the screenshot that the model sees.",
+  "st.redaction.heading": "スクリーンショットの黒塗り",
+  "st.redaction.toggle.label": "スクリーンショット内の機密情報を黒塗りする",
+  "st.redaction.toggle.desc": "スクリーンショットをビジョンモデルに送信する前に、フォーム項目やメールアドレス・電話番号らしきテキストにモザイクをかけます。検出はすべて端末内で行われ、追加で送信されるデータはありません。",
+  "st.redaction.warning": "⚠️ これはベストエフォートかつフェイルオープンな処理です。ページ上で黒塗り処理が実行できない場合（ナビゲーション直後、PDFビューア、制限されたブラウザページなど）、スクリーンショットは黒塗りされないまま送信されます。検出はDOMヒューリスティックのみに基づいており、canvasに描画されたテキスト、画像内の個人情報、フォーム項目やメール/電話のテキストと認識されないものは見逃される可能性があります。またモデルに送られるページの本文テキストはこの設定では黒塗りされません。これはセキュリティ上の保証ではありません。完全なプライバシーが必要な場合は、ローカル/オフラインモデル（llama.cpp、Ollamaなど）を使用してください。その場合スクリーンショットは端末から一切出ないため、黒塗りは不要になります。",
 };
