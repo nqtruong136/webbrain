@@ -4420,7 +4420,7 @@ function handleAgentUpdateMessage(msg) {
         const textEl = currentAssistantEl.querySelector('.message-text');
         if (textEl && !textEl.textContent.trim()) {
           if (data.status === 'stopped' || data.status === 'cancelled') textEl.innerHTML = t('sp.stopped_by_user_html');
-          else textEl.innerHTML = formatMarkdown(data.finalContent);
+          else if (!renderSubscribeError(textEl, data.finalContent)) textEl.innerHTML = formatMarkdown(data.finalContent);
           addMessageCopyButton(currentAssistantEl);
         }
       }
