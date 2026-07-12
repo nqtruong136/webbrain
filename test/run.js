@@ -603,7 +603,7 @@ class LoopDetectorShim {
     };
     state.seenPages.add(page);
     this.axReadStates.set(tabId, state);
-    if (state.suspicious >= 6 || state.total >= 12) {
+    if (state.suspicious >= 6 || (state.total >= 12 && (state.suspicious > 0 || !sequentialPage))) {
       this.axReadStates.delete(tabId);
       return { kind: 'stop' };
     }
@@ -1675,10 +1675,10 @@ test('accessibility-tree ref enumeration nudges at three and stops at six', () =
   assert.equal(d._checkAccessibilityReadLoop(tab, 'get_accessibility_tree', { ref_id: 'ref_6' }, { pageContent: 'generic [ref_6]' }).kind, 'stop');
 });
 
-test('accessibility-tree nextPage pagination is not suspicious and other tools reset it', () => {
+test('accessibility-tree nextPage pagination past the read cap is not suspicious and other tools reset it', () => {
   const d = new LoopDetectorShim();
   const tab = 22;
-  for (let page = 1; page <= 5; page++) {
+  for (let page = 1; page <= 15; page++) {
     const result = d._checkAccessibilityReadLoop(
       tab,
       'get_accessibility_tree',
@@ -1687,9 +1687,32 @@ test('accessibility-tree nextPage pagination is not suspicious and other tools r
     );
     assert.equal(result.kind, 'none');
   }
-  d._checkAccessibilityReadLoop(tab, 'click_ax', { ref_id: 'ref_5' }, { success: true });
+  d._checkAccessibilityReadLoop(tab, 'click_ax', { ref_id: 'ref_15' }, { success: true });
   assert.equal(d.axReadStates.has(tab), false);
   assert.equal(d._checkAccessibilityReadLoop(tab, 'get_accessibility_tree', { ref_id: 'ref_9' }, { pageContent: 'generic [ref_9]' }).kind, 'none');
+});
+
+test('accessibility-tree read cap still stops a non-sequential read after long pagination', () => {
+  const d = new LoopDetectorShim();
+  const tab = 23;
+  for (let page = 1; page <= 11; page++) {
+    const result = d._checkAccessibilityReadLoop(
+      tab,
+      'get_accessibility_tree',
+      { filter: 'visible', ...(page > 1 ? { page } : {}) },
+      { pageContent: `button "Page ${page}" [ref_${page}]`, nextPage: page + 1 },
+    );
+    assert.equal(result.kind, 'none');
+  }
+  assert.equal(
+    d._checkAccessibilityReadLoop(
+      tab,
+      'get_accessibility_tree',
+      { filter: 'visible', page: 11 },
+      { pageContent: 'button "Page 11" [ref_11]', nextPage: 12 },
+    ).kind,
+    'stop',
+  );
 });
 
 // ────────────────────────────────────────────────────────────────────────

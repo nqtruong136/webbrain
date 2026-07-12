@@ -713,7 +713,10 @@ export class Agent {
     state.seenPages.add(page);
     this.axReadStates.set(tabId, state);
 
-    if (state.suspicious >= 6 || state.total >= 12) {
+    // A root read followed by the exact returned nextPage can legitimately span
+    // large applications. Keep the consecutive-read cap for every other AX
+    // pattern, but do not stop a valid sequential pagination step.
+    if (state.suspicious >= 6 || (state.total >= 12 && (state.suspicious > 0 || !sequentialPage))) {
       this.axReadStates.delete(tabId);
       return {
         kind: 'stop',
