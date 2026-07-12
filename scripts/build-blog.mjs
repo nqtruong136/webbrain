@@ -37,6 +37,7 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PLAUSIBLE_ANALYTICS } from '../web/build/plausible.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -1168,6 +1169,7 @@ function sharedHead({ title, description, canonical, ogType = 'website', ogTitle
 ${hreflangLinks(site)}
   ${blogStyle()}
   ${themeBootstrapScript()}
+${PLAUSIBLE_ANALYTICS}
   <script type="application/ld+json">
 ${escJsonLd(jsonLd)}
   </script>

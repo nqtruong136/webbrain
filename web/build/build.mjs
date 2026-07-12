@@ -16,6 +16,7 @@
  *   {{docs_url}}         English docs, or the secondary Chinese docs for zh
  *   {{hreflang_links}}   <link rel="alternate" ...> block for this page
  *   {{faq_jsonld}}       FAQPage schema block generated from faq.* keys
+ *   {{plausible_analytics}} shared privacy-friendly analytics partial
  *
  * {{t:key}} → plain-text substitution, HTML-escaped.
  * {{t-html:key}} → raw substitution (value is expected to be HTML-ready).
@@ -29,6 +30,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PLAUSIBLE_ANALYTICS } from './plausible.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');           // web/
@@ -276,6 +278,7 @@ function applyTemplate(template, dict, locale) {
     .replace(/\{\{locale_dir\}\}/g, locale.dir || 'ltr')
     .replace(/\{\{locale_home_url\}\}/g, canonical)
     .replace(/\{\{docs_url\}\}/g, docsUrl)
+    .replace(/\{\{plausible_analytics\}\}/g, PLAUSIBLE_ANALYTICS)
     .replace(/\{\{hreflang_links\}\}/g, buildHreflangBlock())
     .replace(/\{\{faq_jsonld\}\}/g, buildFaqJsonLd(dict, locale.bcp47))
     .replace(/\{\{software_jsonld\}\}/g, buildSoftwareJsonLd(dict, locale));
