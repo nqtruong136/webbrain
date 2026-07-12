@@ -2861,6 +2861,18 @@ function rebindScheduleComposers() {
   });
 }
 
+function resumeAfterSubscription(btn) {
+  if (isProcessing) {
+    showComposerToast(t('sp.retry.busy'), { duration: 4000 });
+    return;
+  }
+  const mode = ['ask', 'act', 'dev'].includes(btn?.dataset?.resumeMode)
+    ? btn.dataset.resumeMode
+    : agentMode;
+  setMode(mode);
+  void continueAgent({ mode });
+}
+
 function rebindSubscribeButtons() {
   document.querySelectorAll('.subscribe-btn').forEach(btn => {
     if (btn.dataset.bound) return;
@@ -2870,13 +2882,7 @@ function rebindSubscribeButtons() {
   document.querySelectorAll('.subscribe-resume-btn').forEach(btn => {
     if (btn.dataset.bound) return;
     btn.dataset.bound = 'true';
-    btn.addEventListener('click', () => {
-      if (isProcessing) {
-        showComposerToast(t('sp.retry.busy'), { duration: 4000 });
-        return;
-      }
-      void continueAgent({ mode: btn.dataset.resumeMode });
-    });
+    btn.addEventListener('click', () => resumeAfterSubscription(btn));
   });
 }
 
@@ -4830,13 +4836,7 @@ function renderSubscribeError(textEl, content) {
   resumeBtn.textContent = t('sp.subscribe.resume');
   resumeBtn.dataset.resumeMode = textEl.closest('.message.assistant')?.dataset.runMode || agentMode;
   resumeBtn.dataset.bound = 'true';
-  resumeBtn.addEventListener('click', () => {
-    if (isProcessing) {
-      showComposerToast(t('sp.retry.busy'), { duration: 4000 });
-      return;
-    }
-    void continueAgent({ mode: resumeBtn.dataset.resumeMode });
-  });
+  resumeBtn.addEventListener('click', () => resumeAfterSubscription(resumeBtn));
   actions.appendChild(resumeBtn);
 
   textEl.appendChild(actions);

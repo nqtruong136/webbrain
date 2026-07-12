@@ -7127,7 +7127,9 @@ test('sidepanel subscribe error card clears DOM without HTML reinterpretation', 
     assert.match(body, /actions\.className = 'subscribe-actions';/, `${label}: subscribe actions should share a responsive row`);
     assert.match(body, /resumeBtn\.textContent = t\('sp\.subscribe\.resume'\);/, `${label}: subscribe card should render a localized resume action`);
     assert.match(body, /resumeBtn\.dataset\.resumeMode = textEl\.closest\('\.message\.assistant'\)\?\.dataset\.runMode \|\| agentMode;/, `${label}: resume action should preserve the failed run mode`);
-    assert.match(body, /continueAgent\(\{ mode: resumeBtn\.dataset\.resumeMode \}\)/, `${label}: subscribe resume should use the durable continuation path`);
+    assert.match(body, /resumeAfterSubscription\(resumeBtn\)/, `${label}: subscribe card should use the shared resume handler`);
+    assert.match(panel, /function resumeAfterSubscription\(btn\) \{[\s\S]*?const mode = \['ask', 'act', 'dev'\]\.includes\(btn\?\.dataset\?\.resumeMode\)[\s\S]*?setMode\(mode\);[\s\S]*?continueAgent\(\{ mode \}\);[\s\S]*?\}/, `${label}: subscribe resume should synchronize the visible mode before continuing`);
+    assert.match(panel, /btn\.addEventListener\('click', \(\) => resumeAfterSubscription\(btn\)\);/, `${label}: restored subscribe cards should use the shared resume handler`);
     assert.match(panel, /async function continueAgent\(options = \{\}\) \{[\s\S]*?includes\(options\?\.mode\) \? options\.mode : agentMode;/, `${label}: continuation should accept a preserved mode`);
     assert.match(styles, /\.subscribe-actions\s*\{[\s\S]*?flex-wrap:\s*wrap;/, `${label}: subscribe actions should wrap in narrow panels`);
     assert.match(styles, /\.subscribe-resume-btn\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*1px solid var\(--accent\);/, `${label}: resume action should use secondary styling`);
