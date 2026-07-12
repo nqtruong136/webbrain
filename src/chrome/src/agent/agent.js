@@ -42,6 +42,7 @@ import { sanitizeText as sanitizePlannerText } from './text-sanitize.js';
 import { buildCustomSkillsPrompt, buildSkillToolDefinitions, buildSkillToolRegistry, normalizeCustomSkills } from './skills.js';
 import { USER_MEMORY_DEFAULT_MAX_PROMPT_CHARS, formatUserMemoryPrompt, normalizeUserMemoryMaxPromptChars, normalizeUserMemoryStore } from './user-memory.js';
 import { mergeRedactionFrameRegions, mapRegionsToImage, pixelateDataUrl } from './screenshot-redaction.js';
+import { buildTrustedRuntimeContext, stripTrustedRuntimeContext } from './runtime-context.js';
 
 const DEFAULT_CLOUD_COST_ALLOWANCE_USD = 10;
 // Product default: auto-approve plans at 75% confidence to reduce review stops.
@@ -179,6 +180,10 @@ export class Agent {
     // A model can walk ref_1, ref_2, … forever while every call looks unique
     // to the exact-argument loop detector. Track that semantic read pattern.
     this.axReadStates = new Map(); // tabId -> { total, suspicious, nextPage, seenPages, warned }
+    // Scroll calls can keep returning success even when no pane moved. Track
+    // repeated dead-end attempts separately so changing the amount or
+    // interleaving reads cannot evade the generic loop detector.
+    this.noProgressScrolls = new Map(); // tabId -> { key, count }
     this.lastAutoScreenshotTs = new Map(); // tabId -> ms — defensive debounce
     this.lastSeenAdapter = new Map(); // tabId -> adapter name from last enrichment
     // Separate buffer for coordinate-based click attempts. The general loop
@@ -702,6 +707,7 @@ export class Agent {
     this.loopNudges.delete(tabId);
     this.healthyCallsSinceLoop.delete(tabId);
     this.axReadStates.delete(tabId);
+    this.noProgressScrolls.delete(tabId);
     this.recentCoordClicks.delete(tabId);
     this.bulkApiMutationClicks.delete(tabId);
     this.bulkApiMutationHints.delete(tabId);
@@ -763,6 +769,67 @@ export class Agent {
       return {
         kind: 'nudge',
         warning: '[ACCESSIBILITY READ LOOP: Stop enumerating sibling or generic ref_ids. If the result has hasMore/nextPage, request exactly that page. If the needed textbox/button is already visible, use set_field, type_ax, or click_ax now. Otherwise switch once to read_page/extract_data or finish with what you have. Do not call another arbitrary ref_id subtree.]',
+      };
+    }
+    return { kind: 'none' };
+  }
+
+  _noProgressScrollKey(args = {}, result = {}) {
+    const direction = String(args?.direction || '').trim().toLowerCase() || 'unspecified';
+    const refId = String(args?.ref_id || '').trim();
+    if (refId) return `${direction}|ref:${refId}`;
+
+    const x = Number(args?.x);
+    const y = Number(args?.y);
+    if (args?.x != null && args?.y != null && Number.isFinite(x) && Number.isFinite(y)) {
+      return `${direction}|xy:${Math.round(x)},${Math.round(y)}`;
+    }
+
+    // For implicit scrolling, distinguish panes using the element that
+    // supplied the runtime's last-interaction origin. This avoids combining
+    // no-movement results from two different panes while deliberately
+    // ignoring `amount`, which is not a meaningful recovery at a hard edge.
+    const origin = result?.originElement;
+    if (origin && typeof origin === 'object') {
+      const rect = origin.rect || {};
+      const text = String(origin.text || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+      return `${direction}|origin:${String(result?.origin || '')}:${String(origin.tag || '')}:${String(origin.role || '')}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(Number(rect.w) || 0)},${Math.round(Number(rect.h) || 0)}:${text}`;
+    }
+    return `${direction}|auto`;
+  }
+
+  _checkNoProgressScroll(tabId, name, args, result) {
+    // Preserve a dead-scroll streak across reads or other unrelated calls;
+    // only a successful scroll or a different scroll target/direction proves
+    // that this particular recovery path changed.
+    if (name !== 'scroll') {
+      // Accessibility refs and coordinate targets are document-scoped. A
+      // successful navigation can reuse the same ref_id/coordinates for a
+      // completely different page, so it must break the old scroll streak.
+      if (result?.pageUrlChanged === true) this.noProgressScrolls.delete(tabId);
+      return { kind: 'none' };
+    }
+    if (result?.moved !== false) {
+      this.noProgressScrolls.delete(tabId);
+      return { kind: 'none' };
+    }
+
+    const key = this._noProgressScrollKey(args, result);
+    const previous = this.noProgressScrolls.get(tabId);
+    const count = previous?.key === key ? previous.count + 1 : 1;
+    this.noProgressScrolls.set(tabId, { key, count });
+
+    if (count >= 3) {
+      this.noProgressScrolls.delete(tabId);
+      return {
+        kind: 'stop',
+        message: 'Stopped: I repeated the same scroll direction on the same target three times, but the page or pane did not move. That scroll surface is already at its limit. Re-read the current view, choose a different pane or direction, act on an element already visible, or ask for help.',
+      };
+    }
+    if (count >= 2) {
+      return {
+        kind: 'nudge',
+        warning: '[NO-PROGRESS SCROLL: The same target did not move twice. Do not repeat this scroll direction or merely change the amount. Re-read the current view, use the opposite direction or a different ref_id/x/y pane, act on an element already visible, or finish.]',
       };
     }
     return { kind: 'none' };
@@ -1595,6 +1662,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    */
   async _enrichUserMessageWithCurrentPage(tabId, messages, userMessage, costState = null) {
     const hasPriorUserTurn = messages.some(m => m.role === 'user');
+    // Dynamic trusted state belongs in the per-turn user context, not the
+    // cache-stable system prompt. The same enriched message is passed to the
+    // planner gate and the main agent loop, so neither has to guess the clock.
+    let contextLine = `${buildTrustedRuntimeContext()}\n\n`;
 
     // Collect URL + title via chrome.tabs (cheap, no debugger needed).
     let url = '';
@@ -1613,9 +1684,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       .replace(/[[\]<>`"\r\n]/g, ' ')
       .replace(/untrusted_page_content/gi, 'untrusted-content')
       .slice(0, 300);
-    let contextLine = url
-      ? `[Current page context — applies to this user message and supersedes older page context for phrases like "this page". URL: ${safeField(url)}${title ? ` — Title: ${safeField(title)}` : ''}]\n\n`
-      : '';
+    if (url) {
+      contextLine += `[Current page context — applies to this user message and supersedes older page context for phrases like "this page". URL: ${safeField(url)}${title ? ` — Title: ${safeField(title)}` : ''}]\n\n`;
+    }
 
     // Recording status (ground truth). The tab recorder can be stopped
     // out-of-band — the sidebar/toolbar Stop button, the safety-cap auto-stop,
@@ -1920,6 +1991,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return `Coordinates (${args.x}, ${args.y}) look like normalized values (0-1 fractions of the viewport), not CSS pixels. The click tool expects CSS pixels (e.g. {x: 437, y: 156}). Prefer click_ax({ref_id}) after get_accessibility_tree or click({text: "..."}) over pixel clicks. If you must use pixels, ${pixelSourceHint}`;
   }
 
+  _isNavigationProneToolCall(toolName, args = {}) {
+    if (Agent.NAV_PRONE_TOOLS.has(toolName)) return true;
+    if (toolName === 'press_keys') return String(args?.key || '').toLowerCase() === 'enter';
+    if (toolName === 'set_field') return args?.submit === true;
+    return false;
+  }
+
   async _executeToolBatch(tabId, toolCalls, messages, onUpdate, provider, partialAssistantText = null, allowedToolNames = AGENT_TOOL_NAMES, step = null) {
     let didStateChange = false;
     // Set of tools whose side effect can navigate the page. We snapshot the
@@ -2146,9 +2224,12 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         }
       }
 
-      // Snapshot URL before nav-prone tools.
+      // Snapshot URL before nav-prone calls. Some tools are conditional:
+      // Enter and set_field({submit:true}) can navigate, while other key
+      // presses and ordinary field edits should avoid the URL-check delay.
+      const navigationProneCall = this._isNavigationProneToolCall(fnName, fnArgs);
       let beforeUrl = '';
-      if (Agent.NAV_PRONE_TOOLS.has(fnName)) {
+      if (navigationProneCall) {
         beforeUrl = await this._currentUrl(tabId);
       }
 
@@ -2184,24 +2265,27 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
       // Detect unintended navigation. Give the page a beat to fire SPA
       // history events / commit a real nav before re-reading the URL.
-      if (Agent.NAV_PRONE_TOOLS.has(fnName) && beforeUrl && !toolResult?.error) {
+      if (navigationProneCall && beforeUrl && !toolResult?.error) {
         await new Promise(r => setTimeout(r, 200));
         const afterUrl = await this._currentUrl(tabId);
-        const beforeNorm = this._normalizeUrlPath(beforeUrl);
-        const afterNorm = this._normalizeUrlPath(afterUrl);
-        if (beforeNorm && afterNorm && beforeNorm !== afterNorm) {
-          if (toolResult && typeof toolResult === 'object') {
-            toolResult.pageUrlChanged = true;
-            toolResult.previousUrl = beforeUrl;
-            toolResult.currentUrl = afterUrl;
-          }
-          // Explicit navigation tools (navigate / go_back / go_forward)
-          // intentionally go somewhere — don't warn. For everything else
-          // (click, execute_js, iframe_click) the nav is a side effect the
-          // model may not have anticipated.
-          if (!Agent.NAV_TOOLS.has(fnName)) {
-            navNotices.push({ before: beforeUrl, after: afterUrl, viaTool: fnName });
-          }
+        const beforeFull = this._normalizeUrl(beforeUrl);
+        const afterFull = this._normalizeUrl(afterUrl);
+        const fullUrlChanged = beforeFull && afterFull && beforeFull !== afterFull;
+        if (fullUrlChanged && toolResult && typeof toolResult === 'object') {
+          // Scroll refs/coordinates are scoped to the current route, including
+          // SPA views distinguished only by query/hash.
+          toolResult.pageUrlChanged = true;
+          toolResult.previousUrl = beforeUrl;
+          toolResult.currentUrl = afterUrl;
+        }
+
+        const beforePath = this._normalizeUrlPath(beforeUrl);
+        const afterPath = this._normalizeUrlPath(afterUrl);
+        // Explicit navigation tools intentionally go somewhere. For implicit
+        // navigation, retain the less noisy path-level warning policy: query /
+        // hash-only SPA changes reset state but do not force a re-plan notice.
+        if (beforePath && afterPath && beforePath !== afterPath && !Agent.NAV_TOOLS.has(fnName)) {
+          navNotices.push({ before: beforeUrl, after: afterUrl, viaTool: fnName });
         }
       }
       if (toolResult && typeof toolResult === 'object' && !toolResult.done) {
@@ -2292,12 +2376,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         coordCheck = this._checkCoordClickLoop(tabId, fnArgs.x, fnArgs.y);
       }
       const axReadCheck = this._checkAccessibilityReadLoop(tabId, fnName, fnArgs, toolResult);
+      const scrollCheck = this._checkNoProgressScroll(tabId, fnName, fnArgs, toolResult);
 
       // Combine: stop > nudge > none.
       let effectiveKind = 'none';
       let nudgeWarning = '';
       let stopMessage = '';
-      if (loopCheck.kind === 'stop' || coordCheck.kind === 'stop' || axReadCheck.kind === 'stop') {
+      if (loopCheck.kind === 'stop' || coordCheck.kind === 'stop' || axReadCheck.kind === 'stop' || scrollCheck.kind === 'stop') {
         effectiveKind = 'stop';
         if (coordCheck.kind === 'stop') {
           // Show the model's actual args, not _checkCoordClickLoop's 5px
@@ -2305,15 +2390,19 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           // rounds to (0, 0) and the message reads as if we'd clicked the
           // top-left corner, hiding what really happened.
           stopMessage = `Stopped: I clicked at (or near) coordinates (${fnArgs.x}, ${fnArgs.y}) multiple times and the page never responded. That position is hitting empty space, an overlay, or the wrong element. Please give a different instruction or check the page yourself.`;
+        } else if (scrollCheck.kind === 'stop') {
+          stopMessage = scrollCheck.message;
         } else if (axReadCheck.kind === 'stop') {
           stopMessage = axReadCheck.message;
         } else {
           stopMessage = loopCheck.message;
         }
-      } else if (loopCheck.kind === 'nudge' || coordCheck.kind === 'nudge' || axReadCheck.kind === 'nudge') {
+      } else if (loopCheck.kind === 'nudge' || coordCheck.kind === 'nudge' || axReadCheck.kind === 'nudge' || scrollCheck.kind === 'nudge') {
         effectiveKind = 'nudge';
         if (coordCheck.kind === 'nudge') {
           nudgeWarning = this._coordinateClickRecoveryWarning(fnArgs, allowedToolNames);
+        } else if (scrollCheck.kind === 'nudge') {
+          nudgeWarning = scrollCheck.warning;
         } else if (axReadCheck.kind === 'nudge') {
           nudgeWarning = axReadCheck.warning;
         } else {
@@ -2431,6 +2520,12 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       }
 
       if (effectiveKind === 'stop') {
+        // Keep the persisted assistant tool_calls turn structurally valid.
+        // Providers reject a later request when any call lacks a tool result.
+        this._appendSyntheticToolResults(
+          tabId, toolCalls, toolIndex + 1, messages, onUpdate, step,
+          () => ({ success: false, skipped: true, error: 'skipped: run stopped by loop detector' })
+        );
         messages.push({ role: 'assistant', content: stopMessage });
         onUpdate('text', { content: stopMessage });
         onUpdate('error', { message: 'Stuck in a loop. Stopped.' });
@@ -4075,7 +4170,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     for (const m of messages.slice(-10)) {
       if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
       if (this._isPinnedAgentStateMessage(m)) continue;
-      const text = sanitizePlannerText(userMessageToText(m), 300, { collapseWhitespace: true });
+      const rawText = userMessageToText(m);
+      const taskText = m.role === 'user' ? this._stripInjectedTaskContext(rawText) : rawText;
+      const text = sanitizePlannerText(taskText, 300, { collapseWhitespace: true });
       if (!text) continue;
       lines.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${text}`);
     }
@@ -6216,7 +6313,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     let prev = null;
     while (out && out !== prev) {
       prev = out;
-      out = out
+      out = stripTrustedRuntimeContext(out)
         .replace(/^\[Current page context[^\]]*]\s*/i, '')
         .replace(/^\[Recording status:[^\]]*]\s*/i, '')
         .replace(/^\[USER OVERRIDE[^\]]*]\s*/i, '')
@@ -6417,7 +6514,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   _progressPageScopeFromConversation(tabId) {
     const messages = this.conversations.get(tabId) || [];
     for (let i = messages.length - 1; i >= 1; i--) {
-      const c = this._messageText(messages[i]?.content);
+      const c = stripTrustedRuntimeContext(this._messageText(messages[i]?.content));
       const match = c.match(/^\s*\[Current page context[^\]]*\bURL:\s*(https?:\/\/[^\s\]]+)/i);
       const pageScope = match ? this._progressPageScopeForUrl(match[1]) : '';
       if (pageScope) return pageScope;
@@ -7263,7 +7360,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     let summaryText = 'Previous conversation summary:\n';
     for (const msg of oldMessages) {
       if (msg.role === 'user') {
-        summaryText += `- User asked: ${this._truncate(msg.content, 120)}\n`;
+        const taskText = this._stripInjectedTaskContext(this._messageText(msg.content));
+        summaryText += `- User asked: ${this._truncate(taskText, 120)}\n`;
       } else if (msg.role === 'assistant' && msg.content && !msg.tool_calls) {
         summaryText += `- Assistant answered: ${this._truncate(msg.content, 150)}\n`;
       } else if (msg.role === 'assistant' && msg.tool_calls) {

@@ -9,6 +9,7 @@ import { applyMode, loadMode, watch } from './theme.js';
 import { buildRecommendedActions, shouldShowRecommendedActions } from './recommended-actions.js';
 import { createContextMenuPromptHandler } from './context-menu-prompts.js';
 import { deleteChatHistoryRecord, saveChatHistoryRecord } from './chat-history-store.js';
+import { claimRunError } from './run-error-dedupe.js';
 import {
   STORAGE_KEY as STORE_REVIEW_STORAGE_KEY,
   recordSuccessfulTask,
@@ -2909,11 +2910,28 @@ function rebindScheduleComposers() {
   });
 }
 
+function resumeAfterSubscription(btn) {
+  if (isProcessing) {
+    showComposerToast(t('sp.retry.busy'), { duration: 4000 });
+    return;
+  }
+  const mode = ['ask', 'act', 'dev'].includes(btn?.dataset?.resumeMode)
+    ? btn.dataset.resumeMode
+    : agentMode;
+  setMode(mode);
+  void continueAgent({ mode });
+}
+
 function rebindSubscribeButtons() {
   document.querySelectorAll('.subscribe-btn').forEach(btn => {
     if (btn.dataset.bound) return;
     btn.dataset.bound = 'true';
     btn.addEventListener('click', () => openSubscribeUrl(btn.dataset.subscribeUrl));
+  });
+  document.querySelectorAll('.subscribe-resume-btn').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = 'true';
+    btn.addEventListener('click', () => resumeAfterSubscription(btn));
   });
 }
 
@@ -2971,27 +2989,35 @@ function rebindRetryButtons() {
   document.querySelectorAll('.error-retry-btn').forEach(bindErrorRetryButton);
 }
 
-function createActiveChatPayloadState(retryPayload) {
-  return { retryPayload, renderedErrorMessages: new Set() };
+function createActiveChatPayloadState(retryPayload, requestId = '') {
+  return {
+    retryPayload,
+    requestId: String(requestId || ''),
+    renderedErrorMessages: new Set(),
+  };
 }
 
 function clearActiveChatPayloadForTab(tabId) {
   if (tabId != null) activeChatPayloadsByTab.delete(tabId);
 }
 
-function errorMessageKey(message) {
-  return String(message || '').trim() || 'unknown error';
-}
-
-function takeActiveRetryPayloadForError(tabId, message) {
+function takeActiveRetryPayloadForError(tabId, requestId, message) {
   const state = activeChatPayloadsByTab.get(tabId);
-  if (!state?.retryPayload) return { retryPayload: null, duplicate: false };
-  const key = errorMessageKey(message);
-  if (state.renderedErrorMessages?.has(key)) {
-    return { retryPayload: state.retryPayload, duplicate: true };
-  }
-  state.renderedErrorMessages?.add(key);
-  return { retryPayload: state.retryPayload, duplicate: false };
+  const scopedRequestId = String(requestId || state?.requestId || '');
+  const stateMatchesRequest = !!state && (!scopedRequestId || state.requestId === scopedRequestId);
+  const renderedErrors = Array.from(messagesEl.querySelectorAll('.message.error')).map(el => ({
+    tabId: el.dataset.tabId,
+    requestId: el.dataset.runRequestId,
+    key: el.dataset.errorMessageKey,
+  }));
+  const claim = claimRunError({
+    seenErrors: stateMatchesRequest ? state.renderedErrorMessages : null,
+    renderedErrors,
+    tabId,
+    requestId: scopedRequestId,
+    message,
+  });
+  return { ...claim, retryPayload: stateMatchesRequest ? state.retryPayload : null };
 }
 
 function scheduleActiveChatPayloadCleanup(tabId, state) {
@@ -3002,11 +3028,19 @@ function scheduleActiveChatPayloadCleanup(tabId, state) {
   }, 30000);
 }
 
-function renderAgentErrorUpdate(data, tabId = currentTabId) {
+function renderAgentErrorUpdate(data, tabId = currentTabId, requestId = '') {
   const message = data?.message || data?.error || 'unknown error';
-  const active = abortRequested ? { retryPayload: null, duplicate: false } : takeActiveRetryPayloadForError(tabId, message);
+  const active = takeActiveRetryPayloadForError(tabId, requestId, message);
   if (active.duplicate) return;
-  addMessage('error', t('sp.error_prefix', { msg: message }), { retryPayload: active.retryPayload });
+  const msgEl = addMessage('error', t('sp.error_prefix', { msg: message }), {
+    retryPayload: isTabAbortRequested(tabId) ? null : active.retryPayload,
+    subscribeResumeMode: active.retryPayload?.mode,
+  });
+  if (active.requestId) {
+    msgEl.dataset.tabId = active.tabId;
+    msgEl.dataset.runRequestId = active.requestId;
+    msgEl.dataset.errorMessageKey = active.key;
+  }
 }
 
 function rebindRestoredMessageControls() {
@@ -3905,10 +3939,11 @@ async function sendMessage(extraChatParams = {}) {
     showActivity(t('sp.activity.thinking'));
     assistantEl = addMessage('assistant', '');
     assistantEl.dataset.runRequestId = requestId;
+    assistantEl.dataset.runMode = modeForSend;
     assistantEl.dataset.lastRenderedSeq = '0';
     currentAssistantEl = assistantEl;
   }
-  const activePayloadState = createActiveChatPayloadState(retryPayload);
+  const activePayloadState = createActiveChatPayloadState(retryPayload, requestId);
   activeChatPayloadsByTab.set(tabId, activePayloadState);
   localRunRequestIds.set(tabId, requestId);
 
@@ -3936,7 +3971,7 @@ async function sendMessage(extraChatParams = {}) {
       ? res.updates.find(u => u?.type === 'error')
       : null;
     if (returnedErrorUpdate && renderToCurrentTab && currentTabId === tabId && !isTabAbortRequested(tabId)) {
-      renderAgentErrorUpdate(returnedErrorUpdate.data, tabId);
+      renderAgentErrorUpdate(returnedErrorUpdate.data, tabId, requestId);
     }
 
     // An unsupported-attachment rejection never records the turn in history;
@@ -3981,8 +4016,7 @@ async function sendMessage(extraChatParams = {}) {
     }
   } catch (e) {
     if (renderToCurrentTab && currentTabId === tabId && !isTabAbortRequested(tabId)) {
-      takeActiveRetryPayloadForError(tabId, e.message);
-      addMessage('error', t('sp.error_prefix', { msg: e.message }), { retryPayload });
+      renderAgentErrorUpdate({ message: e.message }, tabId, requestId);
     }
   } finally {
     if (localRunRequestIds.get(tabId) === requestId) localRunRequestIds.delete(tabId);
@@ -4359,7 +4393,7 @@ function handleAgentUpdateMessage(msg) {
     case 'error':
       hideActivity();
       if (currentAssistantEl) markLastStepFailed();
-      renderAgentErrorUpdate(data, currentTabId);
+      renderAgentErrorUpdate(data, currentTabId, msg.requestId);
       break;
 
     case 'max_steps_reached':
@@ -4387,7 +4421,7 @@ function handleAgentUpdateMessage(msg) {
         const textEl = currentAssistantEl.querySelector('.message-text');
         if (textEl && !textEl.textContent.trim()) {
           if (data.status === 'stopped' || data.status === 'cancelled') textEl.innerHTML = t('sp.stopped_by_user_html');
-          else textEl.innerHTML = formatMarkdown(data.finalContent);
+          else if (!renderSubscribeError(textEl, data.finalContent)) textEl.innerHTML = formatMarkdown(data.finalContent);
           addMessageCopyButton(currentAssistantEl);
         }
       }
@@ -5004,6 +5038,13 @@ function renderAssistantTextUpdate(assistantEl, content) {
     return;
   }
 
+  if (renderSubscribeError(textEl, content)) {
+    clearStreamedAssistantText(textEl);
+    delete textEl.dataset.suppressToolCallStream;
+    if (!assistantEl.querySelector('.msg-copy-btn')) addMessageCopyButton(assistantEl);
+    return;
+  }
+
   const streamedText = getStreamedAssistantText(textEl);
   const isDuplicateStreamFinal = streamedText && streamedText === String(content);
 
@@ -5121,12 +5162,12 @@ function openSubscribeUrl(url) {
   catch { window.open(url, '_blank', 'noopener'); }
 }
 
-// Render the quota error as a card with a one-click Subscribe button. Returns
+// Render the quota error as a card with Subscribe and explicit resume actions. Returns
 // true when `content` matched and the card was rendered into `textEl`, so the
 // caller can skip its normal markdown rendering. The URL is stashed on the
 // button's dataset so it survives chat-history restore (messagesEl.innerHTML),
 // where the click closure is lost and rebindSubscribeButtons re-attaches it.
-function renderSubscribeError(textEl, content) {
+function renderSubscribeError(textEl, content, resumeMode = '') {
   const parsed = parseSubscribeError(content);
   if (!parsed) return false;
 
@@ -5138,13 +5179,30 @@ function renderSubscribeError(textEl, content) {
   msg.textContent = parsed.message || t('sp.subscribe.allowance_used');
   textEl.appendChild(msg);
 
+  const actions = document.createElement('div');
+  actions.className = 'subscribe-actions';
+
   const btn = document.createElement('button');
+  btn.type = 'button';
   btn.className = 'subscribe-btn';
   btn.textContent = t('sp.subscribe.btn');
   btn.dataset.subscribeUrl = parsed.url;
   btn.dataset.bound = 'true';
   btn.addEventListener('click', () => openSubscribeUrl(btn.dataset.subscribeUrl));
-  textEl.appendChild(btn);
+  actions.appendChild(btn);
+
+  const resumeBtn = document.createElement('button');
+  resumeBtn.type = 'button';
+  resumeBtn.className = 'subscribe-resume-btn';
+  resumeBtn.textContent = t('sp.subscribe.resume');
+  resumeBtn.dataset.resumeMode = ['ask', 'act', 'dev'].includes(resumeMode)
+    ? resumeMode
+    : (textEl.closest('.message.assistant')?.dataset.runMode || agentMode);
+  resumeBtn.dataset.bound = 'true';
+  resumeBtn.addEventListener('click', () => resumeAfterSubscription(resumeBtn));
+  actions.appendChild(resumeBtn);
+
+  textEl.appendChild(actions);
   return true;
 }
 
@@ -5190,7 +5248,7 @@ function addMessage(role, content, options = {}) {
   } else if (role === 'system') {
     if (isSystemHtml(content)) textEl.innerHTML = content.__systemHtml;
     else textEl.textContent = content || '';
-  } else if (!renderSubscribeError(textEl, content)) {
+  } else if (!renderSubscribeError(textEl, content, options.subscribeResumeMode)) {
     textEl.innerHTML = content ? formatMarkdown(content) : '';
   }
 
@@ -5284,10 +5342,10 @@ function showContinueButton() {
   document.getElementById('btn-continue').addEventListener('click', continueAgent);
 }
 
-async function continueAgent() {
+async function continueAgent(options = {}) {
   const tabId = currentTabId;
   const requestId = createRunRequestId(tabId);
-  const modeForSend = agentMode;
+  const modeForSend = ['ask', 'act', 'dev'].includes(options?.mode) ? options.mode : agentMode;
   clearActiveChatPayloadForTab(tabId);
 
   setTabProcessing(tabId, true);
@@ -5306,6 +5364,7 @@ async function continueAgent() {
 
     assistantEl = addMessage('assistant', '');
     assistantEl.dataset.runRequestId = requestId;
+    assistantEl.dataset.runMode = modeForSend;
     assistantEl.dataset.lastRenderedSeq = '0';
     currentAssistantEl = assistantEl;
     showActivity(t('sp.activity.continuing'));

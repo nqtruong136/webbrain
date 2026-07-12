@@ -98,6 +98,24 @@ const { RunUiJournal: RunUiJournalCh } = await import(
 const { RunUiJournal: RunUiJournalFx } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/run-ui-journal.js').replace(/\\/g, '/')
 );
+const { claimRunError: claimRunErrorCh } = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/ui/run-error-dedupe.js').replace(/\\/g, '/')
+);
+const { claimRunError: claimRunErrorFx } = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/ui/run-error-dedupe.js').replace(/\\/g, '/')
+);
+const {
+  buildTrustedRuntimeContext: buildTrustedRuntimeContextCh,
+  stripTrustedRuntimeContext: stripTrustedRuntimeContextCh,
+} = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/agent/runtime-context.js').replace(/\\/g, '/')
+);
+const {
+  buildTrustedRuntimeContext: buildTrustedRuntimeContextFx,
+  stripTrustedRuntimeContext: stripTrustedRuntimeContextFx,
+} = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/agent/runtime-context.js').replace(/\\/g, '/')
+);
 
 // anthropic.js imports cleanly under Node (its chrome.* touches are lazy); we
 // only exercise the pure _convertMessages transform here.
@@ -497,6 +515,7 @@ class LoopDetectorShim {
     this.healthyCallsSinceLoop = new Map();
     this.recentCoordClicks = new Map();
     this.axReadStates = new Map();
+    this.noProgressScrolls = new Map();
   }
   _checkCoordClickLoop(tabId, x, y) {
     const bx = Math.round(x / 5) * 5;
@@ -611,6 +630,43 @@ class LoopDetectorShim {
       state.warned = true;
       return { kind: 'nudge' };
     }
+    return { kind: 'none' };
+  }
+  _noProgressScrollKey(args = {}, result = {}) {
+    const direction = String(args?.direction || '').trim().toLowerCase() || 'unspecified';
+    const refId = String(args?.ref_id || '').trim();
+    if (refId) return `${direction}|ref:${refId}`;
+    const x = Number(args?.x);
+    const y = Number(args?.y);
+    if (args?.x != null && args?.y != null && Number.isFinite(x) && Number.isFinite(y)) {
+      return `${direction}|xy:${Math.round(x)},${Math.round(y)}`;
+    }
+    const origin = result?.originElement;
+    if (origin && typeof origin === 'object') {
+      const rect = origin.rect || {};
+      const text = String(origin.text || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+      return `${direction}|origin:${String(result?.origin || '')}:${String(origin.tag || '')}:${String(origin.role || '')}:${Math.round(Number(rect.x) || 0)},${Math.round(Number(rect.y) || 0)},${Math.round(Number(rect.w) || 0)},${Math.round(Number(rect.h) || 0)}:${text}`;
+    }
+    return `${direction}|auto`;
+  }
+  _checkNoProgressScroll(tabId, name, args, result) {
+    if (name !== 'scroll') {
+      if (result?.pageUrlChanged === true) this.noProgressScrolls.delete(tabId);
+      return { kind: 'none' };
+    }
+    if (result?.moved !== false) {
+      this.noProgressScrolls.delete(tabId);
+      return { kind: 'none' };
+    }
+    const key = this._noProgressScrollKey(args, result);
+    const previous = this.noProgressScrolls.get(tabId);
+    const count = previous?.key === key ? previous.count + 1 : 1;
+    this.noProgressScrolls.set(tabId, { key, count });
+    if (count >= 3) {
+      this.noProgressScrolls.delete(tabId);
+      return { kind: 'stop' };
+    }
+    if (count >= 2) return { kind: 'nudge' };
     return { kind: 'none' };
   }
   _detectApiShortcut(tabId, loop, buf) {
@@ -880,10 +936,15 @@ test('ref-id action tools are state changes in both browser agents', () => {
   }
 });
 
-test('click_ax is nav-prone but non-submitting set_field is not', () => {
+test('navigation-prone detection includes only submit-capable key and field calls', () => {
   for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({});
     assert.equal(AgentClass.NAV_PRONE_TOOLS.has('click_ax'), true, `${label} missing click_ax from NAV_PRONE_TOOLS`);
     assert.equal(AgentClass.NAV_PRONE_TOOLS.has('set_field'), false, `${label} should not treat set_field as nav-prone`);
+    assert.equal(agent._isNavigationProneToolCall('press_keys', { key: 'Enter' }), true, `${label}: Enter can submit and navigate`);
+    assert.equal(agent._isNavigationProneToolCall('press_keys', { key: 'ArrowDown' }), false, `${label}: arrows should avoid URL probes`);
+    assert.equal(agent._isNavigationProneToolCall('set_field', { submit: true }), true, `${label}: submitting fields can navigate`);
+    assert.equal(agent._isNavigationProneToolCall('set_field', { submit: false }), false, `${label}: ordinary field edits should avoid URL probes`);
   }
 });
 
@@ -1212,6 +1273,21 @@ test('matches www.github.com', () => {
 test('matches gmail.com under mail.google.com', () => {
   const a = getActiveAdapter('https://mail.google.com/mail/u/0/#inbox');
   assert.equal(a?.name, 'gmail');
+  assert.match(a?.notes || '', /explicitly starts a new email or saves a new draft/i);
+  assert.match(a?.notes || '', /no compose window is open/i);
+  assert.match(a?.notes || '', /click Compose immediately/i);
+  assert.match(a?.notes || '', /Do not inspect the current thread or search the page merely to discover/i);
+  assert.match(a?.notes || '', /picker fails, returns multiple ambiguous matches/i);
+  assert.match(a?.notes || '', /does not apply to reply or forward tasks/i);
+  assert.match(a?.notes || '', /Reply\/Forward controls/i);
+  assert.match(a?.notes || '', /already-open compose/i);
+  assert.match(a?.notes || '', /named focusable generic\/chip/i);
+  assert.match(a?.notes || '', /proceed directly to Subject and Message Body/i);
+  assert.match(a?.notes || '', /Never enumerate the compose form's generic sibling ref_ids/i);
+  assert.match(a?.notes || '', /focus the recipient row once/i);
+  const firefox = getActiveAdapterFx('https://mail.google.com/mail/u/0/#inbox');
+  assert.equal(firefox?.name, 'gmail');
+  assert.equal(firefox?.notes, a?.notes);
 });
 
 test('matches google search across TLDs and includes udm=14, without hijacking other google apps', () => {
@@ -1656,6 +1732,165 @@ test('tabs are isolated from each other', () => {
   d._checkLoop(10, 'click', { selector: '#x' }, { success: true });
   const result = d._checkLoop(20, 'click', { selector: '#x' }, { success: true });
   assert.equal(result.kind, 'none');
+});
+
+test('no-progress scroll warns on the second same-target miss and stops on the third', () => {
+  const origin = {
+    origin: 'last_interaction',
+    originElement: {
+      tag: 'p',
+      role: '',
+      text: 'The last visible paragraph',
+      rect: { x: 368, y: 123, w: 594, h: 78 },
+    },
+  };
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({});
+    const tab = label === 'chrome' ? 81 : 82;
+    assert.equal(agent._checkNoProgressScroll(tab, 'scroll', { direction: 'down', amount: 300 }, { moved: false, ...origin }).kind, 'none', `${label}: first miss`);
+    const warning = agent._checkNoProgressScroll(tab, 'scroll', { direction: 'down', amount: 500 }, { moved: false, ...origin });
+    assert.equal(warning.kind, 'nudge', `${label}: second miss should warn despite a changed amount`);
+    assert.match(warning.warning, /Do not repeat this scroll direction/i);
+    const stopped = agent._checkNoProgressScroll(tab, 'scroll', { direction: 'down', amount: 700 }, { moved: false, ...origin });
+    assert.equal(stopped.kind, 'stop', `${label}: third miss should stop`);
+    assert.match(stopped.message, /same scroll direction on the same target three times/i);
+  }
+});
+
+test('no-progress scroll is pane-, direction-, tab-, and run-scoped', () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({});
+    const tab = 83;
+    const dead = { moved: false };
+    assert.equal(agent._checkNoProgressScroll(tab, 'scroll', { direction: 'down', ref_id: 'ref_pane_a' }, dead).kind, 'none');
+    assert.equal(agent._checkNoProgressScroll(tab, 'read_page', {}, { success: true }).kind, 'none');
+    assert.equal(agent._checkNoProgressScroll(tab, 'scroll', { direction: 'down', ref_id: 'ref_pane_a' }, dead).kind, 'nudge', `${label}: an interleaved read must not evade the warning`);
+    assert.equal(agent._checkNoProgressScroll(tab, 'scroll', { direction: 'up', ref_id: 'ref_pane_a' }, dead).kind, 'none', `${label}: opposite direction is a new recovery path`);
+    assert.equal(agent._checkNoProgressScroll(tab, 'scroll', { direction: 'down', ref_id: 'ref_pane_b' }, dead).kind, 'none', `${label}: another pane is isolated`);
+    assert.equal(agent._checkNoProgressScroll(tab + 1, 'scroll', { direction: 'down', ref_id: 'ref_pane_b' }, dead).kind, 'none', `${label}: tabs are isolated`);
+    assert.equal(agent._checkNoProgressScroll(tab, 'scroll', { direction: 'down', ref_id: 'ref_pane_b' }, { moved: true }).kind, 'none');
+    assert.equal(agent.noProgressScrolls.has(tab), false, `${label}: movement should reset the streak`);
+    assert.equal(agent._checkNoProgressScroll(tab, 'scroll', { direction: 'down', ref_id: 'ref_reused' }, dead).kind, 'none');
+    assert.equal(agent._checkNoProgressScroll(tab, 'click_ax', { ref_id: 'ref_link' }, { success: true, pageUrlChanged: true }).kind, 'none');
+    assert.equal(agent.noProgressScrolls.has(tab), false, `${label}: document navigation should reset the streak`);
+    assert.equal(agent._checkNoProgressScroll(tab, 'scroll', { direction: 'down', ref_id: 'ref_reused' }, dead).kind, 'none', `${label}: a reused ref on the new page starts fresh`);
+    agent._checkNoProgressScroll(tab, 'scroll', { direction: 'down', ref_id: 'ref_pane_a' }, dead);
+    agent._clearLoopState(tab);
+    assert.equal(agent.noProgressScrolls.has(tab), false, `${label}: run cleanup should reset the streak`);
+  }
+});
+
+test('no-progress scroll enforcement is wired into both agent loops', () => {
+  for (const browserName of ['chrome', 'firefox']) {
+    const source = fs.readFileSync(path.join(ROOT, `src/${browserName}/src/agent/agent.js`), 'utf8');
+    assert.match(source, /const scrollCheck = this\._checkNoProgressScroll\(tabId, fnName, fnArgs, toolResult\)/, `${browserName}: evaluate each result`);
+    assert.match(source, /scrollCheck\.kind === 'stop'/, `${browserName}: stop result must win`);
+    assert.match(source, /scrollCheck\.kind === 'nudge'/, `${browserName}: warning must reach the model`);
+    assert.match(source, /this\.noProgressScrolls\.delete\(tabId\)/, `${browserName}: run cleanup must clear state`);
+  }
+});
+
+test('no-progress scroll stop synthesizes results for the rest of a tool batch', async () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({ getVisionProvider: async () => null });
+    const tabId = label === 'chrome' ? 85 : 86;
+    const messages = [];
+    const executed = [];
+    agent._ensureGateSetting = async () => {};
+    agent._skipPermissionGate = true;
+    agent._rememberMastodonObservation = async () => null;
+    agent._recordProgressObservation = async () => null;
+    agent._autoRecordProgressAction = () => null;
+    agent._persist = () => {};
+    agent.executeTool = async (_tabId, name, args) => {
+      executed.push(args.amount);
+      return {
+        success: true,
+        moved: false,
+        origin: 'last_interaction',
+        originElement: {
+          tag: 'p', role: '', text: 'Last visible paragraph',
+          rect: { x: 100, y: 200, w: 300, h: 40 },
+        },
+      };
+    };
+    const toolCalls = [300, 400, 500, 600].map((amount, index) => ({
+      id: `scroll_${index}`,
+      function: { name: 'scroll', arguments: JSON.stringify({ direction: 'down', amount }) },
+    }));
+
+    const result = await agent._executeToolBatch(
+      tabId,
+      toolCalls,
+      messages,
+      () => {},
+      { supportsVision: false },
+      null,
+      new Set(['scroll']),
+      1,
+    );
+
+    assert.equal(result.action, 'return', `${label}: the third dead scroll should stop the run`);
+    assert.deepEqual(executed, [300, 400, 500], `${label}: later calls must not execute after stop`);
+    const toolMessages = messages.filter(message => message.role === 'tool');
+    assert.equal(toolMessages.length, toolCalls.length, `${label}: every tool call must receive a result`);
+    const skipped = toolMessages.find(message => message.tool_call_id === 'scroll_3');
+    assert.ok(skipped, `${label}: remaining tool call needs a synthetic result`);
+    assert.deepEqual(JSON.parse(skipped.content), {
+      success: false,
+      skipped: true,
+      error: 'skipped: run stopped by loop detector',
+    });
+  }
+});
+
+test('Enter SPA route changes reset dead-scroll state before refs are reused', async () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({ getVisionProvider: async () => null });
+    const tabId = label === 'chrome' ? 87 : 88;
+    const messages = [];
+    const executed = [];
+    let currentUrl = 'https://example.com/inbox?view=old#thread-1';
+    agent._ensureGateSetting = async () => {};
+    agent._skipPermissionGate = true;
+    agent._currentUrl = async () => currentUrl;
+    agent._rememberMastodonObservation = async () => null;
+    agent._recordProgressObservation = async () => null;
+    agent._autoRecordProgressAction = () => null;
+    agent._persist = () => {};
+    agent.executeTool = async (_tabId, name) => {
+      executed.push(name);
+      if (name === 'press_keys') {
+        currentUrl = 'https://example.com/inbox?view=new#thread-2';
+        return { success: true };
+      }
+      return { success: true, moved: false };
+    };
+    const toolCalls = [
+      { id: 'old_scroll', function: { name: 'scroll', arguments: JSON.stringify({ direction: 'down', amount: 300, ref_id: 'ref_5' }) } },
+      { id: 'enter', function: { name: 'press_keys', arguments: JSON.stringify({ key: 'Enter' }) } },
+      { id: 'new_scroll_1', function: { name: 'scroll', arguments: JSON.stringify({ direction: 'down', amount: 400, ref_id: 'ref_5' }) } },
+      { id: 'new_scroll_2', function: { name: 'scroll', arguments: JSON.stringify({ direction: 'down', amount: 500, ref_id: 'ref_5' }) } },
+    ];
+
+    const result = await agent._executeToolBatch(
+      tabId,
+      toolCalls,
+      messages,
+      () => {},
+      { supportsVision: false },
+      null,
+      new Set(['scroll', 'press_keys']),
+      1,
+    );
+
+    assert.equal(result.action, 'continue', `${label}: reused refs on the new document must not hard-stop`);
+    assert.deepEqual(executed, ['scroll', 'press_keys', 'scroll', 'scroll'], `${label}: the full batch should execute`);
+    assert.equal(agent.noProgressScrolls.get(tabId)?.count, 2, `${label}: only new-document misses should remain`);
+    const secondNewScroll = messages.find(message => message.tool_call_id === 'new_scroll_2');
+    assert.match(secondNewScroll?.content || '', /NO-PROGRESS SCROLL/, `${label}: second miss on the new page should only nudge`);
+    assert.equal(messages.some(message => message.role === 'user' && /NAVIGATION OCCURRED/.test(String(message.content || ''))), false, `${label}: query/hash-only changes should not emit a path-level navigation warning`);
+  }
 });
 
 test('accessibility-tree ref enumeration nudges at three and stops at six', () => {
@@ -3861,6 +4096,14 @@ test('getToolsForMode: progress_update advertises canonical progress actions', (
     const action = progressUpdate.function.parameters.properties.items.items.properties.action;
     assert.match(action.description, /process_item/);
     assert.doesNotMatch(action.description, /\bscrape\b/);
+  }
+});
+
+test('getToolsForMode: scroll warns against repeating a no-movement path', () => {
+  for (const [label, getTools] of [['chrome', getToolsForModeCh], ['firefox', getToolsForModeFx]]) {
+    const scroll = getTools('act').find(t => t.function.name === 'scroll');
+    assert.ok(scroll, `${label}: scroll tool must be present in act mode`);
+    assert.match(scroll.function.description, /If moved is false, do not repeat the same target and direction/);
   }
 });
 
@@ -6879,12 +7122,13 @@ test('sidepanel escapes dynamic system-message interpolation before raw HTML ins
 });
 
 test('sidepanel subscribe error card clears DOM without HTML reinterpretation', () => {
-  for (const [label, panelRel] of [
-    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
-    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  for (const [label, panelRel, styleRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js', 'src/chrome/styles/sidepanel.css'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js', 'src/firefox/styles/sidepanel.css'],
   ]) {
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
-    const start = panel.indexOf('function renderSubscribeError(textEl, content) {');
+    const styles = fs.readFileSync(path.join(ROOT, styleRel), 'utf8');
+    const start = panel.indexOf("function renderSubscribeError(textEl, content, resumeMode = '') {");
     assert.notEqual(start, -1, `${label}: renderSubscribeError missing`);
     const end = panel.indexOf('\n}\n\nfunction addMessage', start);
     assert.notEqual(end, -1, `${label}: renderSubscribeError boundary missing`);
@@ -6892,6 +7136,28 @@ test('sidepanel subscribe error card clears DOM without HTML reinterpretation', 
     assert.match(body, /textEl\.replaceChildren\(\);/, `${label}: subscribe card should clear via DOM APIs`);
     assert.doesNotMatch(body, /textEl\.innerHTML\s*=\s*'';/, `${label}: subscribe card should not clear via innerHTML`);
     assert.match(body, /msg\.textContent = parsed\.message \|\| t\('sp\.subscribe\.allowance_used'\);/, `${label}: subscribe message must remain textContent`);
+    assert.match(body, /actions\.className = 'subscribe-actions';/, `${label}: subscribe actions should share a responsive row`);
+    assert.match(body, /resumeBtn\.textContent = t\('sp\.subscribe\.resume'\);/, `${label}: subscribe card should render a localized resume action`);
+    assert.match(body, /resumeBtn\.dataset\.resumeMode = \['ask', 'act', 'dev'\]\.includes\(resumeMode\)[\s\S]*?\? resumeMode[\s\S]*?: \(textEl\.closest\('\.message\.assistant'\)\?\.dataset\.runMode \|\| agentMode\);/, `${label}: resume action should prefer an explicitly captured failed run mode`);
+    assert.match(body, /resumeAfterSubscription\(resumeBtn\)/, `${label}: subscribe card should use the shared resume handler`);
+    assert.match(panel, /function resumeAfterSubscription\(btn\) \{[\s\S]*?const mode = \['ask', 'act', 'dev'\]\.includes\(btn\?\.dataset\?\.resumeMode\)[\s\S]*?setMode\(mode\);[\s\S]*?continueAgent\(\{ mode \}\);[\s\S]*?\}/, `${label}: subscribe resume should synchronize the visible mode before continuing`);
+    assert.match(panel, /btn\.addEventListener\('click', \(\) => resumeAfterSubscription\(btn\)\);/, `${label}: restored subscribe cards should use the shared resume handler`);
+    const errorUpdateStart = panel.indexOf('function renderAgentErrorUpdate(');
+    const errorUpdateEnd = panel.indexOf('\n}\n\nfunction rebindRestoredMessageControls', errorUpdateStart);
+    assert.notEqual(errorUpdateStart, -1, `${label}: renderAgentErrorUpdate missing`);
+    assert.notEqual(errorUpdateEnd, -1, `${label}: renderAgentErrorUpdate boundary missing`);
+    const errorUpdateBody = panel.slice(errorUpdateStart, errorUpdateEnd);
+    assert.match(errorUpdateBody, /subscribeResumeMode: active\.retryPayload\?\.mode,/, `${label}: structured error cards should receive the request-scoped run mode`);
+    assert.match(panel, /renderSubscribeError\(textEl, content, options\.subscribeResumeMode\)/, `${label}: error messages should forward their captured run mode to the subscribe card`);
+    assert.match(panel, /async function continueAgent\(options = \{\}\) \{[\s\S]*?includes\(options\?\.mode\) \? options\.mode : agentMode;/, `${label}: continuation should accept a preserved mode`);
+    const runCompleteStart = panel.indexOf("case 'run_complete':");
+    const runCompleteEnd = panel.indexOf("case 'context_compacted':", runCompleteStart);
+    assert.notEqual(runCompleteStart, -1, `${label}: run_complete handler missing`);
+    assert.notEqual(runCompleteEnd, -1, `${label}: run_complete boundary missing`);
+    const runCompleteBody = panel.slice(runCompleteStart, runCompleteEnd);
+    assert.match(runCompleteBody, /else if \(!renderSubscribeError\(textEl, data\.finalContent\)\) textEl\.innerHTML = formatMarkdown\(data\.finalContent\);/, `${label}: restored run finals should render subscribe actions before markdown fallback`);
+    assert.match(styles, /\.subscribe-actions\s*\{[\s\S]*?flex-wrap:\s*wrap;/, `${label}: subscribe actions should wrap in narrow panels`);
+    assert.match(styles, /\.subscribe-resume-btn\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?border:\s*1px solid var\(--accent\);/, `${label}: resume action should use secondary styling`);
   }
 });
 
@@ -7524,7 +7790,7 @@ test('sidepanel flushes run chat before queue settlement after immediate tab swi
     assert.notEqual(sendDrainIdx, -1, `${label}: send completion should drain pending tab switches`);
     assert.equal(sendFlushIdx < sendDrainIdx, true, `${label}: send completion must flush before deferred tab switching`);
 
-    const continueMatch = panel.match(/async function continueAgent\(\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n\}/);
+    const continueMatch = panel.match(/async function continueAgent\(options = \{\}\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n\}/);
     assert.ok(continueMatch, `${label}: continueAgent finally block missing`);
     const continueFinally = continueMatch[1];
     const continueFlushIdx = continueFinally.indexOf('flushRenderedTabChat()');
@@ -8521,7 +8787,7 @@ test('sidepanel keeps retry metadata long enough for returned error updates', ()
     const source = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     assert.match(
       source,
-      /function createActiveChatPayloadState\(retryPayload\) \{[\s\S]*?renderedErrorMessages: new Set\(\)[\s\S]*?\}/,
+      /function createActiveChatPayloadState\(retryPayload, requestId = ''\) \{[\s\S]*?requestId: String\(requestId \|\| ''\)[\s\S]*?renderedErrorMessages: new Set\(\)[\s\S]*?\}/,
       `${label}: active retry metadata should track rendered error messages`,
     );
     assert.match(
@@ -8551,17 +8817,17 @@ test('sidepanel keeps retry metadata long enough for returned error updates', ()
     );
     assert.match(
       source,
-      /const activePayloadState = createActiveChatPayloadState\(retryPayload\);[\s\S]*?activeChatPayloadsByTab\.set\(tabId, activePayloadState\);/,
+      /const activePayloadState = createActiveChatPayloadState\(retryPayload, requestId\);[\s\S]*?activeChatPayloadsByTab\.set\(tabId, activePayloadState\);/,
       `${label}: sendMessage should store retry metadata as an active run state`,
     );
     assert.match(
       source,
-      /const returnedErrorUpdate = Array\.isArray\(res\?\.updates\)[\s\S]*?res\.updates\.find\(u => u\?\.type === 'error'\)[\s\S]*?renderAgentErrorUpdate\(returnedErrorUpdate\.data, tabId\);/,
+      /const returnedErrorUpdate = Array\.isArray\(res\?\.updates\)[\s\S]*?res\.updates\.find\(u => u\?\.type === 'error'\)[\s\S]*?renderAgentErrorUpdate\(returnedErrorUpdate\.data, tabId, requestId\);/,
       `${label}: returned agent error updates should render with retry metadata even if the broadcast is late`,
     );
     assert.match(
       source,
-      /case 'error':[\s\S]*?renderAgentErrorUpdate\(data, currentTabId\);[\s\S]*?break;/,
+      /case 'error':[\s\S]*?renderAgentErrorUpdate\(data, currentTabId, msg\.requestId\);[\s\S]*?break;/,
       `${label}: broadcast agent errors should share the retry-aware renderer`,
     );
     assert.match(
@@ -8591,7 +8857,7 @@ test('sidepanel keeps retry metadata long enough for returned error updates', ()
     );
     assert.match(
       source,
-      /async function continueAgent\(\) \{[\s\S]*?const tabId = currentTabId;[\s\S]*?clearActiveChatPayloadForTab\(tabId\);[\s\S]*?setTabProcessing\(tabId, true\);/,
+      /async function continueAgent\(options = \{\}\) \{[\s\S]*?const tabId = currentTabId;[\s\S]*?clearActiveChatPayloadForTab\(tabId\);[\s\S]*?setTabProcessing\(tabId, true\);/,
       `${label}: Continue runs should clear stale chat retry metadata before starting`,
     );
   }
@@ -8734,10 +9000,10 @@ test('sidepanel continue runs use the initiating tab state', () => {
     ['firefox', 'src/firefox/src/ui/sidepanel.js'],
   ]) {
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
-    const match = panel.match(/async function continueAgent\(\) \{[\s\S]*?\n\}/);
+    const match = panel.match(/async function continueAgent\(options = \{\}\) \{[\s\S]*?\n\}/);
     assert.ok(match, `${label}: continueAgent missing`);
     const body = match[0];
-    assert.match(body, /const tabId = currentTabId;[\s\S]*?const modeForSend = agentMode;[\s\S]*?sendToBackground\('continue', \{[\s\S]*?tabId,[\s\S]*?mode: modeForSend,/, `${label}: Continue should send with the tab and mode captured before awaiting`);
+    assert.match(body, /const tabId = currentTabId;[\s\S]*?const modeForSend = \['ask', 'act', 'dev'\]\.includes\(options\?\.mode\) \? options\.mode : agentMode;[\s\S]*?sendToBackground\('continue', \{[\s\S]*?tabId,[\s\S]*?mode: modeForSend,/, `${label}: Continue should send with the tab and requested-or-current mode captured before awaiting`);
     assert.doesNotMatch(body, /sendToBackground\('continue', \{[\s\S]*?tabId: currentTabId/, `${label}: Continue should not read currentTabId inside the async send payload`);
     assert.doesNotMatch(body, /sendToBackground\('continue', \{[\s\S]*?mode: agentMode/, `${label}: Continue should not read agentMode inside the async send payload`);
     assert.match(body, /await prepareChatHistoryForTurn\(tabId, modeForSend\);[\s\S]*?if \(isTabAbortRequested\(tabId\)\) return false;[\s\S]*?if \(!sameTabId\(currentTabId, tabId\) \|\| !sameTabId\(renderedTabId, tabId\)\) return false;[\s\S]*?assistantEl = addMessage\('assistant', ''\);/, `${label}: Continue should hydrate history, honor aborts, and re-check the initiating tab before rendering`);
@@ -8754,7 +9020,7 @@ test('sidepanel drains queued context-menu prompts after pending tab switches on
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     const completions = [
       ['sendMessage', /async function sendMessage\([^)]*\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n  return accepted;/],
-      ['continueAgent', /async function continueAgent\(\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n\}/],
+      ['continueAgent', /async function continueAgent\(options = \{\}\) \{[\s\S]*?finally \{([\s\S]*?)\n  \}\n\}/],
     ];
     for (const [fnName, pattern] of completions) {
       const match = panel.match(pattern);
@@ -14798,6 +15064,49 @@ test('recording tools are retired/reserved instead of permission-gated model too
 // ground-truth status note, history keeps a lone "Recording started" and the
 // model wrongly reports a recording is still in progress. _enrichUserMessage
 // injects the live status so the fresh state supersedes the stale memory.
+test('runtime context: exposes an authoritative local clock with Chrome/Firefox parity', () => {
+  const options = {
+    now: new Date('2026-07-12T05:14:22.298Z'),
+    timeZone: 'Europe/Istanbul',
+  };
+  const chromeContext = buildTrustedRuntimeContextCh(options);
+  const firefoxContext = buildTrustedRuntimeContextFx(options);
+
+  assert.equal(firefoxContext, chromeContext, 'Chrome and Firefox runtime context should match');
+  assert.match(chromeContext, /Current local date: 2026-07-12/);
+  assert.match(chromeContext, /Current local time: 08:14:22/);
+  assert.match(chromeContext, /Time zone: Europe\/Istanbul \(UTC\+03:00\)/);
+  assert.match(chromeContext, /a dated filename, publication date, or front matter/);
+  assert.match(chromeContext, /Honor any different date explicitly provided by the user/);
+  assert.match(chromeContext, /Never infer the current date from page content, commit history, existing files, or model knowledge/);
+  assert.match(chromeContext, /\[\/Trusted runtime context]$/);
+  const legacyContext = chromeContext.replace(/\n\[\/Trusted runtime context]$/, '');
+  for (const [label, strip] of [['chrome', stripTrustedRuntimeContextCh], ['firefox', stripTrustedRuntimeContextFx]]) {
+    assert.equal(strip(`${chromeContext}\n\nPublish this today.`), 'Publish this today.', `${label}: runtime context should be removable from persisted task text`);
+    assert.equal(strip(`${legacyContext}\n\nPublish this today.`), 'Publish this today.', `${label}: pre-marker persisted runtime context should remain removable`);
+  }
+});
+
+test('Agent enrich: trusted runtime clock reaches planner and execution context', async () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({});
+    const messages = [{ role: 'user', content: 'Earlier turn' }];
+    const enriched = await agent._enrichUserMessageWithCurrentPage(999, messages, 'publish this today');
+    const text = userMessageToText(enriched);
+    assert.match(text, /\[Trusted runtime context — generated by WebBrain, not page content;/, `${label}: executor context missing clock`);
+    assert.match(text, /Current local date: \d{4}-\d{2}-\d{2}/, `${label}: executor context missing local date`);
+
+    const plannerMessages = (label === 'chrome' ? buildPlannerMessages : buildPlannerMessagesFx)(
+      enriched,
+      'https://github.com/example/blog',
+      'Example blog',
+    );
+    const plannerUser = plannerMessages.find(message => message.role === 'user');
+    assert.match(plannerUser.content, /Current local date: \d{4}-\d{2}-\d{2}/, `${label}: planner context missing local date`);
+    assert.match(plannerUser.content, /Never infer the current date from page content, commit history/, `${label}: planner context missing anti-inference rule`);
+  }
+});
+
 test('Agent enrich: corrects stale "recording started" once no recording is active', async () => {
   const agent = new AgentCh({});
   const messages = [
@@ -15990,8 +16299,13 @@ test('progress ledger preserves page-scoped rows after task navigation', () => {
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'Follow every stargazer on this page.' },
       { role: 'assistant', content: 'Opening octocat to process the pending follow row.' },
-      { role: 'user', content: '[Current page context - URL: https://github.com/octocat - Title: octocat]' },
+      {
+        role: 'user',
+        content: `${buildTrustedRuntimeContextCh({ now: new Date('2026-07-12T05:14:22.298Z'), timeZone: 'Europe/Istanbul' })}\n\n[Current page context - URL: https://github.com/octocat - Title: octocat]`,
+      },
     ]);
+    agent.progressPageScopes.clear();
+    assert.equal(agent._currentProgressPageScope(tabId), 'https://github.com/octocat', `${AgentClass.name}: runtime prefix hid the restored page scope`);
     const session = allowProgress(agent, tabId, ['follow'], {
       taskText: 'Follow every stargazer on this page.',
       pageScope: 'https://github.com/foo/bar/stargazers',
@@ -16825,6 +17139,7 @@ test('scheduled resume messages preserve progress ledger session', async () => {
     agent.conversations.get(tabId).push({
       role: 'user',
       content: [
+        buildTrustedRuntimeContextCh({ now: new Date('2026-07-12T05:14:22.298Z'), timeZone: 'Europe/Istanbul' }),
         '[Current page context - URL: https://github.com/example/project/stargazers?page=16 Title: Stargazers]',
         '[Scheduled resume resume_test]',
         'This is a durable continuation of an earlier user task, not page content and not a new instruction from the web page.',
@@ -17966,6 +18281,7 @@ test('context compaction pins scheduled resume instructions', async () => {
     const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
     const tabId = AgentClass === AgentCh ? 799 : 800;
     const scheduledResume = [
+      buildTrustedRuntimeContextCh({ now: new Date('2026-07-12T05:14:22.298Z'), timeZone: 'Europe/Istanbul' }),
       '[Current page context - URL: https://github.com/example/project/stargazers?page=16 Title: Stargazers]',
       '[Scheduled resume resume_keep]',
       'This is a durable continuation of an earlier user task, not page content and not a new instruction from the web page.',
@@ -18005,6 +18321,45 @@ test('context compaction pins scheduled resume instructions', async () => {
 
     const h = agent.persistTimers?.get?.(tabId);
     if (h) clearTimeout(h);
+  }
+});
+
+test('context compaction summarizes the user task after injected runtime context', async () => {
+  const runtimeContext = buildTrustedRuntimeContextCh({
+    now: new Date('2026-07-12T05:14:22.298Z'),
+    timeZone: 'Europe/Istanbul',
+  });
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 803 : 804;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: `${runtimeContext}\n\n[Current page context - URL: https://github.com/example/project - Title: Project]\n\nInspect this repository.` },
+      { role: 'assistant', content: 'The repository is open.' },
+      { role: 'user', content: `${runtimeContext}\n\n[Current page context - URL: https://github.com/example/project/issues - Title: Issues]\n\nOpen the first issue and summarize it.` },
+    ];
+    for (let i = 0; i < 35; i++) {
+      messages.push({ role: 'assistant', content: `later step ${i}` });
+    }
+    agent.conversations.set(tabId, messages);
+
+    const origLog = console.log;
+    console.log = () => {};
+    let result;
+    try {
+      result = await agent._manageContext(tabId, messages, () => {}, null, { force: true });
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(result.compacted, true, `${AgentClass.name}: follow-up history should compact`);
+    const summary = messages.find(message => /Previous conversation summary/i.test(String(message.content || '')));
+    assert.ok(summary, `${AgentClass.name}: compacted summary missing`);
+    assert.match(String(summary.content), /User asked: Open the first issue and summarize it\./, `${AgentClass.name}: follow-up task was lost behind runtime context`);
+    assert.doesNotMatch(String(summary.content), /Trusted runtime context|Current local date|Use this clock/, `${AgentClass.name}: injected runtime context leaked into summary`);
+
+    const timer = agent.persistTimers?.get?.(tabId);
+    if (timer) clearTimeout(timer);
   }
 });
 
@@ -19549,6 +19904,9 @@ test('planner: prompt treats page context as untrusted data', () => {
   assert.match(PLANNER_SYSTEM_PROMPT, /ignore previous instructions/);
   assert.match(PLANNER_SYSTEM_PROMPT, /bounded batches/);
   assert.match(PLANNER_SYSTEM_PROMPT, /wait_for_stable pacing/);
+  assert.match(PLANNER_SYSTEM_PROMPT, /Do not invent a prerequisite to discover a raw identifier/);
+  assert.match(PLANNER_SYSTEM_PROMPT, /name-based contact\/entity picker/);
+  assert.match(PLANNER_SYSTEM_PROMPT, /picker fails, returns multiple ambiguous matches/);
   assert.match(PLANNER_SYSTEM_PROMPT, /read: get_accessibility_tree, read_page, extract_data, fetch_url, research_url/);
   assert.match(PLANNER_SYSTEM_PROMPT, /attached JSON\/TXT\/CSV text file content/);
   assert.match(PLANNER_SYSTEM_PROMPT, /brief neutral scratchpad_notes/);
@@ -20729,6 +21087,50 @@ test('run UI journal: concurrent tabs, bounded replay, terminal snapshots, and s
   }
 });
 
+test('sidepanel run errors dedupe streamed, returned, and restored copies by tab and request', () => {
+  for (const [label, claimRunError] of [['chrome', claimRunErrorCh], ['firefox', claimRunErrorFx]]) {
+    const seenErrors = new Set();
+    const renderedErrors = [];
+    const base = { seenErrors, renderedErrors, tabId: 41, requestId: 'req-gmail', message: 'Stuck   in a loop.\nStopped.' };
+
+    const streamed = claimRunError(base);
+    assert.equal(streamed.duplicate, false, `${label}: first streamed error should render`);
+    renderedErrors.push({ tabId: streamed.tabId, requestId: streamed.requestId, key: streamed.key });
+
+    const returned = claimRunError({ ...base, message: 'Stuck in a loop. Stopped.' });
+    assert.equal(returned.duplicate, true, `${label}: returned copy should not render twice`);
+
+    const restored = claimRunError({
+      seenErrors: new Set(),
+      renderedErrors,
+      tabId: 41,
+      requestId: 'req-gmail',
+      message: 'Stuck in a loop. Stopped.',
+    });
+    assert.equal(restored.duplicate, true, `${label}: restored HTML should suppress replayed copies`);
+
+    assert.equal(claimRunError({ ...base, message: 'A different failure.' }).duplicate, false, `${label}: distinct errors in one run should render`);
+    assert.equal(claimRunError({ ...base, requestId: 'req-gmail-retry' }).duplicate, false, `${label}: identical errors from separate runs should render`);
+    assert.equal(claimRunError({ ...base, tabId: 42 }).duplicate, false, `${label}: identical errors from separate tabs should render`);
+  }
+});
+
+test('sidepanel routes every run-error path through request-scoped deduplication', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    assert.match(panel, /import \{ claimRunError \} from '\.\/run-error-dedupe\.js';/, `${label}: sidepanel should use the shared deduper`);
+    assert.match(panel, /createActiveChatPayloadState\(retryPayload, requestId\)/, `${label}: active error state should retain request identity`);
+    assert.match(panel, /renderAgentErrorUpdate\(returnedErrorUpdate\.data, tabId, requestId\)/, `${label}: returned errors should use request-scoped rendering`);
+    assert.match(panel, /renderAgentErrorUpdate\(\{ message: e\.message \}, tabId, requestId\)/, `${label}: caught errors should use request-scoped rendering`);
+    assert.match(panel, /renderAgentErrorUpdate\(data, currentTabId, msg\.requestId\)/, `${label}: streamed errors should use message request identity`);
+    assert.match(panel, /msgEl\.dataset\.tabId = active\.tabId;[\s\S]*?msgEl\.dataset\.runRequestId = active\.requestId;[\s\S]*?msgEl\.dataset\.errorMessageKey = active\.key;/, `${label}: persisted error cards should retain their dedupe identity`);
+    assert.match(panel, /if \(active\.duplicate\) return;[\s\S]*?retryPayload: isTabAbortRequested\(tabId\) \? null : active\.retryPayload/, `${label}: only the first copy should retain the Retry action`);
+  }
+});
+
 test('plan review: cancellation emits plan_resolved and timeout has an explicit terminal decision', async () => {
   await withPlannerBrowserGlobals(async () => {
     for (const [label, AgentClass, sourceRel] of [
@@ -21371,6 +21773,25 @@ test('planner input: agent memory is skipped from recent conversation digest', (
     assert.match(digest, /Visible follow-up/, `${label} should keep normal user history`);
     assert.doesNotMatch(digest, /Agent memory|stale\.csv/, `${label} should skip app-owned memory`);
     assert.doesNotMatch(digest, /scratchpad bookkeeping|progress ledger/, `${label} should skip other pinned app state`);
+  }
+});
+
+test('planner input: runtime context does not consume prior user-turn history budget', () => {
+  const runtimeContext = buildTrustedRuntimeContextCh({
+    now: new Date('2026-07-12T05:14:22.298Z'),
+    timeZone: 'Europe/Istanbul',
+  });
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({});
+    const digest = agent._buildPlannerHistoryDigest([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: `${runtimeContext}\n\nSearch GitHub for the WebBrain repository and open its first issue.` },
+      { role: 'assistant', content: 'I found the repository and its issues list.' },
+    ], 2000);
+
+    assert.match(digest, /User: Search GitHub for the WebBrain repository and open its first issue\./, `${label}: prior task was lost behind runtime context`);
+    assert.match(digest, /Assistant: I found the repository and its issues list\./, `${label}: assistant antecedent should remain visible`);
+    assert.doesNotMatch(digest, /Trusted runtime context|Current local date|Use this clock/, `${label}: runtime context leaked into planner history`);
   }
 });
 
