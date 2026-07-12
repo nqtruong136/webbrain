@@ -2985,6 +2985,7 @@ function renderAgentErrorUpdate(data, tabId = currentTabId, requestId = '') {
   if (active.duplicate) return;
   const msgEl = addMessage('error', t('sp.error_prefix', { msg: message }), {
     retryPayload: isTabAbortRequested(tabId) ? null : active.retryPayload,
+    subscribeResumeMode: active.retryPayload?.mode,
   });
   if (active.requestId) {
     msgEl.dataset.tabId = active.tabId;
@@ -4806,7 +4807,7 @@ function openSubscribeUrl(url) {
 // caller can skip its normal markdown rendering. The URL is stashed on the
 // button's dataset so it survives chat-history restore (messagesEl.innerHTML),
 // where the click closure is lost and rebindSubscribeButtons re-attaches it.
-function renderSubscribeError(textEl, content) {
+function renderSubscribeError(textEl, content, resumeMode = '') {
   const parsed = parseSubscribeError(content);
   if (!parsed) return false;
 
@@ -4834,7 +4835,9 @@ function renderSubscribeError(textEl, content) {
   resumeBtn.type = 'button';
   resumeBtn.className = 'subscribe-resume-btn';
   resumeBtn.textContent = t('sp.subscribe.resume');
-  resumeBtn.dataset.resumeMode = textEl.closest('.message.assistant')?.dataset.runMode || agentMode;
+  resumeBtn.dataset.resumeMode = ['ask', 'act', 'dev'].includes(resumeMode)
+    ? resumeMode
+    : (textEl.closest('.message.assistant')?.dataset.runMode || agentMode);
   resumeBtn.dataset.bound = 'true';
   resumeBtn.addEventListener('click', () => resumeAfterSubscription(resumeBtn));
   actions.appendChild(resumeBtn);
@@ -4885,7 +4888,7 @@ function addMessage(role, content, options = {}) {
   } else if (role === 'system') {
     if (isSystemHtml(content)) textEl.innerHTML = content.__systemHtml;
     else textEl.textContent = content || '';
-  } else if (!renderSubscribeError(textEl, content)) {
+  } else if (!renderSubscribeError(textEl, content, options.subscribeResumeMode)) {
     textEl.innerHTML = content ? formatMarkdown(content) : '';
   }
 

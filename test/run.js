@@ -7116,7 +7116,7 @@ test('sidepanel subscribe error card clears DOM without HTML reinterpretation', 
   ]) {
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     const styles = fs.readFileSync(path.join(ROOT, styleRel), 'utf8');
-    const start = panel.indexOf('function renderSubscribeError(textEl, content) {');
+    const start = panel.indexOf("function renderSubscribeError(textEl, content, resumeMode = '') {");
     assert.notEqual(start, -1, `${label}: renderSubscribeError missing`);
     const end = panel.indexOf('\n}\n\nfunction addMessage', start);
     assert.notEqual(end, -1, `${label}: renderSubscribeError boundary missing`);
@@ -7126,10 +7126,17 @@ test('sidepanel subscribe error card clears DOM without HTML reinterpretation', 
     assert.match(body, /msg\.textContent = parsed\.message \|\| t\('sp\.subscribe\.allowance_used'\);/, `${label}: subscribe message must remain textContent`);
     assert.match(body, /actions\.className = 'subscribe-actions';/, `${label}: subscribe actions should share a responsive row`);
     assert.match(body, /resumeBtn\.textContent = t\('sp\.subscribe\.resume'\);/, `${label}: subscribe card should render a localized resume action`);
-    assert.match(body, /resumeBtn\.dataset\.resumeMode = textEl\.closest\('\.message\.assistant'\)\?\.dataset\.runMode \|\| agentMode;/, `${label}: resume action should preserve the failed run mode`);
+    assert.match(body, /resumeBtn\.dataset\.resumeMode = \['ask', 'act', 'dev'\]\.includes\(resumeMode\)[\s\S]*?\? resumeMode[\s\S]*?: \(textEl\.closest\('\.message\.assistant'\)\?\.dataset\.runMode \|\| agentMode\);/, `${label}: resume action should prefer an explicitly captured failed run mode`);
     assert.match(body, /resumeAfterSubscription\(resumeBtn\)/, `${label}: subscribe card should use the shared resume handler`);
     assert.match(panel, /function resumeAfterSubscription\(btn\) \{[\s\S]*?const mode = \['ask', 'act', 'dev'\]\.includes\(btn\?\.dataset\?\.resumeMode\)[\s\S]*?setMode\(mode\);[\s\S]*?continueAgent\(\{ mode \}\);[\s\S]*?\}/, `${label}: subscribe resume should synchronize the visible mode before continuing`);
     assert.match(panel, /btn\.addEventListener\('click', \(\) => resumeAfterSubscription\(btn\)\);/, `${label}: restored subscribe cards should use the shared resume handler`);
+    const errorUpdateStart = panel.indexOf('function renderAgentErrorUpdate(');
+    const errorUpdateEnd = panel.indexOf('\n}\n\nfunction rebindRestoredMessageControls', errorUpdateStart);
+    assert.notEqual(errorUpdateStart, -1, `${label}: renderAgentErrorUpdate missing`);
+    assert.notEqual(errorUpdateEnd, -1, `${label}: renderAgentErrorUpdate boundary missing`);
+    const errorUpdateBody = panel.slice(errorUpdateStart, errorUpdateEnd);
+    assert.match(errorUpdateBody, /subscribeResumeMode: active\.retryPayload\?\.mode,/, `${label}: structured error cards should receive the request-scoped run mode`);
+    assert.match(panel, /renderSubscribeError\(textEl, content, options\.subscribeResumeMode\)/, `${label}: error messages should forward their captured run mode to the subscribe card`);
     assert.match(panel, /async function continueAgent\(options = \{\}\) \{[\s\S]*?includes\(options\?\.mode\) \? options\.mode : agentMode;/, `${label}: continuation should accept a preserved mode`);
     const runCompleteStart = panel.indexOf("case 'run_complete':");
     const runCompleteEnd = panel.indexOf("case 'context_compacted':", runCompleteStart);
