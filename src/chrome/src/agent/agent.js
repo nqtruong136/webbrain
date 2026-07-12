@@ -6514,7 +6514,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   _progressPageScopeFromConversation(tabId) {
     const messages = this.conversations.get(tabId) || [];
     for (let i = messages.length - 1; i >= 1; i--) {
-      const c = this._messageText(messages[i]?.content);
+      const c = stripTrustedRuntimeContext(this._messageText(messages[i]?.content));
       const match = c.match(/^\s*\[Current page context[^\]]*\bURL:\s*(https?:\/\/[^\s\]]+)/i);
       const pageScope = match ? this._progressPageScopeForUrl(match[1]) : '';
       if (pageScope) return pageScope;
@@ -7360,7 +7360,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     let summaryText = 'Previous conversation summary:\n';
     for (const msg of oldMessages) {
       if (msg.role === 'user') {
-        summaryText += `- User asked: ${this._truncate(msg.content, 120)}\n`;
+        const taskText = this._stripInjectedTaskContext(this._messageText(msg.content));
+        summaryText += `- User asked: ${this._truncate(taskText, 120)}\n`;
       } else if (msg.role === 'assistant' && msg.content && !msg.tool_calls) {
         summaryText += `- Assistant answered: ${this._truncate(msg.content, 150)}\n`;
       } else if (msg.role === 'assistant' && msg.tool_calls) {

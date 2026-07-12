@@ -16276,8 +16276,13 @@ test('progress ledger preserves page-scoped rows after task navigation', () => {
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'Follow every stargazer on this page.' },
       { role: 'assistant', content: 'Opening octocat to process the pending follow row.' },
-      { role: 'user', content: '[Current page context - URL: https://github.com/octocat - Title: octocat]' },
+      {
+        role: 'user',
+        content: `${buildTrustedRuntimeContextCh({ now: new Date('2026-07-12T05:14:22.298Z'), timeZone: 'Europe/Istanbul' })}\n\n[Current page context - URL: https://github.com/octocat - Title: octocat]`,
+      },
     ]);
+    agent.progressPageScopes.clear();
+    assert.equal(agent._currentProgressPageScope(tabId), 'https://github.com/octocat', `${AgentClass.name}: runtime prefix hid the restored page scope`);
     const session = allowProgress(agent, tabId, ['follow'], {
       taskText: 'Follow every stargazer on this page.',
       pageScope: 'https://github.com/foo/bar/stargazers',
@@ -18293,6 +18298,45 @@ test('context compaction pins scheduled resume instructions', async () => {
 
     const h = agent.persistTimers?.get?.(tabId);
     if (h) clearTimeout(h);
+  }
+});
+
+test('context compaction summarizes the user task after injected runtime context', async () => {
+  const runtimeContext = buildTrustedRuntimeContextCh({
+    now: new Date('2026-07-12T05:14:22.298Z'),
+    timeZone: 'Europe/Istanbul',
+  });
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    const tabId = AgentClass === AgentCh ? 803 : 804;
+    const messages = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: `${runtimeContext}\n\n[Current page context - URL: https://github.com/example/project - Title: Project]\n\nInspect this repository.` },
+      { role: 'assistant', content: 'The repository is open.' },
+      { role: 'user', content: `${runtimeContext}\n\n[Current page context - URL: https://github.com/example/project/issues - Title: Issues]\n\nOpen the first issue and summarize it.` },
+    ];
+    for (let i = 0; i < 35; i++) {
+      messages.push({ role: 'assistant', content: `later step ${i}` });
+    }
+    agent.conversations.set(tabId, messages);
+
+    const origLog = console.log;
+    console.log = () => {};
+    let result;
+    try {
+      result = await agent._manageContext(tabId, messages, () => {}, null, { force: true });
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(result.compacted, true, `${AgentClass.name}: follow-up history should compact`);
+    const summary = messages.find(message => /Previous conversation summary/i.test(String(message.content || '')));
+    assert.ok(summary, `${AgentClass.name}: compacted summary missing`);
+    assert.match(String(summary.content), /User asked: Open the first issue and summarize it\./, `${AgentClass.name}: follow-up task was lost behind runtime context`);
+    assert.doesNotMatch(String(summary.content), /Trusted runtime context|Current local date|Use this clock/, `${AgentClass.name}: injected runtime context leaked into summary`);
+
+    const timer = agent.persistTimers?.get?.(tabId);
+    if (timer) clearTimeout(timer);
   }
 });
 
