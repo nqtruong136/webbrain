@@ -1832,13 +1832,13 @@ test('no-progress scroll stop synthesizes results for the rest of a tool batch',
   }
 });
 
-test('Enter navigation resets dead-scroll state before refs are reused', async () => {
+test('Enter SPA route changes reset dead-scroll state before refs are reused', async () => {
   for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
     const agent = new AgentClass({ getVisionProvider: async () => null });
     const tabId = label === 'chrome' ? 87 : 88;
     const messages = [];
     const executed = [];
-    let currentUrl = 'https://example.com/old';
+    let currentUrl = 'https://example.com/inbox?view=old#thread-1';
     agent._ensureGateSetting = async () => {};
     agent._skipPermissionGate = true;
     agent._currentUrl = async () => currentUrl;
@@ -1849,7 +1849,7 @@ test('Enter navigation resets dead-scroll state before refs are reused', async (
     agent.executeTool = async (_tabId, name) => {
       executed.push(name);
       if (name === 'press_keys') {
-        currentUrl = 'https://example.com/new';
+        currentUrl = 'https://example.com/inbox?view=new#thread-2';
         return { success: true };
       }
       return { success: true, moved: false };
@@ -1877,6 +1877,7 @@ test('Enter navigation resets dead-scroll state before refs are reused', async (
     assert.equal(agent.noProgressScrolls.get(tabId)?.count, 2, `${label}: only new-document misses should remain`);
     const secondNewScroll = messages.find(message => message.tool_call_id === 'new_scroll_2');
     assert.match(secondNewScroll?.content || '', /NO-PROGRESS SCROLL/, `${label}: second miss on the new page should only nudge`);
+    assert.equal(messages.some(message => message.role === 'user' && /NAVIGATION OCCURRED/.test(String(message.content || ''))), false, `${label}: query/hash-only changes should not emit a path-level navigation warning`);
   }
 });
 

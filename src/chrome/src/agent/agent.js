@@ -2263,21 +2263,24 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       if (navigationProneCall && beforeUrl && !toolResult?.error) {
         await new Promise(r => setTimeout(r, 200));
         const afterUrl = await this._currentUrl(tabId);
-        const beforeNorm = this._normalizeUrlPath(beforeUrl);
-        const afterNorm = this._normalizeUrlPath(afterUrl);
-        if (beforeNorm && afterNorm && beforeNorm !== afterNorm) {
-          if (toolResult && typeof toolResult === 'object') {
-            toolResult.pageUrlChanged = true;
-            toolResult.previousUrl = beforeUrl;
-            toolResult.currentUrl = afterUrl;
-          }
-          // Explicit navigation tools (navigate / go_back / go_forward)
-          // intentionally go somewhere — don't warn. For everything else
-          // (click, execute_js, iframe_click) the nav is a side effect the
-          // model may not have anticipated.
-          if (!Agent.NAV_TOOLS.has(fnName)) {
-            navNotices.push({ before: beforeUrl, after: afterUrl, viaTool: fnName });
-          }
+        const beforeFull = this._normalizeUrl(beforeUrl);
+        const afterFull = this._normalizeUrl(afterUrl);
+        const fullUrlChanged = beforeFull && afterFull && beforeFull !== afterFull;
+        if (fullUrlChanged && toolResult && typeof toolResult === 'object') {
+          // Scroll refs/coordinates are scoped to the current route, including
+          // SPA views distinguished only by query/hash.
+          toolResult.pageUrlChanged = true;
+          toolResult.previousUrl = beforeUrl;
+          toolResult.currentUrl = afterUrl;
+        }
+
+        const beforePath = this._normalizeUrlPath(beforeUrl);
+        const afterPath = this._normalizeUrlPath(afterUrl);
+        // Explicit navigation tools intentionally go somewhere. For implicit
+        // navigation, retain the less noisy path-level warning policy: query /
+        // hash-only SPA changes reset state but do not force a re-plan notice.
+        if (beforePath && afterPath && beforePath !== afterPath && !Agent.NAV_TOOLS.has(fnName)) {
+          navNotices.push({ before: beforeUrl, after: afterUrl, viaTool: fnName });
         }
       }
       if (toolResult && typeof toolResult === 'object' && !toolResult.done) {
