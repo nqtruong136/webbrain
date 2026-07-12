@@ -128,6 +128,17 @@ export class Agent {
     // (form fields + email/phone text) BEFORE leaving the extension. Off by
     // default — loaded from chrome.storage.local in background.js.
     this.screenshotRedaction = false;
+    // Image budget (issue #311): screenshot quality + capture limits. All
+    // loaded from chrome.storage.local in background.js. Defaults preserve the
+    // previous behavior: no explicit `detail` was ever sent (so the provider
+    // uses its own default — OpenAI's is 'auto'), auto-screenshots were
+    // unlimited per turn, and images were capped at 1568px per side.
+    this.imageDetail = 'auto';       // 'high' | 'low' | 'auto' (provider-dependent)
+    this.maxScreenshotsPerTurn = 0;  // 0 = unlimited
+    this.maxImageDimension = 1568;   // max width/height in px for any vision image
+    // tabId -> auto-screenshot count within the current turn/run. Enforces
+    // `maxScreenshotsPerTurn`. Reset when a run starts and on tab cleanup.
+    this.autoScreenshotCount = new Map();
     this.costAllowanceSessionUsd = DEFAULT_CLOUD_COST_ALLOWANCE_USD;
     this.costAllowanceTotalUsd = DEFAULT_CLOUD_COST_ALLOWANCE_USD;
     this.cloudCostSpentUsd = 0;
@@ -1795,7 +1806,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       role: 'user',
       content: [
         { type: 'text', text: contextLine + screenshotNote + userMessage },
-        { type: 'image_url', image_url: { url: shot.dataUrl } },
+        { type: 'image_url', image_url: this._withImageDetail({ url: shot.dataUrl }) },
       ],
     };
   }
@@ -2486,7 +2497,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           role: 'user',
           content: [
             { type: 'text', text: noteText },
-            { type: 'image_url', image_url: { url: attachedImage } },
+            { type: 'image_url', image_url: this._withImageDetail({ url: attachedImage }) },
           ],
         });
         const _runIdForShot = this.currentRunId.get(tabId);
@@ -2593,9 +2604,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (didStateChange && (provider.supportsVision || visionProvider)) {
       const lastTs = this.lastAutoScreenshotTs.get(tabId) || 0;
       if (Date.now() - lastTs >= 500) {
+        // Enforce maxScreenshotsPerTurn (issue #311). 0 means unlimited.
+        const _screenshotCap = Number(this.maxScreenshotsPerTurn) || 0;
+        const _overBudget = _screenshotCap > 0 && (this.autoScreenshotCount.get(tabId) || 0) >= _screenshotCap;
         await new Promise(r => setTimeout(r, 250));
-        const shot = await this._captureAutoScreenshot(tabId);
+        const shot = _overBudget ? null : await this._captureAutoScreenshot(tabId);
         if (shot) {
+          if (_screenshotCap > 0) this.autoScreenshotCount.set(tabId, (this.autoScreenshotCount.get(tabId) || 0) + 1);
           this.lastAutoScreenshotTs.set(tabId, Date.now());
           // Pair the image with a textual list of visible clickables so
           // the model can ground "the Publish button" by name instead of
@@ -2638,7 +2653,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
               role: 'user',
               content: [
                 { type: 'text', text: textBlock },
-                { type: 'image_url', image_url: { url: shot.dataUrl } },
+                { type: 'image_url', image_url: this._withImageDetail({ url: shot.dataUrl }) },
               ],
             });
             pushed = true;
@@ -3171,13 +3186,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // binary-search, then ask CDP to capture + scale in one pass. This
       // avoids ever materializing a multi-MB native-DPR JPEG that we'd
       // then have to decode and resize in the service worker.
-      const [targetW, targetH] = Agent._fitImageDimensions(cssW, cssH);
+      const budget = this._budgetForCapture();
+      const [targetW, targetH] = Agent._fitImageDimensions(cssW, cssH, budget);
       const scale = targetW < cssW ? targetW / cssW : 1;
       const captureOnce = async () => {
         const shot = await this._withIndicatorsHidden(tabId, () =>
           cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
             format: 'jpeg',
-            quality: Math.round(Agent.IMAGE_BUDGET.initialJpegQuality * 100),
+            quality: Math.round(budget.initialJpegQuality * 100),
             fromSurface: true,
             clip: { x: 0, y: 0, width: cssW, height: cssH, scale },
           })
@@ -3340,7 +3356,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           role: 'user',
           content: [
             { type: 'text', text: 'Describe this screenshot of the current browser viewport for a web-automation agent. Follow the format in the system prompt.' },
-            { type: 'image_url', image_url: { url: dataUrl } },
+            { type: 'image_url', image_url: this._withImageDetail({ url: dataUrl }) },
           ],
         },
       ];
@@ -3496,7 +3512,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           role: 'user',
           content: [
             { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: screenshot.dataUrl } },
+            { type: 'image_url', image_url: this._withImageDetail({ url: screenshot.dataUrl }) },
           ],
         },
       ], {
@@ -3890,7 +3906,53 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   /**
-   * Draw a red outline rectangle over a base64 PNG/JPEG screenshot, at the
+   * Build a snapshot of the active image budget for a single capture. Starts
+   * from the static defaults and applies the user's `maxImageDimension` cap
+   * (issue #311) so the per-side pixel limit AND the total-token budget both
+   * track the setting. When the cap is the limiting factor, the token budget
+   * is widened to exactly fit a square image at the cap so the dimension cap
+   * (not the legacy 1568px token budget) governs sizing.
+   */
+  _budgetForCapture() {
+    const base = Agent.IMAGE_BUDGET;
+    const cap = Math.max(1, Math.min(2048, Number(this.maxImageDimension) || 1568));
+    const tokensForCap = Math.ceil((cap / base.pxPerToken) * (cap / base.pxPerToken));
+    // Defaults must preserve the pre-#311 behavior. The default cap (1568)
+    // maps to the legacy budget byte-for-byte — same per-side limit AND same
+    // total-token limit — so a square viewport is still downscaled to ~1109px
+    // exactly as before. A LOWER cap shrinks both limits; a HIGHER cap widens
+    // them so the larger dimension is actually honored ("keep fidelity").
+    if (cap === base.maxTargetPx) {
+      return { ...base };
+    }
+    return {
+      ...base,
+      maxTargetPx: cap,
+      maxTargetTokens: tokensForCap,
+    };
+  }
+
+  /**
+   * The `detail` value to attach to an OpenAI-style image_url block, driven by
+   * the `imageDetail` setting (issue #311). Returns null when the setting is
+   * 'auto' so the provider uses its own default (OpenAI's is 'auto'); 'high'
+   * and 'low' are passed through. Anthropic ignores unknown `detail`, so this
+   * is harmless there.
+   */
+  _imageDetailField() {
+    return this.imageDetail === 'auto' ? null : this.imageDetail;
+  }
+
+  /**
+   * Return a copy of `imageUrl` with a `detail` field merged in when the user
+   * has chosen a non-auto image detail (issue #311). No-op for 'auto'.
+   */
+  _withImageDetail(imageUrl) {
+    const detail = this._imageDetailField();
+    return detail ? { ...imageUrl, detail } : imageUrl;
+  }
+
+  /**
    * given CSS-pixel rect. Scales the rect by the ratio between the image's
    * actual pixel dimensions and the CSS viewport so it lines up regardless
    * of whether the capture was taken at scale=1 or native DPR.
@@ -5471,6 +5533,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this.progressSessions.delete(tabId);
     this.mastodonStates.delete(tabId);
     this.lastAutoScreenshotTs.delete(tabId);
+    this.autoScreenshotCount.delete(tabId);
     this.lastSeenAdapter.delete(tabId);
     this._lastInteractionRect.delete(tabId);
     this._doneBlockCount.delete(tabId);
@@ -8343,7 +8406,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
               if (!screenshot?.data) return null;
               const rawUrl = `data:image/png;base64,${screenshot.data}`;
               return {
-                dataUrl: await this._compressJpegToByteCeiling(rawUrl),
+                dataUrl: await this._compressJpegToByteCeiling(rawUrl, this._budgetForCapture()),
                 description: `Screenshot captured via CDP (${screenshot.data.length} bytes, CSS-pixel aligned for pixel clicks)`,
               };
             }
@@ -8351,12 +8414,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             // Budget-aware mode (default): pick target dims via binary
             // search, ask CDP to capture + scale in one pass, then run
             // the iterative-quality fallback if bytes are still over.
-            const [targetW, targetH] = Agent._fitImageDimensions(cssW, cssH);
+            const budget = this._budgetForCapture();
+            const [targetW, targetH] = Agent._fitImageDimensions(cssW, cssH, budget);
             const scale = targetW < cssW ? targetW / cssW : 1;
             const screenshot = await this._withIndicatorsHidden(tabId, () =>
               cdpClient.sendCommand(tabId, 'Page.captureScreenshot', {
                 format: 'jpeg',
-                quality: Math.round(Agent.IMAGE_BUDGET.initialJpegQuality * 100),
+                quality: Math.round(budget.initialJpegQuality * 100),
                 fromSurface: true,
                 clip: { x: 0, y: 0, width: cssW, height: cssH, scale },
               })
@@ -8365,7 +8429,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             const rawUrl = `data:image/jpeg;base64,${screenshot.data}`;
             const resized = scale < 1 ? ` (resized ${cssW}×${cssH} → ${targetW}×${targetH} for vision-token budget)` : '';
             return {
-              dataUrl: await this._compressJpegToByteCeiling(rawUrl),
+              dataUrl: await this._compressJpegToByteCeiling(rawUrl, budget),
               description: `Screenshot captured via CDP (${screenshot.data.length} bytes, JPEG)${resized}`,
             };
           };
@@ -8389,7 +8453,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             if (!coordAligned) {
               const cssW = Math.max(1, Math.round(probe?.innerWidth || 1024));
               const cssH = Math.max(1, Math.round(probe?.innerHeight || 768));
-              const shrunk = await this._shrinkImageForBudget(rawUrl, cssW, cssH);
+              const shrunk = await this._shrinkImageForBudget(rawUrl, cssW, cssH, this._budgetForCapture());
               return {
                 dataUrl: shrunk.dataUrl,
                 description: `Screenshot captured via tabs API (${shrunk.dataUrl.length} bytes base64, resized to ${shrunk.width}×${shrunk.height})`,
@@ -8901,10 +8965,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
         // Full-page captures are the worst case for size — a 1920×8000
         // document at native DPR easily blows past any provider's image
-        // budget. Always shrink to the token/byte budget. Dimensions come
+        // budget. Always shrink to the token/byte budget (which honors the
+        // user's `maxImageDimension` cap, issue #311). Dimensions come
         // from decoding the bitmap (we don't know the real doc size up
         // front the way we do for viewport captures).
-        const shrunk = await this._shrinkImageForBudget(rawUrl, 0, 0);
+        const shrunk = await this._shrinkImageForBudget(rawUrl, 0, 0, this._budgetForCapture());
 
         // Local screenshot redaction (issue #312): pixelate form fields +
         // email/phone text on the image BEFORE it is sent to any vision
@@ -9012,8 +9077,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           // blows past the tool-result char cap and gets truncated to garbage
           // that the vision model can never read.
           let verifyShotUrl = `data:image/png;base64,${shot.data}`;
-          // Local screenshot redaction (issue #312): pixelate form fields +
-          // email/phone text BEFORE the image reaches the model.
+          // Apply the user's image budget (issue #311) before the image
+          // reaches the model, then run local redaction (issue #312) on the
+          // budget-fit copy so PII is pixelated at the size the model sees.
+          verifyShotUrl = (await this._shrinkImageForBudget(verifyShotUrl, 0, 0, this._budgetForCapture())).dataUrl;
           if (this.screenshotRedaction) {
             verifyShotUrl = await this._redactScreenshotDataUrl(tabId, verifyShotUrl, { coordinateSpace: 'viewport' });
           }
@@ -11628,7 +11695,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             error: `The active provider (${provider?.name || 'unknown'}) does not support image attachments. Switch to a vision-capable model (e.g. Claude 3+, GPT-4o) or remove the attached image and try again.`,
           };
         }
-        blocks.push({ type: 'image_url', image_url: { url: att.dataUrl } });
+        blocks.push({ type: 'image_url', image_url: this._withImageDetail({ url: att.dataUrl }) });
       } else if (att.kind === 'document') {
         if (!provider?.supportsDocuments) {
           return {
@@ -11662,6 +11729,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   async _processMessageInner(tabId, userMessage, onUpdate, mode, attachments = [], runOptions = {}) {
     await this._hydrate(tabId);
+    // Reset the per-turn auto-screenshot budget (issue #311) for a fresh turn.
+    this.autoScreenshotCount.delete(tabId);
     const messages = this.getConversation(tabId, mode);
     // Scheduled resumes get the live ledger appended at fire time, so the
     // model's first turn sees current row state even if it never calls
@@ -12069,6 +12138,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   async _processMessageStreamInner(tabId, userMessage, onUpdate, mode, runOptions = {}) {
     await this._hydrate(tabId);
+    // Reset the per-turn auto-screenshot budget (issue #311) for a fresh turn.
+    this.autoScreenshotCount.delete(tabId);
     const messages = this.getConversation(tabId, mode);
     const costState = this._newCostRunState();
     this.currentCostState.set(tabId, costState);

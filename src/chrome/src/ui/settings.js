@@ -44,7 +44,10 @@ const costSessionLimitInput = document.getElementById('input-cost-session-limit'
 const costTotalLimitInput = document.getElementById('input-cost-total-limit');
 const costSpentValueLabel = document.getElementById('cost-spent-value');
 const btnResetCostSpend = document.getElementById('btn-reset-cost-spend');
-const autoScreenshotSelect = document.getElementById('select-auto-screenshot');
+  const autoScreenshotSelect = document.getElementById('select-auto-screenshot');
+  const imageDetailSelect = document.getElementById('select-image-detail');
+  const maxScreenshotsSelect = document.getElementById('select-max-screenshots');
+  const maxImageDimensionSelect = document.getElementById('select-max-image-dimension');
 const siteAdaptersToggle = document.getElementById('toggle-site-adapters');
 const voiceInputToggle = document.getElementById('toggle-voice-input');
 const apiMutationObserverToggle = document.getElementById('toggle-api-mutation-observer');
@@ -354,7 +357,7 @@ async function init() {
   chrome.storage.local.remove(['authToken', 'authEmail', 'authDefaultModel']).catch(() => {});
 
   // Load display settings
-  const stored = await chrome.storage.local.get(['verboseMode', 'screenshotFallback', 'maxAgentSteps', 'autoScreenshot', 'useSiteAdapters', 'voiceInputEnabled', 'apiMutationObserverEnabled', 'planBeforeActMode', 'planBeforeAct', 'planReviewMode', 'planReviewConfidenceThreshold', 'notifySound', 'completionConfetti', 'tracingEnabled', 'strictSecretMode', 'agentAllowLocalNetwork', 'scheduledTasksEnabled', 'scheduledRequireConsequentialConfirmation', 'providerFilter', 'requestTimeoutMs', 'costAllowanceSessionUsd', 'costAllowanceTotalUsd', 'cloudCostSpentUsd', 'screenshotRedaction']);
+  const stored = await chrome.storage.local.get(['verboseMode', 'screenshotFallback', 'maxAgentSteps', 'autoScreenshot', 'useSiteAdapters', 'voiceInputEnabled', 'apiMutationObserverEnabled', 'planBeforeActMode', 'planBeforeAct', 'planReviewMode', 'planReviewConfidenceThreshold', 'notifySound', 'completionConfetti', 'tracingEnabled', 'strictSecretMode', 'agentAllowLocalNetwork', 'scheduledTasksEnabled', 'scheduledRequireConsequentialConfirmation', 'providerFilter', 'requestTimeoutMs', 'costAllowanceSessionUsd', 'costAllowanceTotalUsd', 'cloudCostSpentUsd', 'screenshotRedaction', 'imageDetail', 'maxScreenshotsPerTurn', 'maxImageDimension']);
   if (typeof stored.providerFilter === 'string' && ['all','local','cloud','router'].includes(stored.providerFilter)) {
     providerFilter = stored.providerFilter;
   }
@@ -378,6 +381,9 @@ async function init() {
     requestTimeoutValueLabel.textContent = tSec + 's';
   }
   autoScreenshotSelect.value = stored.autoScreenshot || 'state_change';
+  imageDetailSelect.value = stored.imageDetail || 'auto';
+  maxScreenshotsSelect.value = String(stored.maxScreenshotsPerTurn != null ? stored.maxScreenshotsPerTurn : 0);
+  maxImageDimensionSelect.value = String(stored.maxImageDimension || 1568);
   siteAdaptersToggle.checked = stored.useSiteAdapters ?? true;
   if (voiceInputToggle) voiceInputToggle.checked = stored.voiceInputEnabled ?? true;
   apiMutationObserverToggle.checked = stored.apiMutationObserverEnabled === true;
@@ -806,6 +812,18 @@ if (requestTimeoutRange) {
 
 autoScreenshotSelect.addEventListener('change', async () => {
   await chrome.storage.local.set({ autoScreenshot: autoScreenshotSelect.value }).catch(() => {});
+});
+
+imageDetailSelect.addEventListener('change', async () => {
+  await chrome.storage.local.set({ imageDetail: imageDetailSelect.value }).catch(() => {});
+});
+
+maxScreenshotsSelect.addEventListener('change', async () => {
+  await chrome.storage.local.set({ maxScreenshotsPerTurn: parseInt(maxScreenshotsSelect.value, 10) || 0 }).catch(() => {});
+});
+
+maxImageDimensionSelect.addEventListener('change', async () => {
+  await chrome.storage.local.set({ maxImageDimension: parseInt(maxImageDimensionSelect.value, 10) || 1568 }).catch(() => {});
 });
 
 siteAdaptersToggle.addEventListener('change', async () => {

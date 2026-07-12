@@ -152,6 +152,17 @@ async function loadScreenshotRedaction() {
 }
 const screenshotRedactionReady = loadScreenshotRedaction().catch(() => {});
 
+// Image budget (issue #311): screenshot quality + how many screenshots the
+// agent may capture per turn, and the max image dimension. Defaults preserve
+// the previous behavior (auto detail, unlimited screenshots, 1568px cap).
+async function loadImageBudget() {
+  const stored = await chrome.storage.local.get(['imageDetail', 'maxScreenshotsPerTurn', 'maxImageDimension']);
+  if (stored.imageDetail != null) agent.imageDetail = stored.imageDetail;
+  if (stored.maxScreenshotsPerTurn != null) agent.maxScreenshotsPerTurn = stored.maxScreenshotsPerTurn;
+  if (stored.maxImageDimension != null) agent.maxImageDimension = stored.maxImageDimension;
+}
+loadImageBudget();
+
 async function loadStrictSecretMode() {
   const stored = await chrome.storage.local.get('strictSecretMode');
   if (stored.strictSecretMode != null) agent.strictSecretMode = !!stored.strictSecretMode;
@@ -682,6 +693,15 @@ chrome.storage.onChanged.addListener((changes) => {
   }
   if (changes.screenshotRedaction) {
     agent.screenshotRedaction = !!changes.screenshotRedaction.newValue;
+  }
+  if (changes.imageDetail) {
+    agent.imageDetail = changes.imageDetail.newValue;
+  }
+  if (changes.maxScreenshotsPerTurn) {
+    agent.maxScreenshotsPerTurn = changes.maxScreenshotsPerTurn.newValue;
+  }
+  if (changes.maxImageDimension) {
+    agent.maxImageDimension = changes.maxImageDimension.newValue;
   }
   if (changes[API_MUTATION_OBSERVER_KEY]) {
     setApiMutationObserverEnabled(changes[API_MUTATION_OBSERVER_KEY].newValue === true);
