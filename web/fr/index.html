@@ -3063,6 +3063,7 @@
     const stack = document.getElementById('mockup-stack');
     if (!stack) return;
     const stage = stack.closest('.mockup-stage') || stack;
+    const focusScope = stage.closest('.hero-visual') || stage;
     const scenes = stack.querySelectorAll(':scope > .browser-mockup');
     const dots = document.querySelectorAll('.scene-nav .scene-dot');
     const arrows = document.querySelectorAll('.scene-arrow');
@@ -3145,7 +3146,7 @@
       const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' ||
         active.tagName === 'SELECT' || active.isContentEditable);
       if (typing) return;
-      if (!hovering && !stage.contains(active)) return;
+      if (!hovering && !focusScope.contains(active)) return;
       // Physical Left/Right always matches the visual prev/next placement,
       // which itself flips for RTL via CSS logical properties.
       const visualStep = e.key === 'ArrowLeft' ? -1 : 1;

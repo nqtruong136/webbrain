@@ -6212,6 +6212,20 @@ test('logo metadata and generated icon assets use the correct canonical artwork 
   }
 });
 
+test('hero scene arrow keys include the focused dot navigation in their scope', () => {
+  const template = fs.readFileSync(path.join(ROOT, 'web/build/template.html'), 'utf8');
+  assert.match(
+    template,
+    /const focusScope = stage\.closest\('\.hero-visual'\) \|\| stage;/,
+    'hero keyboard navigation should scope focus to the stage and its sibling dot navigation',
+  );
+  assert.match(
+    template,
+    /if \(!hovering && !focusScope\.contains\(active\)\) return;/,
+    'focused scene dots should be allowed to use Left/Right navigation without pointer hover',
+  );
+});
+
 test('sidepanel awaits onboarding completion persistence before hiding', () => {
   for (const [label, panelRel] of [
     ['chrome', 'src/chrome/src/ui/sidepanel.js'],
