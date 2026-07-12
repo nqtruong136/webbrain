@@ -91,6 +91,55 @@
     return TAG_ROLES[tag] || 'generic';
   }
 
+  const NESTED_ACTION_SELECTOR = [
+    'a', 'button', 'input', 'select', 'textarea', 'details', 'summary',
+    '[onclick]', '[tabindex]', '[contenteditable="true"]',
+    '[role="button"]', '[role="link"]', '[role="textbox"]',
+    '[role="searchbox"]', '[role="combobox"]', '[role="option"]',
+    '[role="menuitem"]', '[role="tab"]', '[role="checkbox"]', '[role="radio"]',
+  ].join(',');
+
+  function rectsOverlap(a, b) {
+    return a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
+  }
+
+  function getVisibleDescendantText(root) {
+    const rootRect = root.getBoundingClientRect();
+    const parts = [];
+    const visit = (parent) => {
+      for (const child of parent.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          const text = String(child.textContent || '').replace(/\s+/g, ' ').trim();
+          if (text) parts.push(text);
+          continue;
+        }
+        if (child.nodeType !== Node.ELEMENT_NODE) continue;
+        if (child.getAttribute('aria-hidden') === 'true') continue;
+        if (!isVisible(child) || !isInViewport(child)) continue;
+        if (!rectsOverlap(rootRect, child.getBoundingClientRect())) continue;
+        visit(child);
+      }
+    };
+    visit(root);
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function getFocusableGenericDescendantName(el) {
+    if (getRole(el) !== 'generic' || !el.hasAttribute('tabindex')) return '';
+    if (el.getAttribute('contenteditable') === 'true') return '';
+    try {
+      if (!isVisible(el) || el.querySelector(NESTED_ACTION_SELECTOR)) return '';
+      // Inspect each descendant instead of using innerText: browsers include
+      // opacity:0 and offscreen content in innerText, which would leak hidden
+      // picker state (or hidden prompt text) into a visible token/chip label.
+      const text = getVisibleDescendantText(el);
+      if (!text || text.length > MAX_NAME_LEN) return '';
+      return text;
+    } catch {
+      return '';
+    }
+  }
+
   // ── Accessible name (matches Claude's priority order) ───────────────────
   function getAccessibleName(el) {
     const tag = el.tagName.toLowerCase();
@@ -195,6 +244,15 @@
       const s = (el.innerText || el.textContent || '').trim();
       if (s) return s.length > MAX_NAME_LEN ? s.substring(0, MAX_NAME_LEN) + '...' : s;
     }
+
+    // Tokenized inputs often replace their real textbox/combobox with a
+    // focusable generic wrapper once a value is selected. Gmail recipient
+    // chips are one example: the visible contact label lives in a nested
+    // span while the actual "To recipients" input becomes 0x0. Preserve the
+    // short visible label only for leaf-like wrappers so large composite
+    // containers do not absorb all of their descendants' text.
+    const focusableGenericName = getFocusableGenericDescendantName(el);
+    if (focusableGenericName) return focusableGenericName;
 
     // Form fields without an explicit label (aria-label, aria-labelledby,
     // placeholder, title, <label for>) often sit next to a small text node or

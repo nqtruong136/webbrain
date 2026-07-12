@@ -317,7 +317,7 @@ Injected before `content.js` via `content_scripts`. Exposes three globals on `wi
 ### What makes the tree useful for small models
 
 - **Overlay hoisting.** Open dialogs / listboxes / menus / `[aria-expanded=true]` comboboxes are emitted first under an `[open overlays]` banner so portal-rendered popups (React / Radix / Stripe) survive the 3000-char soft cap.
-- **Accessible-name resolution** (`getAccessibleName`): priority is `<select>` selected option → `aria-label` → `aria-labelledby` (concatenates all referenced ids) → `placeholder` → `title` → `alt` → `<label for>` → input `value` (submit/button/reset only, never for text inputs — those emit `value="..."` separately) → direct text → `innerText` fallback for buttons/links/summary → `innerText` fallback for option/menuitem/tab/listitem/row/gridcell/cell → preceding-sibling text for unlabeled form fields ("Every 1 month(s)" pattern) → direct-text fallback.
+- **Accessible-name resolution** (`getAccessibleName`): priority is `<select>` selected option → `aria-label` → `aria-labelledby` (concatenates all referenced ids) → `placeholder` → `title` → `alt` → `<label for>` → input `value` (submit/button/reset only, never for text inputs — those emit `value="..."` separately) → direct text → `innerText` fallback for buttons/links/summary → `innerText` fallback for option/menuitem/tab/listitem/row/gridcell/cell → short visible descendant text for focusable, leaf-like generic token/chip wrappers → preceding-sibling text for unlabeled form fields ("Every 1 month(s)" pattern) → direct-text fallback.
 - **`ref_id` stability.** WeakRef-backed registry with a monotonic counter means a ref you saw three turns ago still works if the element survived.
 
 ### AX tools (content-script handlers)

@@ -15634,6 +15634,7 @@ const ADAPTERS = [
     match: (url) => /^https?:\/\/mail\.google\.com\//.test(url),
     notes: `
 - Composing: the "Compose" button opens a floating window. The "To" field is a contact picker — type the name and pick from the dropdown, don't just type the raw email.
+- In an already-open compose, Gmail may hide the "To recipients" combobox after turning the selected contact into a named focusable generic/chip immediately above Subject. If that chip matches the requested contact, treat the recipient as confirmed and proceed directly to Subject and Message Body. Never enumerate the compose form's generic sibling ref_ids to find the hidden To field. If neither a named chip nor a visible To field exists, focus the recipient row once and re-read the visible/interactive tree.
 - The body is a contenteditable div (rich text), not a textarea. Click into it before typing.
 - Sending: the "Send" button is bottom-left of the compose window; "Send + Schedule" arrow is next to it for scheduled send.
 - Search uses operators: from:, to:, subject:, has:attachment, before:YYYY/MM/DD.

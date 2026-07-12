@@ -9,6 +9,7 @@ import { applyMode, loadMode, watch } from './theme.js';
 import { buildRecommendedActions, shouldShowRecommendedActions } from './recommended-actions.js';
 import { createContextMenuPromptHandler } from './context-menu-prompts.js';
 import { deleteChatHistoryRecord, saveChatHistoryRecord } from './chat-history-store.js';
+import { claimRunError } from './run-error-dedupe.js';
 import {
   STORAGE_KEY as STORE_REVIEW_STORAGE_KEY,
   recordSuccessfulTask,
@@ -2922,27 +2923,35 @@ function rebindRetryButtons() {
   document.querySelectorAll('.error-retry-btn').forEach(bindErrorRetryButton);
 }
 
-function createActiveChatPayloadState(retryPayload) {
-  return { retryPayload, renderedErrorMessages: new Set() };
+function createActiveChatPayloadState(retryPayload, requestId = '') {
+  return {
+    retryPayload,
+    requestId: String(requestId || ''),
+    renderedErrorMessages: new Set(),
+  };
 }
 
 function clearActiveChatPayloadForTab(tabId) {
   if (tabId != null) activeChatPayloadsByTab.delete(tabId);
 }
 
-function errorMessageKey(message) {
-  return String(message || '').trim() || 'unknown error';
-}
-
-function takeActiveRetryPayloadForError(tabId, message) {
+function takeActiveRetryPayloadForError(tabId, requestId, message) {
   const state = activeChatPayloadsByTab.get(tabId);
-  if (!state?.retryPayload) return { retryPayload: null, duplicate: false };
-  const key = errorMessageKey(message);
-  if (state.renderedErrorMessages?.has(key)) {
-    return { retryPayload: state.retryPayload, duplicate: true };
-  }
-  state.renderedErrorMessages?.add(key);
-  return { retryPayload: state.retryPayload, duplicate: false };
+  const scopedRequestId = String(requestId || state?.requestId || '');
+  const stateMatchesRequest = !!state && (!scopedRequestId || state.requestId === scopedRequestId);
+  const renderedErrors = Array.from(messagesEl.querySelectorAll('.message.error')).map(el => ({
+    tabId: el.dataset.tabId,
+    requestId: el.dataset.runRequestId,
+    key: el.dataset.errorMessageKey,
+  }));
+  const claim = claimRunError({
+    seenErrors: stateMatchesRequest ? state.renderedErrorMessages : null,
+    renderedErrors,
+    tabId,
+    requestId: scopedRequestId,
+    message,
+  });
+  return { ...claim, retryPayload: stateMatchesRequest ? state.retryPayload : null };
 }
 
 function scheduleActiveChatPayloadCleanup(tabId, state) {
@@ -2953,11 +2962,18 @@ function scheduleActiveChatPayloadCleanup(tabId, state) {
   }, 30000);
 }
 
-function renderAgentErrorUpdate(data, tabId = currentTabId) {
+function renderAgentErrorUpdate(data, tabId = currentTabId, requestId = '') {
   const message = data?.message || data?.error || 'unknown error';
-  const active = abortRequested ? { retryPayload: null, duplicate: false } : takeActiveRetryPayloadForError(tabId, message);
+  const active = takeActiveRetryPayloadForError(tabId, requestId, message);
   if (active.duplicate) return;
-  addMessage('error', t('sp.error_prefix', { msg: message }), { retryPayload: active.retryPayload });
+  const msgEl = addMessage('error', t('sp.error_prefix', { msg: message }), {
+    retryPayload: isTabAbortRequested(tabId) ? null : active.retryPayload,
+  });
+  if (active.requestId) {
+    msgEl.dataset.tabId = active.tabId;
+    msgEl.dataset.runRequestId = active.requestId;
+    msgEl.dataset.errorMessageKey = active.key;
+  }
 }
 
 function rebindRestoredMessageControls() {
@@ -3763,7 +3779,7 @@ async function sendMessage(extraChatParams = {}) {
     assistantEl.dataset.lastRenderedSeq = '0';
     currentAssistantEl = assistantEl;
   }
-  const activePayloadState = createActiveChatPayloadState(retryPayload);
+  const activePayloadState = createActiveChatPayloadState(retryPayload, requestId);
   activeChatPayloadsByTab.set(tabId, activePayloadState);
   localRunRequestIds.set(tabId, requestId);
 
@@ -3791,7 +3807,7 @@ async function sendMessage(extraChatParams = {}) {
       ? res.updates.find(u => u?.type === 'error')
       : null;
     if (returnedErrorUpdate && renderToCurrentTab && currentTabId === tabId && !isTabAbortRequested(tabId)) {
-      renderAgentErrorUpdate(returnedErrorUpdate.data, tabId);
+      renderAgentErrorUpdate(returnedErrorUpdate.data, tabId, requestId);
     }
 
     // An unsupported-attachment rejection never records the turn in history;
@@ -3836,8 +3852,7 @@ async function sendMessage(extraChatParams = {}) {
     }
   } catch (e) {
     if (renderToCurrentTab && currentTabId === tabId && !isTabAbortRequested(tabId)) {
-      takeActiveRetryPayloadForError(tabId, e.message);
-      addMessage('error', t('sp.error_prefix', { msg: e.message }), { retryPayload });
+      renderAgentErrorUpdate({ message: e.message }, tabId, requestId);
     }
   } finally {
     if (localRunRequestIds.get(tabId) === requestId) localRunRequestIds.delete(tabId);
@@ -4016,7 +4031,7 @@ function handleAgentUpdateMessage(msg) {
     case 'error':
       hideActivity();
       if (currentAssistantEl) markLastStepFailed();
-      renderAgentErrorUpdate(data, currentTabId);
+      renderAgentErrorUpdate(data, currentTabId, msg.requestId);
       break;
 
     case 'max_steps_reached':

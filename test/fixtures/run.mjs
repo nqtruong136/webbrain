@@ -20,6 +20,7 @@ import path from 'node:path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..', '..');
 const accessibilityTreeJsPath = path.join(root, 'src', 'chrome', 'src', 'content', 'accessibility-tree.js');
+const firefoxAccessibilityTreeJsPath = path.join(root, 'src', 'firefox', 'src', 'content', 'accessibility-tree.js');
 const contentJsPath = path.join(root, 'src', 'chrome', 'src', 'content', 'content.js');
 const firefoxContentJsPath = path.join(root, 'src', 'firefox', 'src', 'content', 'content.js');
 const smdJsPath = path.join(root, 'src', 'chrome', 'src', 'agent', 'social-media-downloader.js');
@@ -66,6 +67,13 @@ async function setupFirefoxHtml(page, html) {
   await page.waitForFunction(() => typeof window.__wb_handler === 'function');
 }
 
+async function setupAccessibilityTreeHtml(page, html, sourcePath) {
+  await page.setContent(html, { waitUntil: 'domcontentloaded' });
+  const src = await readFile(sourcePath, 'utf-8');
+  await page.addScriptTag({ content: src });
+  await page.waitForFunction(() => typeof window.__generateAccessibilityTree === 'function');
+}
+
 async function call(page, action, params) {
   return page.evaluate(({ action, params }) => new Promise((resolve) => {
     const ret = window.__wb_handler(
@@ -104,6 +112,67 @@ async function collectSmd(page, mode = 'auto') {
 
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
+
+const gmailComposeRecipientFixture = `<!doctype html>
+  <style>
+    body { margin: 0; font: 16px sans-serif; }
+    [role="dialog"] { width: 620px; min-height: 360px; padding: 16px; }
+    .recipient { width: 500px; height: 40px; }
+    .field { display: block; width: 500px; height: 32px; margin-top: 8px; }
+    .body { width: 500px; height: 160px; margin-top: 8px; }
+    .hidden-to { position: absolute; width: 0; height: 0; opacity: 0; }
+    .hidden-wrapper { display: none; }
+  </style>
+  <div role="dialog" aria-label="Compose: New Message">
+    <div role="region" aria-label="New Message">
+      <input class="hidden-to" role="combobox" aria-label="To recipients">
+      <div class="recipient" tabindex="1">
+        <span>Alex Russell (gmail.com)</span>
+        <span style="display:none">Hidden stale recipient</span>
+        <span style="opacity:0">Opacity hidden override</span>
+        <span style="position:absolute;left:-10000px;width:200px">Offscreen hidden override</span>
+        <span aria-hidden="true">ARIA hidden override</span>
+      </div>
+      <input class="field" aria-label="Subject" placeholder="Subject">
+      <div class="body" role="textbox" contenteditable="true" aria-label="Message Body"></div>
+      <div class="composite" tabindex="0"><span>Composite controls</span><button>Remove</button></div>
+      <div class="hidden-wrapper" tabindex="0"><span>Hidden wrapper text</span></div>
+      <div class="empty" tabindex="0"><span></span></div>
+      <div class="overlong" tabindex="0"><span>${'x'.repeat(101)}</span></div>
+    </div>
+  </div>`;
+
+let chromeGmailComposeTree = '';
+
+function assertGmailComposeRecipientTree(tree, label) {
+  const content = String(tree?.pageContent || '');
+  if (!/generic "Alex Russell \(gmail\.com\)" \[ref_\d+\]/.test(content)) {
+    throw new Error(`${label}: selected recipient label missing from visible tree: ${content}`);
+  }
+  if (!/textbox "Subject" \[ref_\d+\]/.test(content)) {
+    throw new Error(`${label}: Subject missing from visible tree: ${content}`);
+  }
+  if (!/textbox "Message Body" \[ref_\d+\]/.test(content)) {
+    throw new Error(`${label}: Message Body missing from visible tree: ${content}`);
+  }
+  for (const forbidden of ['To recipients', 'Hidden stale recipient', 'Opacity hidden override', 'Offscreen hidden override', 'ARIA hidden override', 'Hidden wrapper text', 'generic "Composite controls', 'x'.repeat(101)]) {
+    if (content.includes(forbidden)) throw new Error(`${label}: tree promoted forbidden generic text: ${forbidden}`);
+  }
+  return content;
+}
+
+test('accessibility tree (Chrome): existing Gmail compose exposes the selected recipient chip', async (page) => {
+  await setupAccessibilityTreeHtml(page, gmailComposeRecipientFixture, accessibilityTreeJsPath);
+  const tree = await page.evaluate(() => window.__generateAccessibilityTree('visible', 10, null, null, 1));
+  chromeGmailComposeTree = assertGmailComposeRecipientTree(tree, 'chrome');
+});
+
+test('accessibility tree (Firefox): existing Gmail compose exposes the selected recipient chip with parity', async (page) => {
+  await setupAccessibilityTreeHtml(page, gmailComposeRecipientFixture, firefoxAccessibilityTreeJsPath);
+  const tree = await page.evaluate(() => window.__generateAccessibilityTree('visible', 10, null, null, 1));
+  const firefoxTree = assertGmailComposeRecipientTree(tree, 'firefox');
+  if (firefoxTree !== chromeGmailComposeTree) throw new Error('Chrome/Firefox Gmail compose trees differ');
+});
 
 // ─── modal-scoping ────────────────────────────────────────────────────────
 test('modal scoping: click({text:"Create"}) resolves to dialog Create', async (page) => {

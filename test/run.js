@@ -98,6 +98,12 @@ const { RunUiJournal: RunUiJournalCh } = await import(
 const { RunUiJournal: RunUiJournalFx } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/run-ui-journal.js').replace(/\\/g, '/')
 );
+const { claimRunError: claimRunErrorCh } = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/ui/run-error-dedupe.js').replace(/\\/g, '/')
+);
+const { claimRunError: claimRunErrorFx } = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/ui/run-error-dedupe.js').replace(/\\/g, '/')
+);
 
 // anthropic.js imports cleanly under Node (its chrome.* touches are lazy); we
 // only exercise the pure _convertMessages transform here.
@@ -1212,6 +1218,14 @@ test('matches www.github.com', () => {
 test('matches gmail.com under mail.google.com', () => {
   const a = getActiveAdapter('https://mail.google.com/mail/u/0/#inbox');
   assert.equal(a?.name, 'gmail');
+  assert.match(a?.notes || '', /already-open compose/i);
+  assert.match(a?.notes || '', /named focusable generic\/chip/i);
+  assert.match(a?.notes || '', /proceed directly to Subject and Message Body/i);
+  assert.match(a?.notes || '', /Never enumerate the compose form's generic sibling ref_ids/i);
+  assert.match(a?.notes || '', /focus the recipient row once/i);
+  const firefox = getActiveAdapterFx('https://mail.google.com/mail/u/0/#inbox');
+  assert.equal(firefox?.name, 'gmail');
+  assert.equal(firefox?.notes, a?.notes);
 });
 
 test('matches google search across TLDs and includes udm=14, without hijacking other google apps', () => {
@@ -8521,7 +8535,7 @@ test('sidepanel keeps retry metadata long enough for returned error updates', ()
     const source = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     assert.match(
       source,
-      /function createActiveChatPayloadState\(retryPayload\) \{[\s\S]*?renderedErrorMessages: new Set\(\)[\s\S]*?\}/,
+      /function createActiveChatPayloadState\(retryPayload, requestId = ''\) \{[\s\S]*?requestId: String\(requestId \|\| ''\)[\s\S]*?renderedErrorMessages: new Set\(\)[\s\S]*?\}/,
       `${label}: active retry metadata should track rendered error messages`,
     );
     assert.match(
@@ -8551,17 +8565,17 @@ test('sidepanel keeps retry metadata long enough for returned error updates', ()
     );
     assert.match(
       source,
-      /const activePayloadState = createActiveChatPayloadState\(retryPayload\);[\s\S]*?activeChatPayloadsByTab\.set\(tabId, activePayloadState\);/,
+      /const activePayloadState = createActiveChatPayloadState\(retryPayload, requestId\);[\s\S]*?activeChatPayloadsByTab\.set\(tabId, activePayloadState\);/,
       `${label}: sendMessage should store retry metadata as an active run state`,
     );
     assert.match(
       source,
-      /const returnedErrorUpdate = Array\.isArray\(res\?\.updates\)[\s\S]*?res\.updates\.find\(u => u\?\.type === 'error'\)[\s\S]*?renderAgentErrorUpdate\(returnedErrorUpdate\.data, tabId\);/,
+      /const returnedErrorUpdate = Array\.isArray\(res\?\.updates\)[\s\S]*?res\.updates\.find\(u => u\?\.type === 'error'\)[\s\S]*?renderAgentErrorUpdate\(returnedErrorUpdate\.data, tabId, requestId\);/,
       `${label}: returned agent error updates should render with retry metadata even if the broadcast is late`,
     );
     assert.match(
       source,
-      /case 'error':[\s\S]*?renderAgentErrorUpdate\(data, currentTabId\);[\s\S]*?break;/,
+      /case 'error':[\s\S]*?renderAgentErrorUpdate\(data, currentTabId, msg\.requestId\);[\s\S]*?break;/,
       `${label}: broadcast agent errors should share the retry-aware renderer`,
     );
     assert.match(
@@ -20726,6 +20740,50 @@ test('run UI journal: concurrent tabs, bounded replay, terminal snapshots, and s
     const remounted = new Journal();
     remounted.restore(1, persisted.get(1));
     assert.equal(remounted.get(1).finalContent, 'A finished', `${label}: service-worker/panel remount should restore the terminal snapshot`);
+  }
+});
+
+test('sidepanel run errors dedupe streamed, returned, and restored copies by tab and request', () => {
+  for (const [label, claimRunError] of [['chrome', claimRunErrorCh], ['firefox', claimRunErrorFx]]) {
+    const seenErrors = new Set();
+    const renderedErrors = [];
+    const base = { seenErrors, renderedErrors, tabId: 41, requestId: 'req-gmail', message: 'Stuck   in a loop.\nStopped.' };
+
+    const streamed = claimRunError(base);
+    assert.equal(streamed.duplicate, false, `${label}: first streamed error should render`);
+    renderedErrors.push({ tabId: streamed.tabId, requestId: streamed.requestId, key: streamed.key });
+
+    const returned = claimRunError({ ...base, message: 'Stuck in a loop. Stopped.' });
+    assert.equal(returned.duplicate, true, `${label}: returned copy should not render twice`);
+
+    const restored = claimRunError({
+      seenErrors: new Set(),
+      renderedErrors,
+      tabId: 41,
+      requestId: 'req-gmail',
+      message: 'Stuck in a loop. Stopped.',
+    });
+    assert.equal(restored.duplicate, true, `${label}: restored HTML should suppress replayed copies`);
+
+    assert.equal(claimRunError({ ...base, message: 'A different failure.' }).duplicate, false, `${label}: distinct errors in one run should render`);
+    assert.equal(claimRunError({ ...base, requestId: 'req-gmail-retry' }).duplicate, false, `${label}: identical errors from separate runs should render`);
+    assert.equal(claimRunError({ ...base, tabId: 42 }).duplicate, false, `${label}: identical errors from separate tabs should render`);
+  }
+});
+
+test('sidepanel routes every run-error path through request-scoped deduplication', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    assert.match(panel, /import \{ claimRunError \} from '\.\/run-error-dedupe\.js';/, `${label}: sidepanel should use the shared deduper`);
+    assert.match(panel, /createActiveChatPayloadState\(retryPayload, requestId\)/, `${label}: active error state should retain request identity`);
+    assert.match(panel, /renderAgentErrorUpdate\(returnedErrorUpdate\.data, tabId, requestId\)/, `${label}: returned errors should use request-scoped rendering`);
+    assert.match(panel, /renderAgentErrorUpdate\(\{ message: e\.message \}, tabId, requestId\)/, `${label}: caught errors should use request-scoped rendering`);
+    assert.match(panel, /renderAgentErrorUpdate\(data, currentTabId, msg\.requestId\)/, `${label}: streamed errors should use message request identity`);
+    assert.match(panel, /msgEl\.dataset\.tabId = active\.tabId;[\s\S]*?msgEl\.dataset\.runRequestId = active\.requestId;[\s\S]*?msgEl\.dataset\.errorMessageKey = active\.key;/, `${label}: persisted error cards should retain their dedupe identity`);
+    assert.match(panel, /if \(active\.duplicate\) return;[\s\S]*?retryPayload: isTabAbortRequested\(tabId\) \? null : active\.retryPayload/, `${label}: only the first copy should retain the Retry action`);
   }
 });
 
