@@ -280,6 +280,8 @@ export default {
   'st.display.theme.dark': 'Ciemny',
   'st.display.verbose.label': 'Tryb szczegółowy',
   'st.display.verbose.desc': 'Pokazuj pełne szczegóły wywołań narzędzi, argumenty i surowe wyniki JSON. Domyślnie wyłączony dla czystszego czatu.',
+  'st.display.selection_shortcut.label': 'Skrót zaznaczenia',
+  'st.display.selection_shortcut.desc': 'Pokazuj przycisk WebBrain po zaznaczeniu tekstu na stronie. Natywna akcja dostępna po kliknięciu prawym przyciskiem pozostaje dostępna po wyłączeniu tej opcji.',
   'st.display.screenshot.label': 'Zrzut ekranu awaryjnie',
   'st.display.screenshot.desc': 'Przechwytuj zrzut ekranu strony, gdy odczyt DOM zawiedzie lub zwróci niewystarczającą treść. Wymaga modelu obsługującego wizję.',
   'st.display.site_adapters.label': 'Adaptery witryn',

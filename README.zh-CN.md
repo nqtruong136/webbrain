@@ -1,13 +1,28 @@
-# WebBrain
+<p align="center">
+  <img src="assets/logo-mark.png" alt="WebBrain 标志" width="92">
+</p>
 
-[![Lang](https://img.shields.io/badge/Lang-English-blue)](README.md)
-[![Lang](https://img.shields.io/badge/Lang-中文-red)](README.zh-CN.md)
-[![Lang](https://img.shields.io/badge/Lang-Français-blueviolet)](README.fr.md)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+<h1 align="center">WebBrain</h1>
+
+<p align="center">
+  开源 AI 浏览器智能体：与网页对话、自动化浏览器任务，并使用你选择的 LLM 运行多步骤工作流。
+</p>
+
+<p align="center">
+  <a href="https://chromewebstore.google.com/detail/webbrain/ljhijonmfahplgbbacgcfnaihbjljhhb"><img src="https://img.shields.io/badge/Chrome-Install-4285F4?style=for-the-badge&amp;logo=googlechrome&amp;logoColor=white" alt="从 Chrome 应用商店安装 WebBrain"></a>
+  <a href="https://addons.mozilla.org/en-US/firefox/addon/webbrain/"><img src="https://img.shields.io/badge/Firefox-Install-FF7139?style=for-the-badge&amp;logo=firefoxbrowser&amp;logoColor=white" alt="从 Firefox 浏览器附加组件安装 WebBrain"></a>
+  <a href="https://microsoftedge.microsoft.com/addons/detail/dfbioajafcijomhljabppcelecgdgfeo"><img src="https://img.shields.io/badge/Edge-Install-0A84FF?style=for-the-badge&amp;logo=microsoftedge&amp;logoColor=white" alt="从 Microsoft Edge 加载项安装 WebBrain"></a>
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.zh-CN.md">中文</a> ·
+  <a href="README.fr.md">Français</a> ·
+  <a href="https://webbrain.one">官网</a> ·
+  <a href="LICENSE">MIT 许可证</a>
+</p>
 
 ![Claude Chrome vs WebBrain](assets/webbrain-vs-claude-chrome.gif)
-
-开源的 Chrome 和 Firefox AI 浏览器智能体。与任意网页对话、自动化浏览器任务，并运行多步骤的智能体工作流——由你选择的 LLM 驱动。
 
 ## 功能特性
 

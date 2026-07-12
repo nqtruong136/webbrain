@@ -353,6 +353,8 @@ export default {
   "st.display.advanced": "מִתקַדֵם",
   "st.display.verbose.label": "מצב מילולי",
   "st.display.verbose.desc": "הצג פרטים מלאים של שיחת הכלים, טיעונים וגולמיים JSON תוצאות. כבוי כברירת מחדל לחוויית צ'אט נקייה יותר.",
+  "st.display.selection_shortcut.label": "קיצור דרך לבחירה",
+  "st.display.selection_shortcut.desc": "הצג כפתור של WebBrain בעת בחירת טקסט בדף. פעולת הלחיצה הימנית המובנית נשארת זמינה כאשר אפשרות זו כבויה.",
   "st.display.screenshot.label": "גיבוי באמצעות צילום מסך",
   "st.display.screenshot.desc": "צלם צילום מסך של הדף כאשר DOM הקריאה נכשלת או מחזירה תוכן לא מספיק. דורש דגם בעל יכולת ראייה.",
   "st.display.site_adapters.label": "מתאמי אתרים",

@@ -1,13 +1,28 @@
-# WebBrain
+<p align="center">
+  <img src="assets/logo-mark.png" alt="WebBrain logo" width="92">
+</p>
 
-[![Lang](https://img.shields.io/badge/Lang-English-blue)](README.md)
-[![Lang](https://img.shields.io/badge/Lang-中文-red)](README.zh-CN.md)
-[![Lang](https://img.shields.io/badge/Lang-Français-blueviolet)](README.fr.md)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+<h1 align="center">WebBrain</h1>
+
+<p align="center">
+  Open-source AI browser agent for chatting with pages, automating tasks, and running multi-step workflows with your choice of LLM.
+</p>
+
+<p align="center">
+  <a href="https://chromewebstore.google.com/detail/webbrain/ljhijonmfahplgbbacgcfnaihbjljhhb"><img src="https://img.shields.io/badge/Chrome-Install-4285F4?style=for-the-badge&amp;logo=googlechrome&amp;logoColor=white" alt="Install WebBrain from the Chrome Web Store"></a>
+  <a href="https://addons.mozilla.org/en-US/firefox/addon/webbrain/"><img src="https://img.shields.io/badge/Firefox-Install-FF7139?style=for-the-badge&amp;logo=firefoxbrowser&amp;logoColor=white" alt="Install WebBrain from Firefox Browser Add-ons"></a>
+  <a href="https://microsoftedge.microsoft.com/addons/detail/dfbioajafcijomhljabppcelecgdgfeo"><img src="https://img.shields.io/badge/Edge-Install-0A84FF?style=for-the-badge&amp;logo=microsoftedge&amp;logoColor=white" alt="Install WebBrain from Microsoft Edge Add-ons"></a>
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.zh-CN.md">中文</a> ·
+  <a href="README.fr.md">Français</a> ·
+  <a href="https://webbrain.one">Website</a> ·
+  <a href="LICENSE">MIT License</a>
+</p>
 
 ![Claude Chrome vs WebBrain](assets/webbrain-vs-claude-chrome.gif)
-
-Open-source AI browser agent for Chrome and Firefox. Chat with any web page, automate browser tasks, and run multi-step agent workflows — powered by your choice of LLM.
 
 ## Features
 

@@ -166,6 +166,8 @@ export default {
   'st.display.language.desc': 'Idioma de la interfaz del plugin WebBrain.',
   'st.display.verbose.label': 'Modo detallado',
   'st.display.verbose.desc': 'Muestra todos los detalles de las llamadas a herramientas, argumentos y resultados JSON sin procesar. Desactivado por defecto para una experiencia de chat más limpia.',
+  'st.display.selection_shortcut.label': 'Acceso directo de selección',
+  'st.display.selection_shortcut.desc': 'Muestra un botón de WebBrain cuando seleccionas texto en una página. La acción nativa del menú contextual seguirá disponible cuando esta opción esté desactivada.',
   'st.display.screenshot.label': 'Captura de pantalla como respaldo',
   'st.display.screenshot.desc': 'Captura una imagen de la página cuando la lectura del DOM falla o devuelve contenido insuficiente. Requiere un modelo con capacidad de visión.',
   'st.display.site_adapters.label': 'Adaptadores de sitio',

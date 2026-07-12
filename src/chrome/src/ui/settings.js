@@ -27,7 +27,7 @@ import {
 
 // Version shown in the subtitle. Kept here so it only needs one update per
 // release; the subtitle string itself is translated.
-const EXT_VERSION = '23.0.1';
+const EXT_VERSION = '23.0.2';
 
 const providersContainer = document.getElementById('providers');
 const displaySettings = document.getElementById('display-settings');
@@ -35,6 +35,7 @@ const generalSearchInput = document.getElementById('input-general-search');
 const generalSearchEmpty = document.getElementById('general-search-empty');
 const advancedSettings = document.querySelector('.advanced-settings');
 const verboseToggle = document.getElementById('toggle-verbose');
+const selectionShortcutToggle = document.getElementById('toggle-selection-shortcut');
 const screenshotToggle = document.getElementById('toggle-screenshot-fallback');
 const maxStepsRange = document.getElementById('range-max-steps');
 const stepsValueLabel = document.getElementById('steps-value');
@@ -354,11 +355,12 @@ async function init() {
   chrome.storage.local.remove(['authToken', 'authEmail', 'authDefaultModel']).catch(() => {});
 
   // Load display settings
-  const stored = await chrome.storage.local.get(['verboseMode', 'screenshotFallback', 'maxAgentSteps', 'autoScreenshot', 'useSiteAdapters', 'voiceInputEnabled', 'apiMutationObserverEnabled', 'planBeforeActMode', 'planBeforeAct', 'planReviewMode', 'planReviewConfidenceThreshold', 'notifySound', 'completionConfetti', 'tracingEnabled', 'strictSecretMode', 'agentAllowLocalNetwork', 'scheduledTasksEnabled', 'scheduledRequireConsequentialConfirmation', 'providerFilter', 'requestTimeoutMs', 'costAllowanceSessionUsd', 'costAllowanceTotalUsd', 'cloudCostSpentUsd', 'screenshotRedaction']);
+  const stored = await chrome.storage.local.get(['verboseMode', 'selectionShortcutEnabled', 'screenshotFallback', 'maxAgentSteps', 'autoScreenshot', 'useSiteAdapters', 'voiceInputEnabled', 'apiMutationObserverEnabled', 'planBeforeActMode', 'planBeforeAct', 'planReviewMode', 'planReviewConfidenceThreshold', 'notifySound', 'completionConfetti', 'tracingEnabled', 'strictSecretMode', 'agentAllowLocalNetwork', 'scheduledTasksEnabled', 'scheduledRequireConsequentialConfirmation', 'providerFilter', 'requestTimeoutMs', 'costAllowanceSessionUsd', 'costAllowanceTotalUsd', 'cloudCostSpentUsd', 'screenshotRedaction']);
   if (typeof stored.providerFilter === 'string' && ['all','local','cloud','router'].includes(stored.providerFilter)) {
     providerFilter = stored.providerFilter;
   }
   verboseToggle.checked = stored.verboseMode || false;
+  if (selectionShortcutToggle) selectionShortcutToggle.checked = stored.selectionShortcutEnabled !== false;
   screenshotToggle.checked = stored.screenshotFallback ?? true; // on by default
   if (isUnlimitedMaxAgentSteps(stored.maxAgentSteps)) {
     maxStepsRange.value = MAX_AGENT_STEPS_UNLIMITED_SENTINEL;
@@ -775,6 +777,10 @@ if (globalThis.chrome?.storage?.onChanged) {
 
 verboseToggle.addEventListener('change', async () => {
   await chrome.storage.local.set({ verboseMode: verboseToggle.checked }).catch(() => {});
+});
+
+selectionShortcutToggle?.addEventListener('change', async () => {
+  await chrome.storage.local.set({ selectionShortcutEnabled: selectionShortcutToggle.checked }).catch(() => {});
 });
 
 screenshotToggle.addEventListener('change', async () => {

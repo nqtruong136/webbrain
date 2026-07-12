@@ -4,6 +4,20 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / browser manifest versions.
 
+## [23.0.2] - 2026-07-13
+
+### Added
+- Added a selection shortcut for Chrome and Firefox with Summarize, Explain, Quiz me, Proofread, Translate, and custom WebBrain prompts.
+- Expanded the native selection context menu with matching preset actions, translation languages, and direct side-panel access.
+- Added a persistent setting to hide or restore the floating selection shortcut.
+
+### Changed
+- Simplified the selection shortcut to a compact purple question-mark icon.
+- Added direct Chrome, Firefox, and Edge store links to the English, French, and Chinese README introductions.
+
+### Tests
+- Added prompt-safety, browser-specific delivery, duplicate-submission, viewport, keyboard, persistence, translation, and screenshot-suppression coverage.
+
 ## [23.0.0] - 2026-07-12
 
 ### Added

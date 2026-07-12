@@ -168,6 +168,8 @@ export default {
   'st.display.language.desc': 'Bahasa antara muka untuk pemalam WebBrain.',
   'st.display.verbose.label': 'Mod terperinci',
   'st.display.verbose.desc': 'Tunjukkan butiran penuh panggilan alat, argumen, dan hasil JSON mentah. Dimatikan secara lalai untuk pengalaman sembang yang lebih bersih.',
+  'st.display.selection_shortcut.label': 'Pintasan pilihan',
+  'st.display.selection_shortcut.desc': 'Paparkan butang WebBrain apabila anda memilih teks pada halaman. Tindakan klik kanan asli kekal tersedia apabila pilihan ini dimatikan.',
   'st.display.screenshot.label': 'Tangkapan skrin sandaran',
   'st.display.screenshot.desc': 'Ambil tangkapan skrin halaman apabila pembacaan DOM gagal atau memulangkan kandungan yang tidak mencukupi. Memerlukan model yang menyokong penglihatan.',
   'st.display.site_adapters.label': 'Penyesuai laman',

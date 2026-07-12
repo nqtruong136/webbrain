@@ -168,6 +168,8 @@ export default {
   'st.display.language.desc': 'Wika ng interface para sa WebBrain plugin.',
   'st.display.verbose.label': 'Verbose Mode',
   'st.display.verbose.desc': 'Ipakita ang buong detalye ng mga tool call, argument, at raw JSON na resulta. Naka-off bilang default para sa mas malinis na chat experience.',
+  'st.display.selection_shortcut.label': 'Shortcut sa pagpili',
+  'st.display.selection_shortcut.desc': 'Ipakita ang button ng WebBrain kapag pumipili ka ng text sa isang page. Mananatiling available ang native na right-click action kapag naka-off ito.',
   'st.display.screenshot.label': 'Screenshot Fallback',
   'st.display.screenshot.desc': 'Kumuha ng screenshot ng pahina kapag nabigo ang pagbasa ng DOM o nagbalik ng kulang na nilalaman. Kailangan ng modelong sumusuporta sa bisyon.',
   'st.display.site_adapters.label': 'Mga site adapter',

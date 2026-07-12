@@ -168,6 +168,8 @@ export default {
   'st.display.language.desc': 'ภาษาของหน้าจอปลั๊กอิน WebBrain',
   'st.display.verbose.label': 'โหมดละเอียด',
   'st.display.verbose.desc': 'แสดงรายละเอียดการเรียกใช้เครื่องมือเต็ม อาร์กิวเมนต์ และผลลัพธ์ JSON ดิบ ปิดเป็นค่าเริ่มต้นเพื่อประสบการณ์แชตที่สะอาดขึ้น',
+  'st.display.selection_shortcut.label': 'ทางลัดสำหรับข้อความที่เลือก',
+  'st.display.selection_shortcut.desc': 'แสดงปุ่ม WebBrain เมื่อคุณเลือกข้อความบนหน้าเว็บ การทำงานจากเมนูคลิกขวาแบบเดิมจะยังคงใช้งานได้เมื่อปิดตัวเลือกนี้',
   'st.display.screenshot.label': 'สำรองด้วยภาพหน้าจอ',
   'st.display.screenshot.desc': 'จับภาพหน้าจอของหน้าเมื่ออ่าน DOM ไม่สำเร็จหรือได้เนื้อหาไม่เพียงพอ ต้องใช้โมเดลที่รองรับการมองเห็น',
   'st.display.site_adapters.label': 'อะแดปเตอร์เว็บไซต์',
