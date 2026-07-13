@@ -4,6 +4,14 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / browser manifest versions.
 
+## [23.0.4] - 2026-07-13
+
+### Added
+- Added an opt-in packaged Mail.tm disposable email skill for Chrome and Firefox, available from Settings with explicit confirmation, honest session-retention guidance, automatic account cleanup, and visible provider attribution.
+
+### Tests
+- Added packaged-skill catalog, opt-in Settings, and Mail.tm safety/API cleanup coverage.
+
 ## [23.0.2] - 2026-07-13
 
 ### Added
