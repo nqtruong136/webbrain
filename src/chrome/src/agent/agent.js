@@ -3283,7 +3283,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         // CDP-side resize + JPEG q=75 usually fits. Iterative quality
         // downgrade is the safety net for high-DPR screens where the
         // captured image can still exceed the base64 ceiling.
-        const shrunk = await this._compressJpegToByteCeiling(rawDataUrl);
+        const shrunk = await this._compressJpegToByteCeiling(rawDataUrl, budget);
         const redacted = await this._redactScreenshotDataUrl(tabId, shrunk, { coordinateSpace: 'viewport' });
         return {
           dataUrl: redacted,
