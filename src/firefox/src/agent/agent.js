@@ -561,7 +561,12 @@ export class Agent {
   }
 
   _isCostAllowanceError(err) {
-    return err?.code === 'WB_COST_ALLOWANCE';
+    // WebBrain Cloud's free-tier 402 is also an allowance terminal, but it
+    // originates in the provider rather than _costAllowanceError(). Treat it
+    // like the local cost cap so the agent does not retry it and then emit a
+    // second generic error card beside the actionable Subscribe prompt.
+    return err?.code === 'WB_COST_ALLOWANCE'
+      || /Subscribe for more usage:\s*https?:\/\/\S+/i.test(String(err?.message || ''));
   }
 
   async _chatWithCostAllowance(provider, messages, options, costState) {

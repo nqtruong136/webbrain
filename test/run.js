@@ -21956,6 +21956,53 @@ test('sidepanel routes every run-error path through request-scoped deduplication
   }
 });
 
+test('WebBrain Cloud subscription 402 renders as one terminal assistant prompt', async () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const subscriptionMessage = 'webbrain-cloud error 402: Daily free WebBrain Cloud allowance used.\n'
+      + 'Subscribe for more usage: https://webbrain.one/subscribe?client_reference_id=device-guid';
+    let providerCalls = 0;
+    const provider = {
+      supportsTools: true,
+      supportsVision: false,
+      promptTier: 'full',
+      contextWindow: 128000,
+      model: 'webbrain-cloud 1.0',
+      name: 'webbrain-cloud',
+      chat: async () => {
+        providerCalls += 1;
+        throw new Error(subscriptionMessage);
+      },
+    };
+    const agent = new AgentClass({
+      getActive: () => provider,
+      getVisionProvider: async () => null,
+    });
+    const tabId = label === 'chrome' ? 9401 : 9402;
+    agent.planBeforeAct = false;
+    agent.maxSteps = 2;
+    agent._manageContext = async () => {};
+    agent._enrichUserMessageWithCurrentPage = async (_tabId, _messages, content) => ({ role: 'user', content });
+    agent._maybeReinjectAdapter = async () => {};
+    agent._persist = () => {};
+    agent._startTraceRun = async () => null;
+    agent._endTraceRun = () => {};
+
+    const updates = [];
+    const final = await agent.processMessage(tabId, 'hello', (type, data) => {
+      updates.push({ type, data });
+    }, 'ask');
+
+    assert.equal(providerCalls, 1, `${label}: subscription 402 should not be retried`);
+    assert.equal(final, subscriptionMessage, `${label}: subscription prompt should remain the terminal assistant content`);
+    assert.equal(updates.filter(update => update.type === 'error').length, 0, `${label}: subscription 402 should not emit a generic error card`);
+    assert.equal(
+      updates.filter(update => update.type === 'warning' && update.data?.message === subscriptionMessage).length,
+      1,
+      `${label}: subscription 402 should emit one non-duplicating terminal warning`,
+    );
+  }
+});
+
 test('plan review: cancellation emits plan_resolved and timeout has an explicit terminal decision', async () => {
   await withPlannerBrowserGlobals(async () => {
     for (const [label, AgentClass, sourceRel] of [
