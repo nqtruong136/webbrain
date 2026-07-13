@@ -124,7 +124,7 @@ export default {
 
   'sp.api.enabled_html': '🔓 <strong>Изменения через API включены</strong> для этого диалога. Агент теперь может использовать POST/PUT/PATCH/DELETE через fetch_url и execute_js, если посчитает API надёжнее интерфейса. По умолчанию используется интерфейс. Этот флаг сбрасывается при очистке диалога.',
   'sp.api.badge_html': '<span>🔓 Изменения через API разрешены</span>',
-  'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
+  'sp.permissions.disabled_html': '⚠️ <strong>Запросы разрешений отключены.</strong> WebBrain будет нажимать, вводить текст, переходить, запускать JavaScript, загружать, скачивать, записывать и планировать будущие задачи без запроса. Включите снова: Настройки → Разрешения → Спрашивать перед важными действиями.',
 
   'tool.read_page': 'Чтение страницы',
   'tool.get_interactive_elements': 'Сканирование интерактивных элементов',
@@ -331,7 +331,7 @@ export default {
   "sp.perm.verb.download": "скачивать файлы с",
   "sp.perm.verb.upload": "загрузить файл на",
   "sp.perm.verb.record": "записывать вкладку (и микрофон) на",
-  "sp.help_html": "<strong>Слэш-команды</strong><br><code>/help</code> — Показать этот список<br><code>/clear-scratchpad</code> — Очистить текущий блокнот<br><code>/allow-api</code> — Разрешить изменения через API для этого диалога<br><code>/dangerously-skip-permissions</code> — Disable permission prompts globally<br><code>/compact</code> — Сжать контекст этого диалога<br><code>/verbose</code> — Переключить подробный/компактный вид инструментов<br><code>/reset</code> — Очистить диалог<br><code>/screenshot</code> — Снять текущую вкладку<br><code>/export</code> — Скачать диалог в формате Markdown<br><code>/profile</code> — Переключить автозаполнение профиля<br><code>/vision</code> — Переключить режим зрения у активного провайдера",
+  "sp.help_html": "<strong>Слэш-команды</strong><br><code>/help</code> — Показать этот список<br><code>/schedule</code> — Создать запланированную задачу<br><code>/list-schedules</code> — Показать запланированные задачи<br><code>/check-progress</code> — Показать текущий журнал прогресса<br><code>/show-scratchpad</code> — Показать текущий блокнот<br><code>/edit-scratchpad &lt;text&gt;</code> — Добавить текст в текущий блокнот<br><code>/clear-scratchpad</code> — Очистить текущий блокнот<br><code>/remember &lt;text&gt;</code> — Сохранить пользовательскую настройку в память<br><code>/show-memory</code> — Показать сохранённую память пользователя<br><code>/forget-memory &lt;id&gt;</code> — Забыть сохранённую запись по ID<br><code>/allow-api</code> — Разрешить изменения через API для этого диалога<br><code>/dangerously-skip-permissions</code> — Отключить запросы разрешений глобально<br><code>/compact</code> — Сжать контекст этого диалога<br><code>/verbose</code> — Переключить подробный/компактный вид инструментов<br><code>/reset</code> — Очистить диалог<br><code>/screenshot</code> — Снять текущую вкладку<br><code>/full-page-screenshot</code> — Захватить всю страницу (только Chrome)<br><code>/record</code> — Начать запись текущей вкладки<br><code>/record --transcribe</code> — Записать и сохранить расшифровку Whisper после остановки<br><code>/record-full-screen</code> — Записать экран или окно (только Chrome)<br><code>/record-full-screen --transcribe</code> — Записать экран/окно и сохранить расшифровку<br><code>/export</code> — Скачать диалог в формате Markdown<br><code>/export-with-traces</code> — Экспортировать цепочку инструментов (трассы)<br><code>/profile</code> — Переключить автозаполнение профиля<br><code>/vision</code> — Переключить режим зрения у активного провайдера<br><code>/ask</code> — Переключиться в режим «Вопрос»<br><code>/act</code> — Переключиться в режим «Действие»<br><code>/dev</code> — Переключиться в режим «Разработка»<br><br><strong>Горячие клавиши</strong><br><code>Ctrl/Cmd+/</code> — Переключить фокус на ввод<br><code>Ctrl/Cmd+Shift+A</code> — Переключиться в режим «Вопрос»<br><code>Ctrl/Cmd+Shift+X</code> — Переключиться в режим «Действие»<br><code>Ctrl/Cmd+Shift+D</code> — Переключиться в режим «Разработка»<br><code>Ctrl/Cmd+M</code> — Переключить голосовой ввод",
   "sp.compact.verbose_on": "Подробный режим <strong>включён</strong> — виден полный JSON вызовов инструментов.",
   "sp.compact.verbose_off": "Подробный режим <strong>выключен</strong> — компактный вид инструментов.",
   "sp.screenshot.error": "Не удалось сделать скриншот: {msg}",
@@ -490,7 +490,7 @@ export default {
   'sp.slash.show_scratchpad': 'Показать текущий блокнот',
   'sp.slash.clear_scratchpad': 'Очистить текущий блокнот',
   'sp.slash.allow_api': 'Разрешить изменения API для этого разговора',
-  'sp.slash.dangerously_skip_permissions': 'Disable permission prompts globally',
+  'sp.slash.dangerously_skip_permissions': 'Отключить запросы разрешений глобально',
   'sp.slash.compact': 'Сжать контекст этого разговора',
   'sp.slash.verbose': 'Переключить подробный или компактный вид инструментов',
   'sp.slash.reset': 'Очистить этот разговор',

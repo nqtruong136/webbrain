@@ -124,7 +124,7 @@ export default {
 
   'sp.api.enabled_html': '🔓 <strong>Mutations d\'API activées</strong> pour cette conversation. L\'agent peut désormais utiliser POST/PUT/PATCH/DELETE via fetch_url et execute_js quand il juge l\'API plus fiable que l\'interface pour une étape. L\'interface reste privilégiée par défaut. Ce drapeau s\'efface quand vous réinitialisez la conversation.',
   'sp.api.badge_html': '<span>🔓 Mutations d\'API autorisées</span>',
-  'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
+  'sp.permissions.disabled_html': '⚠️ <strong>Les demandes d\'autorisation sont DÉSACTIVÉES.</strong> WebBrain cliquera, saisira du texte, naviguera, exécutera du JavaScript, téléversera, téléchargera, enregistrera et planifiera des travaux futurs sans demander au préalable. Réactivez cette option depuis Paramètres → Autorisations → Demander avant les actions importantes.',
 
   'tool.read_page': 'Lecture de la page',
   'tool.get_interactive_elements': 'Analyse des éléments interactifs',
@@ -331,7 +331,7 @@ export default {
   "sp.perm.verb.download": "télécharger des fichiers depuis",
   "sp.perm.verb.upload": "téléverser un fichier vers",
   "sp.perm.verb.record": "enregistrer l'onglet (et le microphone) sur",
-  'sp.help_html': '<strong>Commandes slash</strong><br><code>/help</code> — Afficher cette liste<br><code>/edit-scratchpad &lt;text&gt;</code> — Ajouter du texte au bloc-notes actuel<br><code>/clear-scratchpad</code> — Effacer le bloc-notes actuel<br><code>/allow-api</code> — Autoriser les mutations d\'API pour cette conversation<br><code>/dangerously-skip-permissions</code> — Disable permission prompts globally<br><code>/compact</code> — Compacter le contexte de cette conversation<br><code>/verbose</code> — Basculer l\'affichage détaillé/compact des outils<br><code>/reset</code> — Effacer la conversation<br><code>/screenshot</code> — Capturer l\'onglet actif<br><code>/export</code> — Télécharger la conversation en Markdown<br><code>/profile</code> — Basculer le remplissage automatique du profil<br><code>/vision</code> — Basculer le mode vision sur le fournisseur actif',
+  'sp.help_html': '<strong>Commandes slash</strong><br><code>/help</code> — Afficher cette liste<br><code>/schedule</code> — Créer une tâche planifiée<br><code>/list-schedules</code> — Afficher les tâches planifiées<br><code>/check-progress</code> — Afficher le journal de progression actuel<br><code>/show-scratchpad</code> — Afficher le bloc-notes actuel<br><code>/edit-scratchpad &lt;text&gt;</code> — Ajouter du texte au bloc-notes actuel<br><code>/clear-scratchpad</code> — Effacer le bloc-notes actuel<br><code>/remember &lt;text&gt;</code> — Enregistrer une préférence utilisateur en mémoire<br><code>/show-memory</code> — Afficher la mémoire utilisateur enregistrée<br><code>/forget-memory &lt;id&gt;</code> — Oublier une mémoire enregistrée<br><code>/allow-api</code> — Autoriser les mutations d\'API pour cette conversation<br><code>/dangerously-skip-permissions</code> — Désactiver les demandes d\'autorisation globalement<br><code>/compact</code> — Compacter le contexte de cette conversation<br><code>/verbose</code> — Basculer l\'affichage détaillé/compact des outils<br><code>/reset</code> — Effacer la conversation<br><code>/screenshot</code> — Capturer l\'onglet actif<br><code>/export</code> — Télécharger la conversation en Markdown<br><code>/export-with-traces</code> — Exporter la chaîne d\'outils (traces)<br><code>/profile</code> — Basculer le remplissage automatique du profil<br><code>/vision</code> — Basculer le mode vision sur le fournisseur actif<br><code>/ask</code> — Passer en mode Demander<br><code>/act</code> — Passer en mode Agir<br><code>/dev</code> — Passer en mode Développement',
   "sp.compact.verbose_on": "Mode détaillé <strong>activé</strong> — JSON complet des appels d'outils visible.",
   "sp.compact.verbose_off": "Mode détaillé <strong>désactivé</strong> — affichage compact des outils.",
   "sp.screenshot.error": "Échec de la capture d'écran : {msg}",
@@ -490,7 +490,7 @@ export default {
   'sp.slash.show_scratchpad': 'Afficher le bloc-notes actuel',
   'sp.slash.clear_scratchpad': 'Effacer le bloc-notes actuel',
   'sp.slash.allow_api': 'Autoriser les mutations API pour cette conversation',
-  'sp.slash.dangerously_skip_permissions': 'Disable permission prompts globally',
+  'sp.slash.dangerously_skip_permissions': 'Désactiver les demandes d\'autorisation globalement',
   'sp.slash.compact': 'Compacter le contexte de cette conversation',
   'sp.slash.verbose': "Basculer l'affichage des outils entre détaillé et compact",
   'sp.slash.reset': 'Effacer cette conversation',

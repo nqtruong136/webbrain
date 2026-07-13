@@ -124,7 +124,7 @@ export default {
 
   'sp.api.enabled_html': '🔓 この会話で <strong>API による変更が有効</strong> になりました。エージェントは UI より API のほうが確実だと判断したとき、fetch_url と execute_js で POST/PUT/PATCH/DELETE を使えるようになります。UI 優先という基本方針は変わりません。このフラグは会話をリセットするとクリアされます。',
   'sp.api.badge_html': '<span>🔓 API による変更を許可</span>',
-  'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
+  'sp.permissions.disabled_html': '⚠️ <strong>権限の確認がオフです。</strong> WebBrain は確認なしにクリック、入力、移動、JavaScript の実行、アップロード、ダウンロード、録画、将来の作業のスケジュールを行います。設定 → 権限 → 重要な操作前に確認 から再有効にしてください。',
 
   'tool.read_page': 'ページを読み取り中',
   'tool.get_interactive_elements': '操作可能な要素をスキャン中',
@@ -331,7 +331,7 @@ export default {
   "sp.perm.verb.download": "からのファイルのダウンロードを",
   "sp.perm.verb.upload": "へのファイルのアップロードを",
   "sp.perm.verb.record": "でのタブ（およびマイク）の録画を",
-  "sp.help_html": "<strong>スラッシュコマンド</strong><br><code>/help</code> — この一覧を表示<br><code>/clear-scratchpad</code> — 現在のスクラッチパッドをクリア<br><code>/allow-api</code> — この会話で API による変更を許可<br><code>/dangerously-skip-permissions</code> — Disable permission prompts globally<br><code>/compact</code> — この会話のコンテキストを圧縮する<br><code>/verbose</code> — 詳細／コンパクトなツール表示を切り替え<br><code>/reset</code> — 会話をクリア<br><code>/screenshot</code> — 現在のタブを取得<br><code>/export</code> — 会話を Markdown でダウンロード<br><code>/profile</code> — プロフィール自動入力を切り替え<br><code>/vision</code> — アクティブなプロバイダーで画像認識モードを切り替え",
+  "sp.help_html": "<strong>スラッシュコマンド</strong><br><code>/help</code> — この一覧を表示<br><code>/schedule</code> — スケジュールタスクを作成<br><code>/list-schedules</code> — スケジュールタスクを表示<br><code>/check-progress</code> — 現在の進行ログを表示<br><code>/show-scratchpad</code> — 現在のスクラッチパッドを表示<br><code>/edit-scratchpad &lt;text&gt;</code> — 現在のスクラッチパッドにテキストを追加<br><code>/clear-scratchpad</code> — 現在のスクラッチパッドをクリア<br><code>/remember &lt;text&gt;</code> — ユーザー設定をメモリに保存<br><code>/show-memory</code> — 保存済みのユーザーメモリを表示<br><code>/forget-memory &lt;id&gt;</code> — 保存済みメモリを ID で削除<br><code>/allow-api</code> — この会話で API による変更を許可<br><code>/dangerously-skip-permissions</code> — 権限の確認をグローバルに無効化<br><code>/compact</code> — この会話のコンテキストを圧縮する<br><code>/verbose</code> — 詳細／コンパクトなツール表示を切り替え<br><code>/reset</code> — 会話をクリア<br><code>/screenshot</code> — 現在のタブをキャプチャ<br><code>/full-page-screenshot</code> — ページ全体をキャプチャ（Chrome のみ）<br><code>/record</code> — 現在のタブの録画を開始<br><code>/record --transcribe</code> — 録画停止後に Whisper の文字起こしを保存<br><code>/record-full-screen</code> — 画面またはウィンドウを録画（Chrome のみ）<br><code>/record-full-screen --transcribe</code> — 画面/ウィンドウを録画し文字起こしを保存<br><code>/export</code> — 会話を Markdown でダウンロード<br><code>/export-with-traces</code> — ツールチェーンをエクスポート（トレース）<br><code>/profile</code> — プロフィール自動入力を切り替え<br><code>/vision</code> — アクティブなプロバイダーで画像認識モードを切り替え<br><code>/ask</code> — 質問モードに切り替え<br><code>/act</code> — 操作モードに切り替え<br><code>/dev</code> — 開発モードに切り替え<br><br><strong>キーボードショートカット</strong><br><code>Ctrl/Cmd+/</code> — 入力にフォーカス<br><code>Ctrl/Cmd+Shift+A</code> — 質問モードに切り替え<br><code>Ctrl/Cmd+Shift+X</code> — 操作モードに切り替え<br><code>Ctrl/Cmd+Shift+D</code> — 開発モードに切り替え<br><code>Ctrl/Cmd+M</code> — 音声入力を切り替え",
   "sp.compact.verbose_on": "詳細モードが<strong>オン</strong>になりました — ツール呼び出しの完全な JSON が表示されます。",
   "sp.compact.verbose_off": "詳細モードが<strong>オフ</strong>になりました — コンパクトなツール表示です。",
   "sp.screenshot.error": "スクリーンショットに失敗しました: {msg}",
@@ -490,7 +490,7 @@ export default {
   'sp.slash.show_scratchpad': '現在のスクラッチパッドを表示',
   'sp.slash.clear_scratchpad': '現在のスクラッチパッドをクリア',
   'sp.slash.allow_api': 'この会話でAPIの変更を許可',
-  'sp.slash.dangerously_skip_permissions': 'Disable permission prompts globally',
+  'sp.slash.dangerously_skip_permissions': '権限の確認をグローバルに無効化',
   'sp.slash.compact': 'この会話のコンテキストをコンパクト化',
   'sp.slash.verbose': 'ツール表示を詳細とコンパクトで切り替え',
   'sp.slash.reset': 'この会話をクリア',
