@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': 'Plan cancelado.',
   'sp.plan.expired': 'Este plan ya no está en espera de revisión — la ejecución fue cancelada.',
   'sp.plan.awaiting_review': 'Aprueba o cancela el plan anterior antes de enviar otro mensaje.',
-  'sp.slash.busy_only_oob': 'Los mensajes se ponen en cola mientras WebBrain está ocupado. Solo /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export y /verbose pueden ejecutarse de inmediato como comandos slash.',
+  'sp.slash.busy_only_oob': 'Los mensajes se ponen en cola mientras WebBrain está ocupado. Solo /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces y /verbose pueden ejecutarse de inmediato como comandos slash.',
   'tool.go_back': 'Volviendo atrás',
   'tool.go_forward': 'Avanzando',
   'st.display.search.placeholder': 'Buscar en ajustes generales',
@@ -714,4 +714,8 @@ export default {
   "sp.slash.export_traces": "Exportar la cadena de herramientas (trazas)",
   "sp.export_traces.none": "No hay trazas para esta conversación. Activa «Registrar trazas» en Ajustes y vuelve a ejecutar.",
   "sp.export_traces.error": "No se pudieron exportar las trazas.",
+  "sp.export_traces.done": "Cadena de herramientas exportada.",
+  "sp.export_traces.no_conversation": "Aún no hay nada que exportar: inicia una conversación primero.",
+  "sp.export_traces.partial": "Cadena de herramientas exportada, pero no se pudieron leer algunos eventos de turno.",
+  "sp.export_traces.truncated": "Cadena de herramientas exportada. Puede faltar turnos antiguos si esta conversación tiene muchas trazas.",
 };

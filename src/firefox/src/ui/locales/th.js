@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': 'แผนถูกยกเลิก',
   'sp.plan.expired': 'แผนนี้ไม่ได้รอการตรวจสอบอีกต่อไป — การดำเนินการถูกยกเลิก',
   'sp.plan.awaiting_review': 'อนุมัติหรือยกเลิกแผนด้านบนก่อนส่งข้อความอื่น',
-  'sp.slash.busy_only_oob': 'ข้อความจะถูกเข้าคิวขณะที่ WebBrain ไม่ว่าง เฉพาะ /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export และ /verbose เท่านั้นที่เรียกใช้ได้ทันทีในฐานะคำสั่ง slash',
+  'sp.slash.busy_only_oob': 'ข้อความจะถูกเข้าคิวขณะที่ WebBrain ไม่ว่าง เฉพาะ /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces และ /verbose เท่านั้นที่เรียกใช้ได้ทันทีในฐานะคำสั่ง slash',
   'tool.go_back': 'กำลังย้อนกลับ',
   'tool.go_forward': 'กำลังไปข้างหน้า',
   'st.display.search.placeholder': 'ค้นหาการตั้งค่าทั่วไป',
@@ -714,4 +714,8 @@ export default {
   "sp.slash.export_traces": "ส่งออกลำดับการทำงานของเครื่องมือ (trace)",
   "sp.export_traces.none": "ไม่มี trace สำหรับการสนทนานี้ เปิด «บันทึก trace» ในการตั้งค่า แล้วเรียกใช้อีกครั้ง",
   "sp.export_traces.error": "ไม่สามารถส่งออก trace ได้",
+  "sp.export_traces.done": "ส่งออกลำดับเครื่องมือแล้ว",
+  "sp.export_traces.no_conversation": "ยังไม่มีอะไรให้ส่งออก — เริ่มการสนทนาก่อน",
+  "sp.export_traces.partial": "ส่งออกลำดับเครื่องมือแล้ว แต่บางเหตุการณ์ของเทิร์นอ่านไม่ได้",
+  "sp.export_traces.truncated": "ส่งออกลำดับเครื่องมือแล้ว เทิร์นเก่าอาจหายถ้าการสนทนานี้มี trace มาก",
 };

@@ -250,7 +250,7 @@ export default {
   'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
 
   'sp.help_html': '<strong>Slash Commands</strong><br><code>/help</code> — Show this list<br><code>/schedule</code> — Create a scheduled task<br><code>/list-schedules</code> — Show scheduled tasks<br><code>/check-progress</code> — Show current progress ledger<br><code>/show-scratchpad</code> — Show current scratchpad<br><code>/edit-scratchpad &lt;text&gt;</code> — Append text to the current scratchpad<br><code>/clear-scratchpad</code> — Clear the current scratchpad<br><code>/remember &lt;text&gt;</code> — Save a user preference to memory<br><code>/show-memory</code> — Show saved user memory<br><code>/forget-memory &lt;id&gt;</code> — Forget a saved memory<br><code>/allow-api</code> — Allow API mutations for this conversation<br><code>/dangerously-skip-permissions</code> — Disable permission prompts globally<br><code>/compact</code> — Compact this conversation context<br><code>/verbose</code> — Toggle verbose/compact tool display<br><code>/reset</code> — Clear conversation<br><code>/screenshot</code> — Capture current tab<br><code>/export</code> — Download conversation as Markdown<br><code>/export-with-traces</code> — Export the tool chain (traces)<br><code>/profile</code> — Toggle profile auto-fill<br><code>/vision</code> — Toggle vision mode on active provider<br><code>/ask</code> — Switch to Ask mode<br><code>/act</code> — Switch to Act mode<br><code>/dev</code> — Switch to Dev mode',
-  'sp.slash.busy_only_oob': 'Messages are queued while WebBrain is busy. Only /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, and /verbose can run immediately as slash commands.',
+  'sp.slash.busy_only_oob': 'Messages are queued while WebBrain is busy. Only /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces, and /verbose can run immediately as slash commands.',
   'sp.compact.nothing_to_compact': 'Nothing to compact yet — there is not enough older context.',
   'sp.compact.busy': 'Cannot compact while a run is in progress — wait for it to finish.',
   'sp.compact.failed': 'Context compaction failed: {error}',
@@ -717,4 +717,8 @@ export default {
   "sp.slash.export_traces": "Export the tool chain (traces)",
   "sp.export_traces.none": "No traces for this conversation. Enable Record traces in Settings, then run again.",
   "sp.export_traces.error": "Couldn't export traces.",
+  "sp.export_traces.done": "Tool chain exported.",
+  "sp.export_traces.no_conversation": "Nothing to export yet — start a conversation first.",
+  "sp.export_traces.partial": "Tool chain exported, but some turn events could not be read.",
+  "sp.export_traces.truncated": "Tool chain exported. Older turns may be missing if this conversation has many traced runs.",
 };

@@ -556,7 +556,7 @@ export default {
   'sp.plan.cancelled': 'Plan iptal edildi.',
   'sp.plan.expired': 'Bu plan artık inceleme beklenmiyor — çalıştırma iptal edildi.',
   'sp.plan.awaiting_review': 'Başka bir mesaj göndermeden önce yukarıdaki planı onaylayın veya iptal edin.',
-  'sp.slash.busy_only_oob': 'WebBrain meşgulken mesajlar kuyruğa alınır. Yalnızca /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export ve /verbose slash komutları olarak hemen çalışabilir.',
+  'sp.slash.busy_only_oob': 'WebBrain meşgulken mesajlar kuyruğa alınır. Yalnızca /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces ve /verbose slash komutları olarak hemen çalışabilir.',
   'tool.go_back': 'Geri gidiliyor',
   'tool.go_forward': 'İleri gidiliyor',
   'st.display.search.placeholder': 'Genel ayarları ara',
@@ -713,4 +713,8 @@ export default {
   "sp.slash.export_traces": "Araç zincirini dışa aktar (izler)",
   "sp.export_traces.none": "Bu konuşma için iz yok. Ayarlar'da İzleri kaydet seçeneğini açıp yeniden çalıştırın.",
   "sp.export_traces.error": "İzler dışa aktarılamadı.",
+  "sp.export_traces.done": "Araç zinciri dışa aktarıldı.",
+  "sp.export_traces.no_conversation": "Henüz dışa aktarılacak bir şey yok — önce bir konuşma başlatın.",
+  "sp.export_traces.partial": "Araç zinciri dışa aktarıldı, ancak bazı tur olayları okunamadı.",
+  "sp.export_traces.truncated": "Araç zinciri dışa aktarıldı. Bu konuşmanın çok izi varsa eski turlar eksik olabilir.",
 };

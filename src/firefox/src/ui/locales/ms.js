@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': 'Rancangan dibatalkan.',
   'sp.plan.expired': 'Rancangan ini tidak lagi menunggu semakan — pelaksanaan dibatalkan.',
   'sp.plan.awaiting_review': 'Luluskan atau batalkan rancangan di atas sebelum menghantar mesej lain.',
-  'sp.slash.busy_only_oob': 'Mesej dimasukkan ke giliran semasa WebBrain sibuk. Hanya /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, dan /verbose boleh berjalan serta-merta sebagai arahan slash.',
+  'sp.slash.busy_only_oob': 'Mesej dimasukkan ke giliran semasa WebBrain sibuk. Hanya /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces, dan /verbose boleh berjalan serta-merta sebagai arahan slash.',
   'tool.go_back': 'Kembali',
   'tool.go_forward': 'Maju',
   'st.display.search.placeholder': 'Cari tetapan Umum',
@@ -714,4 +714,8 @@ export default {
   "sp.slash.export_traces": "Eksport rantaian alat (jejak)",
   "sp.export_traces.none": "Tiada jejak untuk perbualan ini. Hidupkan Rakam jejak dalam Tetapan, kemudian jalankan semula.",
   "sp.export_traces.error": "Tidak dapat mengeksport jejak.",
+  "sp.export_traces.done": "Rantaian alat dieksport.",
+  "sp.export_traces.no_conversation": "Tiada lagi yang dieksport — mulakan perbualan dahulu.",
+  "sp.export_traces.partial": "Rantaian alat dieksport, tetapi sesetengah peristiwa giliran tidak dapat dibaca.",
+  "sp.export_traces.truncated": "Rantaian alat dieksport. Giliran lama mungkin hilang jika perbualan ini mempunyai banyak jejak.",
 };

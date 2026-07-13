@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': 'Plan annulé.',
   'sp.plan.expired': 'Ce plan n\'est plus en attente de révision — l\'exécution a été annulée.',
   'sp.plan.awaiting_review': 'Approuvez ou annulez le plan ci-dessus avant d\'envoyer un autre message.',
-  'sp.slash.busy_only_oob': 'Les messages sont mis en file d\'attente pendant que WebBrain est occupé. Seuls /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export et /verbose peuvent s\'exécuter immédiatement comme commandes slash.',
+  'sp.slash.busy_only_oob': 'Les messages sont mis en file d\'attente pendant que WebBrain est occupé. Seuls /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces et /verbose peuvent s\'exécuter immédiatement comme commandes slash.',
   'tool.go_back': 'Revenir en arrière',
   'tool.go_forward': 'Aller en avant',
   'st.display.search.placeholder': 'Rechercher dans les paramètres généraux',
@@ -714,4 +714,8 @@ export default {
   "sp.slash.export_traces": "Exporter la chaîne d'outils (traces)",
   "sp.export_traces.none": "Aucune trace pour cette conversation. Activez « Enregistrer les traces » dans les paramètres, puis relancez.",
   "sp.export_traces.error": "Impossible d'exporter les traces.",
+  "sp.export_traces.done": "Chaîne d'outils exportée.",
+  "sp.export_traces.no_conversation": "Rien à exporter pour l'instant — commencez une conversation d'abord.",
+  "sp.export_traces.partial": "Chaîne d'outils exportée, mais certains événements de tour n'ont pas pu être lus.",
+  "sp.export_traces.truncated": "Chaîne d'outils exportée. Des tours plus anciens peuvent manquer si cette conversation a beaucoup de traces.",
 };

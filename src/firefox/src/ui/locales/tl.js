@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': 'Kinansela ang plano.',
   'sp.plan.expired': 'Ang planong ito ay hindi na naghihintay ng pagsusuri — ang pagtakbo ay kinansela.',
   'sp.plan.awaiting_review': 'Aprubahan o kanselahin ang plano sa itaas bago magpadala ng isa pang mensahe.',
-  'sp.slash.busy_only_oob': 'Nakapila ang mga mensahe habang abala ang WebBrain. Tanging /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, at /verbose ang maaaring tumakbo agad bilang mga slash command.',
+  'sp.slash.busy_only_oob': 'Nakapila ang mga mensahe habang abala ang WebBrain. Tanging /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces, at /verbose ang maaaring tumakbo agad bilang mga slash command.',
   'tool.go_back': 'Bumabalik',
   'tool.go_forward': 'Sumusulong',
   'st.display.search.placeholder': 'Maghanap sa General na mga setting',
@@ -714,4 +714,8 @@ export default {
   "sp.slash.export_traces": "I-export ang tool chain (mga trace)",
   "sp.export_traces.none": "Walang trace para sa usapang ito. I-on ang Record traces sa Settings, pagkatapos ay patakbuhin muli.",
   "sp.export_traces.error": "Hindi ma-export ang mga trace.",
+  "sp.export_traces.done": "Na-export na ang tool chain.",
+  "sp.export_traces.no_conversation": "Wala pang mae-export — magsimula muna ng usapan.",
+  "sp.export_traces.partial": "Na-export ang tool chain, pero may mga turn event na hindi mabasa.",
+  "sp.export_traces.truncated": "Na-export ang tool chain. Maaaring mawala ang mga lumang turn kung marami ang trace ng usapang ito.",
 };

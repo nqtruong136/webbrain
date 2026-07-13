@@ -47,9 +47,23 @@ function fencedBlock(content) {
   return `${fence}${info}\n${body}\n${fence}`;
 }
 
+// IndexedDB can retain values that JSON.stringify rejects (circular / bigint /
+// sparse). Never throw mid-export — fall back to a readable marker.
+function safeJsonStringify(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return '(unserializable)';
+    }
+  }
+}
+
 function stringifyArgs(args) {
   if (args == null) return '';
-  const s = typeof args === 'string' ? args : JSON.stringify(args);
+  const s = typeof args === 'string' ? args : safeJsonStringify(args);
   return truncate(oneLine(s), ARGS_LIMIT);
 }
 
@@ -64,11 +78,14 @@ function renderResult(result) {
     };
   }
   const failed = typeof result === 'object' ? (result.success === false || !!result.error) : false;
-  const s = typeof result === 'string' ? result : JSON.stringify(result);
+  const s = typeof result === 'string' ? result : safeJsonStringify(result);
   return { text: truncate(oneLine(s), RESULT_LIMIT), failed };
 }
 
-export function tracesToMarkdown(runsWithEvents, { title = 'WebBrain Conversation — tool chain' } = {}) {
+export function tracesToMarkdown(runsWithEvents, {
+  title = 'WebBrain Conversation — tool chain',
+  notes = [],
+} = {}) {
   const runs = Array.isArray(runsWithEvents) ? runsWithEvents : [];
   let md = `# ${title}\n\n`;
   let turnCount = 0;
@@ -109,6 +126,10 @@ export function tracesToMarkdown(runsWithEvents, { title = 'WebBrain Conversatio
     md += '\n';
   }
 
+  for (const note of Array.isArray(notes) ? notes : []) {
+    const line = oneLine(note);
+    if (line) md += `_Note: ${line}_\n`;
+  }
   md += `${FOOTER}\n`;
   return { markdown: md, turnCount, toolCount };
 }

@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': '계획이 취소되었습니다.',
   'sp.plan.expired': '이 계획은 더 이상 검토 대기 중이 아닙니다 — 실행이 취소되었습니다.',
   'sp.plan.awaiting_review': '다른 메시지를 보내기 전에 위의 계획을 승인하거나 취소하세요.',
-  'sp.slash.busy_only_oob': 'WebBrain이 사용 중일 때 메시지는 대기열에 추가됩니다. /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /verbose만 슬래시 명령으로 즉시 실행할 수 있습니다.',
+  'sp.slash.busy_only_oob': 'WebBrain이 사용 중일 때 메시지는 대기열에 추가됩니다. /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces, /verbose만 슬래시 명령으로 즉시 실행할 수 있습니다.',
   'tool.go_back': '뒤로 가기',
   'tool.go_forward': '앞으로 가기',
   'st.display.search.placeholder': '일반 설정 검색',
@@ -714,4 +714,8 @@ export default {
   "sp.slash.export_traces": "도구 체인 내보내기(트레이스)",
   "sp.export_traces.none": "이 대화에 대한 트레이스가 없습니다. 설정에서 '트레이스 기록'을 켜고 다시 실행하세요.",
   "sp.export_traces.error": "트레이스를 내보낼 수 없습니다.",
+  "sp.export_traces.done": "도구 체인을 내보냈습니다.",
+  "sp.export_traces.no_conversation": "아직 내보낼 내용이 없습니다 — 먼저 대화를 시작하세요.",
+  "sp.export_traces.partial": "도구 체인을 내보냈지만 일부 턴 이벤트를 읽지 못했습니다.",
+  "sp.export_traces.truncated": "도구 체인을 내보냈습니다. 이 대화에 트레이스가 많으면 이전 턴이 빠질 수 있습니다.",
 };

@@ -511,7 +511,7 @@ export default {
   'sp.plan.cancelled': 'Plan anulowany.',
   'sp.plan.expired': 'Ten plan nie oczekuje już na przegląd — uruchomienie zostało anulowane.',
   'sp.plan.awaiting_review': 'Zatwierdź lub anuluj powyższy plan przed wysłaniem kolejnej wiadomości.',
-  'sp.slash.busy_only_oob': 'Wiadomości są kolejkowane, gdy WebBrain jest zajęty. Tylko /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export i /verbose mogą uruchamiać się od razu jako polecenia slash.',
+  'sp.slash.busy_only_oob': 'Wiadomości są kolejkowane, gdy WebBrain jest zajęty. Tylko /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces i /verbose mogą uruchamiać się od razu jako polecenia slash.',
   'tool.go_back': 'Cofanie',
   'tool.go_forward': 'Przechodzenie do przodu',
   'st.display.search.placeholder': 'Szukaj w ustawieniach ogólnych',
@@ -674,4 +674,8 @@ export default {
   "sp.slash.export_traces": "Eksportuj łańcuch narzędzi (ślady)",
   "sp.export_traces.none": "Brak śladów dla tej rozmowy. Włącz „Rejestruj ślady\" w Ustawieniach i uruchom ponownie.",
   "sp.export_traces.error": "Nie udało się wyeksportować śladów.",
+  "sp.export_traces.done": "Wyeksportowano łańcuch narzędzi.",
+  "sp.export_traces.no_conversation": "Nie ma jeszcze nic do eksportu — najpierw rozpocznij rozmowę.",
+  "sp.export_traces.partial": "Wyeksportowano łańcuch narzędzi, ale niektórych zdarzeń tury nie udało się odczytać.",
+  "sp.export_traces.truncated": "Wyeksportowano łańcuch narzędzi. Starsze tury mogą brakować, jeśli ta rozmowa ma wiele śladów.",
 };

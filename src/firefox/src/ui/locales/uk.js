@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': 'План скасовано.',
   'sp.plan.expired': 'Цей план більше не очікує розгляду — запуск скасовано.',
   'sp.plan.awaiting_review': 'Схваліть або скасуйте план вище, перш ніж надсилати інше повідомлення.',
-  'sp.slash.busy_only_oob': 'Поки WebBrain зайнятий, повідомлення ставляться в чергу. Лише /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export та /verbose можуть запускатися одразу як slash-команди.',
+  'sp.slash.busy_only_oob': 'Поки WebBrain зайнятий, повідомлення ставляться в чергу. Лише /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces та /verbose можуть запускатися одразу як slash-команди.',
   'tool.go_back': 'Назад',
   'tool.go_forward': 'Вперед',
   'st.display.search.placeholder': 'Пошук у загальних налаштуваннях',
@@ -714,4 +714,8 @@ export default {
   "sp.slash.export_traces": "Експортувати ланцюг інструментів (трасування)",
   "sp.export_traces.none": "Немає трасувань для цієї розмови. Увімкніть «Записувати трасування» в налаштуваннях і запустіть знову.",
   "sp.export_traces.error": "Не вдалося експортувати трасування.",
+  "sp.export_traces.done": "Ланцюг інструментів експортовано.",
+  "sp.export_traces.no_conversation": "Поки немає що експортувати — спочатку почніть розмову.",
+  "sp.export_traces.partial": "Ланцюг інструментів експортовано, але деякі події ходу не вдалося прочитати.",
+  "sp.export_traces.truncated": "Ланцюг інструментів експортовано. Старі ходи можуть бути відсутні, якщо в розмові багато трасувань.",
 };

@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': '計画がキャンセルされました。',
   'sp.plan.expired': 'この計画はレビュー待ちではなくなりました — 実行はキャンセルされました。',
   'sp.plan.awaiting_review': '別のメッセージを送信する前に、上の計画を承認またはキャンセルしてください。',
-  'sp.slash.busy_only_oob': 'WebBrain がビジーの間、メッセージはキューに入ります。/help、/check-progress、/show-scratchpad、/show-memory、/list-schedules、/dangerously-skip-permissions、/screenshot、/export、/verbose だけがスラッシュコマンドとしてすぐに実行できます。',
+  'sp.slash.busy_only_oob': 'WebBrain がビジーの間、メッセージはキューに入ります。/help、/check-progress、/show-scratchpad、/show-memory、/list-schedules、/dangerously-skip-permissions、/screenshot、/export、/export-with-traces、/verbose だけがスラッシュコマンドとしてすぐに実行できます。',
   'tool.go_back': '戻る',
   'tool.go_forward': '進む',
   'st.display.search.placeholder': '一般設定を検索',
@@ -707,4 +707,8 @@ export default {
   "sp.slash.export_traces": "ツールチェーンをエクスポート（トレース）",
   "sp.export_traces.none": "この会話のトレースがありません。設定で「トレースを記録」をオンにして、もう一度実行してください。",
   "sp.export_traces.error": "トレースをエクスポートできませんでした。",
+  "sp.export_traces.done": "ツールチェーンを書き出しました。",
+  "sp.export_traces.no_conversation": "まだ書き出すものがありません — 先に会話を始めてください。",
+  "sp.export_traces.partial": "ツールチェーンを書き出しましたが、一部のターンのイベントを読めませんでした。",
+  "sp.export_traces.truncated": "ツールチェーンを書き出しました。この会話にトレースが多い場合、古いターンが欠けることがあります。",
 };

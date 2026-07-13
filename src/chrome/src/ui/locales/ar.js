@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': 'تم إلغاء الخطة.',
   'sp.plan.expired': 'لم تعد هذه الخطة قيد المراجعة — تم إلغاء التشغيل.',
   'sp.plan.awaiting_review': 'وافق على الخطة أعلاه أو ألغها قبل إرسال رسالة أخرى.',
-  'sp.slash.busy_only_oob': 'تُضاف الرسائل إلى قائمة الانتظار بينما يكون WebBrain مشغولًا. يمكن فقط لـ /help و /check-progress و /show-scratchpad و /show-memory و /list-schedules و /dangerously-skip-permissions و /screenshot و /export و /verbose العمل فورًا كأوامر slash.',
+  'sp.slash.busy_only_oob': 'تُضاف الرسائل إلى قائمة الانتظار بينما يكون WebBrain مشغولًا. يمكن فقط لـ /help و /check-progress و /show-scratchpad و /show-memory و /list-schedules و /dangerously-skip-permissions و /screenshot و /export و /export-with-traces و /verbose العمل فورًا كأوامر slash.',
   'tool.go_back': 'العودة للخلف',
   'tool.go_forward': 'التقدم للأمام',
   'st.display.search.placeholder': 'البحث في الإعدادات العامة',
@@ -707,4 +707,8 @@ export default {
   "sp.slash.export_traces": "تصدير سلسلة الأدوات (التتبعات)",
   "sp.export_traces.none": "لا توجد تتبعات لهذه المحادثة. فعّل «تسجيل التتبعات» في الإعدادات ثم أعد التشغيل.",
   "sp.export_traces.error": "تعذّر تصدير التتبعات.",
+  "sp.export_traces.done": "تم تصدير سلسلة الأدوات.",
+  "sp.export_traces.no_conversation": "لا يوجد ما يُصدَّر بعد — ابدأ محادثة أولًا.",
+  "sp.export_traces.partial": "تم تصدير سلسلة الأدوات، لكن تعذّر قراءة بعض أحداث الجولات.",
+  "sp.export_traces.truncated": "تم تصدير سلسلة الأدوات. قد تُفقد الجولات الأقدم إذا كان لهذه المحادثة كثير من التتبعات.",
 };

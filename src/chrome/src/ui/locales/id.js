@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': 'Rencana dibatalkan.',
   'sp.plan.expired': 'Rencana ini tidak lagi menunggu peninjauan — proses dibatalkan.',
   'sp.plan.awaiting_review': 'Setujui atau batalkan rencana di atas sebelum mengirim pesan lain.',
-  'sp.slash.busy_only_oob': 'Pesan dimasukkan ke antrean saat WebBrain sibuk. Hanya /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, dan /verbose yang dapat langsung berjalan sebagai perintah slash.',
+  'sp.slash.busy_only_oob': 'Pesan dimasukkan ke antrean saat WebBrain sibuk. Hanya /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces, dan /verbose yang dapat langsung berjalan sebagai perintah slash.',
   'tool.go_back': 'Kembali',
   'tool.go_forward': 'Maju',
   'st.display.search.placeholder': 'Cari pengaturan Umum',
@@ -707,4 +707,8 @@ export default {
   "sp.slash.export_traces": "Ekspor rantai alat (jejak)",
   "sp.export_traces.none": "Tidak ada jejak untuk percakapan ini. Aktifkan Rekam jejak di Pengaturan, lalu jalankan lagi.",
   "sp.export_traces.error": "Tidak dapat mengekspor jejak.",
+  "sp.export_traces.done": "Rantai alat diekspor.",
+  "sp.export_traces.no_conversation": "Belum ada yang diekspor — mulai percakapan dulu.",
+  "sp.export_traces.partial": "Rantai alat diekspor, tetapi beberapa peristiwa giliran tidak dapat dibaca.",
+  "sp.export_traces.truncated": "Rantai alat diekspor. Giliran lama mungkin hilang jika percakapan ini punya banyak jejak.",
 };

@@ -551,7 +551,7 @@ export default {
   'sp.plan.cancelled': 'План отменён.',
   'sp.plan.expired': 'Этот план больше не ожидает рассмотрения — запуск отменён.',
   'sp.plan.awaiting_review': 'Одобрите или отмените план выше, прежде чем отправлять другое сообщение.',
-  'sp.slash.busy_only_oob': 'Пока WebBrain занят, сообщения ставятся в очередь. Только /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export и /verbose могут запускаться сразу как slash-команды.',
+  'sp.slash.busy_only_oob': 'Пока WebBrain занят, сообщения ставятся в очередь. Только /help, /check-progress, /show-scratchpad, /show-memory, /list-schedules, /dangerously-skip-permissions, /screenshot, /export, /export-with-traces и /verbose могут запускаться сразу как slash-команды.',
   'tool.go_back': 'Назад',
   'tool.go_forward': 'Вперёд',
   'st.display.search.placeholder': 'Поиск в общих настройках',
@@ -707,4 +707,8 @@ export default {
   "sp.slash.export_traces": "Экспорт цепочки инструментов (трассировки)",
   "sp.export_traces.none": "Нет трассировок для этого разговора. Включите «Записывать трассировки» в настройках и запустите снова.",
   "sp.export_traces.error": "Не удалось экспортировать трассировки.",
+  "sp.export_traces.done": "Цепочка инструментов экспортирована.",
+  "sp.export_traces.no_conversation": "Пока нечего экспортировать — сначала начните разговор.",
+  "sp.export_traces.partial": "Цепочка инструментов экспортирована, но часть событий хода не удалось прочитать.",
+  "sp.export_traces.truncated": "Цепочка инструментов экспортирована. Старые ходы могут отсутствовать, если у разговора много трассировок.",
 };

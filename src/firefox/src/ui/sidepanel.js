@@ -3574,7 +3574,11 @@ async function parseSlashCommands(text, tabId = currentTabId) {
       return '';
     }
     if (!res.markdown || res.turnCount === 0) {
-      addPersistentSlashMessage(t('sp.export_traces.none'));
+      addPersistentSlashMessage(
+        res.reason === 'no-conversation'
+          ? t('sp.export_traces.no_conversation')
+          : t('sp.export_traces.none'),
+      );
       return '';
     }
     const blob = new Blob([res.markdown], { type: 'text/markdown' });
@@ -3589,7 +3593,13 @@ async function parseSlashCommands(text, tabId = currentTabId) {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 7000);
     }
-    addPersistentSlashMessage(t('sp.export.done'));
+    if (res.partial) {
+      addPersistentSlashMessage(t('sp.export_traces.partial'));
+    } else if (res.truncated) {
+      addPersistentSlashMessage(t('sp.export_traces.truncated'));
+    } else {
+      addPersistentSlashMessage(t('sp.export_traces.done'));
+    }
     return '';
   }
 
