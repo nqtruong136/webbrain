@@ -4455,21 +4455,19 @@ test('getToolsForMode: mode/tier redesign exposes the intended normal and Dev to
     assert.equal(devFull.includes('read_page_source'), true, `[${label}] dev full should expose read_page_source`);
     assert.equal(devFull.includes('inspect_element_styles'), true, `[${label}] dev full should expose inspect_element_styles`);
 
+    assert.equal(mid.includes('upload_file'), true, `[${label}] mid act should expose upload_file`);
+    assert.equal(full.includes('upload_file'), true, `[${label}] full act should expose upload_file`);
     if (label === 'chrome') {
       assert.equal(full.includes('shadow_dom_query'), true, '[chrome] full act should expose shadow_dom_query');
       assert.equal(mid.includes('shadow_dom_query'), false, '[chrome] mid act should not expose shadow_dom_query');
       assert.equal(devMid.includes('shadow_dom_query'), true, '[chrome] dev mid should add shadow_dom_query');
       assert.equal(devFull.includes('shadow_dom_query'), true, '[chrome] dev full should keep shadow_dom_query');
-      assert.equal(mid.includes('upload_file'), true, '[chrome] mid act should expose upload_file');
-      assert.equal(full.includes('upload_file'), true, '[chrome] full act should expose upload_file');
       assert.equal(devFull.includes('execute_js'), false, '[chrome] Dev must not expose execute_js');
     } else {
       assert.equal(full.includes('shadow_dom_query'), false, '[firefox] shadow_dom_query is Chrome-only');
       assert.equal(mid.includes('shadow_dom_query'), false, '[firefox] shadow_dom_query is Chrome-only');
       assert.equal(devMid.includes('shadow_dom_query'), false, '[firefox] Dev must not invent Chrome-only shadow_dom_query');
       assert.equal(devFull.includes('shadow_dom_query'), false, '[firefox] Dev must not invent Chrome-only shadow_dom_query');
-      assert.equal(mid.includes('upload_file'), false, '[firefox] upload_file is Chrome-only');
-      assert.equal(full.includes('upload_file'), false, '[firefox] upload_file is Chrome-only');
       assert.equal(full.includes('execute_js'), false, '[firefox] full act must not expose execute_js');
       assert.equal(devMid.includes('execute_js'), true, '[firefox] dev mid should expose execute_js');
       assert.equal(devFull.includes('execute_js'), true, '[firefox] dev full should expose execute_js');
@@ -15227,9 +15225,8 @@ test('capabilityFor: no side-effecting tool slips through ungated', () => {
   assert.equal(capabilityFor('iframe_type', {}), Capability.TYPE);
   assert.equal(capabilityFor('drag_drop', {}), Capability.CLICK);
   assert.equal(capabilityFor('download_file', {}), Capability.DOWNLOAD);
-  // upload_file is Chrome-only.
   assert.equal(capabilityForCh('upload_file', {}), CapabilityCh.UPLOAD);
-  assert.equal(capabilityFor('upload_file', {}), null);
+  assert.equal(capabilityFor('upload_file', {}), Capability.UPLOAD);
 });
 
 test('set_field with submit:true requires CLICK, not the weaker TYPE', () => {
@@ -19619,6 +19616,275 @@ test('upload_file prefers downloadId over a supplied stale filePath (chrome)', a
     if (originalChrome === undefined) delete globalThis.chrome;
     else globalThis.chrome = originalChrome;
     Object.assign(cdpClientCh, originalCdp);
+  }
+});
+
+test('upload_file schema accepts downloadId and no longer hard-requires filePath (firefox)', () => {
+  const tools = getToolsForModeFx('act', {});
+  const up = tools.find(t => t.function?.name === 'upload_file');
+  assert.ok(up, 'upload_file not present in act tools');
+  assert.ok(up.function.parameters.properties.downloadId, 'downloadId param missing from schema');
+  assert.deepEqual(up.function.parameters.required, ['selector'], 'filePath should no longer be required');
+});
+
+test('upload_file (firefox) rejects non-complete downloads and missing picker base64', async () => {
+  const originalBrowser = globalThis.browser;
+  const originalFetch = globalThis.fetch;
+  try {
+    let fetchCalled = false;
+    globalThis.browser = {
+      downloads: {
+        async search() {
+          return [{ id: 8122, state: 'in_progress', url: 'https://example.com/partial.zip', filename: '/tmp/partial.zip' }];
+        },
+      },
+      tabs: {
+        async get(tabId) {
+          return { id: tabId, url: 'https://example.com/page' };
+        },
+      },
+    };
+    globalThis.fetch = async () => {
+      fetchCalled = true;
+      throw new Error('should not fetch incomplete downloads');
+    };
+
+    const agent = new AgentFx({});
+    const incomplete = await agent.executeTool(42, 'upload_file', { selector: 'input[type=file]', downloadId: 8122 });
+    assert.equal(incomplete.success, false);
+    assert.match(incomplete.error, /not complete/i);
+    assert.equal(fetchCalled, false);
+
+    let pickerId = null;
+    const pickerPromise = agent.executeTool(42, 'upload_file', { selector: 'input[type=file]' }, (evt, data) => {
+      if (evt === 'upload_picker') pickerId = data.pickerId;
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.ok(pickerId);
+    agent.submitUploadPickerResponse(42, pickerId, { name: 'x.txt', type: 'text/plain', size: 3 });
+    const missing = await pickerPromise;
+    assert.equal(missing.success, false);
+    assert.match(missing.error, /no file data/i);
+
+    // Second response for the same pickerId must be ignored (one-shot consume).
+    assert.equal(agent.submitUploadPickerResponse(42, pickerId, { base64: 'YQ==', name: 'late.txt' }), false);
+  } finally {
+    if (originalBrowser === undefined) delete globalThis.browser;
+    else globalThis.browser = originalBrowser;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  }
+});
+
+test('upload_file (firefox) re-fetches downloadId with manual redirect handling and injects via DataTransfer', async () => {
+  const originalBrowser = globalThis.browser;
+  const originalFetch = globalThis.fetch;
+  const executedScripts = [];
+  const fetchCalls = [];
+  try {
+    globalThis.browser = {
+      downloads: {
+        async search(query) {
+          assert.deepEqual(query, { id: 8123 });
+          return [{ id: 8123, state: 'complete', url: 'https://example.com/download', filename: '/home/user/Downloads/test.zip', mime: 'application/zip' }];
+        },
+      },
+      tabs: {
+        async get(tabId) {
+          return { id: tabId, url: 'https://example.com/page' };
+        },
+        async executeScript(tabId, details) {
+          executedScripts.push(details.code);
+          return [{ success: true, file: 'test.zip', size: 4 }];
+        },
+      },
+    };
+
+    globalThis.fetch = async (url, opts) => {
+      fetchCalls.push({ url, opts });
+      if (url === 'https://example.com/download') {
+        return {
+          ok: false,
+          status: 302,
+          headers: {
+            get(key) {
+              if (String(key).toLowerCase() === 'location') return 'https://cdn.other.com/test.zip';
+              return null;
+            },
+          },
+        };
+      }
+      if (url === 'https://cdn.other.com/test.zip') {
+        return {
+          ok: true,
+          status: 200,
+          headers: {
+            get(key) {
+              const k = String(key).toLowerCase();
+              if (k === 'content-length') return '4';
+              if (k === 'content-type') return 'application/zip';
+              return null;
+            },
+          },
+          async arrayBuffer() {
+            return new Uint8Array([80, 75, 3, 4]).buffer;
+          },
+        };
+      }
+      throw new Error('Unexpected fetch url: ' + url);
+    };
+
+    const agent = new AgentFx({});
+    const args = { selector: 'input[type=file]', downloadId: 8123 };
+    const result = await agent.executeTool(42, 'upload_file', args);
+
+    assert.equal(result.success, true);
+    assert.equal(result.file, 'test.zip');
+    assert.equal(fetchCalls.length, 2);
+    assert.equal(fetchCalls[0].opts.redirect, 'manual');
+    assert.equal(fetchCalls[0].opts.credentials, 'include');
+    assert.equal(fetchCalls[1].opts.redirect, 'manual');
+    assert.equal(fetchCalls[1].opts.credentials, 'omit');
+
+    assert.equal(executedScripts.length, 1);
+    assert.ok(executedScripts[0].includes('new DataTransfer()'), 'Script should use DataTransfer');
+    assert.ok(executedScripts[0].includes('dt.items.add(file)'), 'Script should add file to DataTransfer');
+    assert.ok(executedScripts[0].includes('el.files = dt.files'), 'Script should assign DataTransfer files to input');
+    assert.ok(executedScripts[0].includes('el.type !== \'file\''), 'Script should require input[type=file]');
+  } finally {
+    if (originalBrowser === undefined) delete globalThis.browser;
+    else globalThis.browser = originalBrowser;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  }
+});
+
+test('upload_file (firefox) opens picker when downloadId is omitted and handles cancellation', async () => {
+  const agent = new AgentFx({});
+  let pickerEvent = null;
+  const args = { selector: 'input#upload' };
+  const toolPromise = agent.executeTool(42, 'upload_file', args, (evt, data) => {
+    if (evt === 'upload_picker') pickerEvent = data;
+  });
+
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(pickerEvent, 'Should emit upload_picker event');
+  assert.ok(pickerEvent.pickerId, 'Should generate pickerId');
+
+  agent.submitUploadPickerResponse(42, pickerEvent.pickerId, {
+    cancelled: true,
+    reason: 'User cancelled file selection',
+  });
+
+  const result = await toolPromise;
+  assert.equal(result.success, false);
+  assert.equal(result.cancelled, true);
+  assert.equal(result.reason, 'User cancelled file selection');
+});
+
+test('upload_file (firefox) enforces Content-Length pre-read limit and handles read failure', async () => {
+  const originalBrowser = globalThis.browser;
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.browser = {
+      downloads: {
+        async search() {
+          return [{ id: 8124, state: 'complete', url: 'https://example.com/huge.zip', filename: '/home/user/Downloads/huge.zip' }];
+        },
+      },
+      tabs: {
+        async get(tabId) {
+          return { id: tabId, url: 'https://example.com/page' };
+        },
+      },
+    };
+
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get(key) {
+          if (String(key).toLowerCase() === 'content-length') return String(30 * 1024 * 1024);
+          return null;
+        },
+      },
+      async arrayBuffer() {
+        throw new Error('Should not call arrayBuffer when Content-Length exceeds 25MB');
+      },
+    });
+
+    const agent = new AgentFx({});
+    const resHuge = await agent.executeTool(42, 'upload_file', { selector: 'input[type=file]', downloadId: 8124 });
+    assert.equal(resHuge.success, false);
+    assert.match(resHuge.error, /exceeds 25MB limit/i);
+
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 404,
+      headers: { get: () => null },
+    });
+    const resFail = await agent.executeTool(42, 'upload_file', { selector: 'input[type=file]', downloadId: 8124 });
+    assert.equal(resFail.success, false);
+    assert.match(resFail.error, /Failed to re-fetch/i);
+  } finally {
+    if (originalBrowser === undefined) delete globalThis.browser;
+    else globalThis.browser = originalBrowser;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  }
+});
+
+test('upload_file (firefox) enforces streaming size limit when Content-Length is absent', async () => {
+  const originalBrowser = globalThis.browser;
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.browser = {
+      downloads: {
+        async search() {
+          return [{ id: 8125, state: 'complete', url: 'https://example.com/stream.zip', filename: '/home/user/Downloads/stream.zip' }];
+        },
+      },
+      tabs: {
+        async get(tabId) {
+          return { id: tabId, url: 'https://example.com/page' };
+        },
+      },
+    };
+
+    let cancelled = false;
+    const oversized = new Uint8Array(26 * 1024 * 1024);
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: {
+        getReader() {
+          let done = false;
+          return {
+            async read() {
+              if (done) return { done: true, value: undefined };
+              done = true;
+              return { done: false, value: oversized };
+            },
+            async cancel() { cancelled = true; },
+          };
+        },
+      },
+      async arrayBuffer() {
+        throw new Error('Should stream via getReader instead of arrayBuffer');
+      },
+    });
+
+    const agent = new AgentFx({});
+    const result = await agent.executeTool(42, 'upload_file', { selector: 'input', downloadId: 8125 });
+    assert.equal(result.success, false);
+    assert.match(result.error, /exceeds 25MB limit/i);
+    assert.equal(cancelled, true, 'reader should be cancelled after exceeding the cap');
+  } finally {
+    if (originalBrowser === undefined) delete globalThis.browser;
+    else globalThis.browser = originalBrowser;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
   }
 });
 
