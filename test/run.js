@@ -1340,6 +1340,18 @@ test('matches youtube video URLs and includes transcript guidance', () => {
   assert.match(a?.notes || '', /Do NOT invent transcript URLs/i);
 });
 
+test('matches nytimes.com and scopes article-fetch guidance to that adapter', () => {
+  const articleUrl = 'https://www.nytimes.com/2026/07/12/us/politics/example.html';
+  const chromeAdapter = getActiveAdapter(articleUrl);
+  const firefoxAdapter = getActiveAdapterFx(articleUrl);
+  assert.equal(chromeAdapter?.name, 'nytimes');
+  assert.equal(firefoxAdapter?.name, 'nytimes');
+  assert.equal(firefoxAdapter?.notes, chromeAdapter?.notes);
+  assert.match(chromeAdapter?.notes || '', /fetch_nytimes_article/);
+  assert.match(chromeAdapter?.notes || '', /untrusted article data/i);
+  assert.notEqual(getActiveAdapter('https://nytimes.com.phishing.example/article')?.name, 'nytimes');
+});
+
 test('matches apple store pages', () => {
   assert.equal(getActiveAdapter('https://www.apple.com/shop/buy-mac/macbook-air')?.name, 'apple');
   assert.equal(getActiveAdapter('https://www.apple.com/uk/shop/refurbished')?.name, 'apple');
@@ -4871,7 +4883,7 @@ test('getToolsForMode: skill tools are exposed only when enabled skills declare 
     ['chrome', 'src/chrome', getToolsForModeCh, normalizeCustomSkillsCh, buildSkillToolDefinitionsCh, buildSkillToolRegistryCh, RESERVED_AGENT_TOOL_NAMES_CH],
     ['firefox', 'src/firefox', getToolsForModeFx, normalizeCustomSkillsFx, buildSkillToolDefinitionsFx, buildSkillToolRegistryFx, RESERVED_AGENT_TOOL_NAMES_FX],
   ]) {
-    for (const name of ['read_youtube_transcript', 'resolve_public_media', 'download_public_media']) {
+    for (const name of ['read_youtube_transcript', 'fetch_nytimes_article', 'resolve_public_media', 'download_public_media']) {
       assert.equal(getTools('ask').some(t => t.function?.name === name), false, `${label}: ${name} should not be static`);
       assert.equal(getTools('act').some(t => t.function?.name === name), false, `${label}: ${name} should not be static in act`);
     }
@@ -4933,9 +4945,11 @@ test('getToolsForMode: skill tools are exposed only when enabled skills declare 
     const skills = normalizeSkills([packagedFreeSkillzRecord(prefix)]);
     const registry = buildRegistry(skills);
     const transcriptTool = registry.get('read_youtube_transcript');
+    const nytimesTool = registry.get('fetch_nytimes_article');
     const resolveTool = registry.get('resolve_public_media');
     const downloadTool = registry.get('download_public_media');
     assert.ok(transcriptTool, `${label}: FreeSkillz transcript tool missing`);
+    assert.ok(nytimesTool, `${label}: FreeSkillz NYTimes tool missing`);
     assert.ok(resolveTool, `${label}: FreeSkillz media resolver tool missing`);
     assert.ok(downloadTool, `${label}: FreeSkillz media download tool missing`);
     assert.equal(transcriptTool.endpoint, 'https://freeskillz.xyz/v1/youtube/transcript', `${label}: wrong transcript endpoint`);
@@ -4947,6 +4961,10 @@ test('getToolsForMode: skill tools are exposed only when enabled skills declare 
     );
     assert.equal(transcriptTool.responseLimits.maxTextChars, 'unlimited', `${label}: transcript provider text should not be pre-capped`);
     assert.equal(transcriptTool.responseLimits.maxArrayItems.segments, 1200, `${label}: transcript segments should keep a provider response cap`);
+    assert.equal(nytimesTool.endpoint, 'https://freeskillz.xyz/nytimes/fetch', `${label}: wrong NYTimes endpoint`);
+    assert.deepEqual(nytimesTool.siteAdapters, ['nytimes'], `${label}: NYTimes tool should be adapter-scoped`);
+    assert.equal(nytimesTool.activeTabUrlArg, 'url', `${label}: NYTimes tool should default to the active article URL`);
+    assert.equal(nytimesTool.resultPolicy, 'untrusted', `${label}: NYTimes article output should be untrusted`);
     assert.equal(resolveTool.kind, 'http', `${label}: resolver should be read-only HTTP`);
     assert.equal(resolveTool.readOnly, true, `${label}: resolver should be read-only`);
     assert.equal(resolveTool.endpoint, 'https://freeskillz.xyz/v1/media/resolve', `${label}: wrong resolver endpoint`);
@@ -4975,6 +4993,7 @@ test('getToolsForMode: skill tools are exposed only when enabled skills declare 
         continue;
       }
       assert.ok(names.includes('read_youtube_transcript'), `${label} ${mode}: transcript tool missing`);
+      assert.equal(names.includes('fetch_nytimes_article'), false, `${label} ${mode}: NYTimes tool must not pollute unrelated model requests`);
       assert.ok(names.includes('resolve_public_media'), `${label} ${mode}: resolver tool missing`);
       assert.equal(names.includes('download_public_media'), mode === 'ask' ? false : true, `${label} ${mode}: download tool mode mismatch`);
 
@@ -5005,6 +5024,14 @@ test('getToolsForMode: skill tools are exposed only when enabled skills declare 
         assert.match(downloader.function.description, /does not require \/allow-api/i, `${label} ${mode}: downloader should not ask for /allow-api`);
       }
     }
+
+    const nytimesAskNames = buildDefs(skills, { mode: 'ask', siteAdapter: 'nytimes' }).map(t => t.function?.name);
+    const youtubeAskNames = buildDefs(skills, { mode: 'ask', siteAdapter: 'youtube' }).map(t => t.function?.name);
+    const nytimesActNames = buildDefs(skills, { mode: 'act', tier: 'full', siteAdapter: 'nytimes' }).map(t => t.function?.name);
+    assert.equal(nytimesAskNames.includes('fetch_nytimes_article'), true, `${label}: NYTimes adapter should expose its fetch tool in Ask`);
+    assert.equal(nytimesActNames.includes('fetch_nytimes_article'), true, `${label}: NYTimes adapter should expose its fetch tool in Act`);
+    assert.equal(youtubeAskNames.includes('fetch_nytimes_article'), false, `${label}: YouTube adapter must not expose the NYTimes tool`);
+
   }
 });
 
@@ -5118,6 +5145,46 @@ test('executeHttpSkillTool uses skill manifest endpoint for supported YouTube UR
         { timestamps: true, text_limit: 12000, include_segments: false, url: youtubeUrl, text_offset: 0 },
         `${label}: declared numeric transcript args should be clamped before provider request`,
       );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+});
+
+test('executeHttpSkillTool calls the public NYTimes endpoint without client credentials', async () => {
+  const articleUrl = 'https://www.nytimes.com/2026/07/12/us/politics/example.html';
+  for (const [label, prefix, executeTool, normalizeSkills, buildRegistry] of [
+    ['chrome', 'src/chrome', executeHttpSkillToolCh, normalizeCustomSkillsCh, buildSkillToolRegistryCh],
+    ['firefox', 'src/firefox', executeHttpSkillToolFx, normalizeCustomSkillsFx, buildSkillToolRegistryFx],
+  ]) {
+    const skills = normalizeSkills([packagedFreeSkillzRecord(prefix)]);
+    const tool = buildRegistry(skills).get('fetch_nytimes_article');
+    assert.ok(tool, `${label}: NYTimes manifest tool missing`);
+
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (url, opts) => {
+      calls.push({ url, opts });
+      return {
+        ok: true,
+        status: 200,
+        url,
+        text: async () => JSON.stringify({ title: 'Example article', text: 'Article body' }),
+      };
+    };
+    try {
+      const rejected = await executeTool(tool, { url: 'https://example.com/not-an-article' });
+      assert.equal(rejected.success, false, `${label}: non-NYTimes URLs should be rejected`);
+      assert.equal(calls.length, 0, `${label}: rejected URLs should not reach FreeSkillz`);
+
+      const result = await executeTool(tool, { url: articleUrl });
+      assert.equal(result.success, true, `${label}: NYTimes request should succeed`);
+      assert.equal(result.data.title, 'Example article', `${label}: article response should remain nested data`);
+      assert.equal(calls.length, 1, `${label}: expected one public endpoint request`);
+      assert.equal(calls[0].url, 'https://freeskillz.xyz/nytimes/fetch', `${label}: wrong NYTimes provider endpoint`);
+      assert.equal(calls[0].opts.headers.Authorization, undefined, `${label}: public endpoint should not receive a bearer token`);
+      assert.equal(calls[0].opts.credentials, 'omit', `${label}: browser cookies must not accompany the public request`);
+      assert.deepEqual(JSON.parse(calls[0].opts.body), { url: articleUrl }, `${label}: request body should contain only declared arguments`);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -6342,7 +6409,7 @@ test('custom skills parse tool manifests without injecting manifest JSON into pr
     assert.equal(skills.length, 1, `${label}: packaged skill should normalize`);
     assert.deepEqual(
       skills[0].tools.map((tool) => tool.name),
-      ['read_youtube_transcript', 'resolve_public_media', 'download_public_media'],
+      ['read_youtube_transcript', 'fetch_nytimes_article', 'resolve_public_media', 'download_public_media'],
       `${label}: manifest tools should parse`,
     );
 
@@ -21953,6 +22020,53 @@ test('sidepanel routes every run-error path through request-scoped deduplication
     assert.match(panel, /renderAgentErrorUpdate\(data, currentTabId, msg\.requestId\)/, `${label}: streamed errors should use message request identity`);
     assert.match(panel, /msgEl\.dataset\.tabId = active\.tabId;[\s\S]*?msgEl\.dataset\.runRequestId = active\.requestId;[\s\S]*?msgEl\.dataset\.errorMessageKey = active\.key;/, `${label}: persisted error cards should retain their dedupe identity`);
     assert.match(panel, /if \(active\.duplicate\) return;[\s\S]*?retryPayload: isTabAbortRequested\(tabId\) \? null : active\.retryPayload/, `${label}: only the first copy should retain the Retry action`);
+  }
+});
+
+test('WebBrain Cloud subscription 402 renders as one terminal assistant prompt', async () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const subscriptionMessage = 'webbrain-cloud error 402: Daily free WebBrain Cloud allowance used.\n'
+      + 'Subscribe for more usage: https://webbrain.one/subscribe?client_reference_id=device-guid';
+    let providerCalls = 0;
+    const provider = {
+      supportsTools: true,
+      supportsVision: false,
+      promptTier: 'full',
+      contextWindow: 128000,
+      model: 'webbrain-cloud 1.0',
+      name: 'webbrain-cloud',
+      chat: async () => {
+        providerCalls += 1;
+        throw new Error(subscriptionMessage);
+      },
+    };
+    const agent = new AgentClass({
+      getActive: () => provider,
+      getVisionProvider: async () => null,
+    });
+    const tabId = label === 'chrome' ? 9401 : 9402;
+    agent.planBeforeAct = false;
+    agent.maxSteps = 2;
+    agent._manageContext = async () => {};
+    agent._enrichUserMessageWithCurrentPage = async (_tabId, _messages, content) => ({ role: 'user', content });
+    agent._maybeReinjectAdapter = async () => {};
+    agent._persist = () => {};
+    agent._startTraceRun = async () => null;
+    agent._endTraceRun = () => {};
+
+    const updates = [];
+    const final = await agent.processMessage(tabId, 'hello', (type, data) => {
+      updates.push({ type, data });
+    }, 'ask');
+
+    assert.equal(providerCalls, 1, `${label}: subscription 402 should not be retried`);
+    assert.equal(final, subscriptionMessage, `${label}: subscription prompt should remain the terminal assistant content`);
+    assert.equal(updates.filter(update => update.type === 'error').length, 0, `${label}: subscription 402 should not emit a generic error card`);
+    assert.equal(
+      updates.filter(update => update.type === 'warning' && update.data?.message === subscriptionMessage).length,
+      1,
+      `${label}: subscription 402 should emit one non-duplicating terminal warning`,
+    );
   }
 });
 

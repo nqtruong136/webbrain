@@ -576,7 +576,12 @@ export class Agent {
   }
 
   _isCostAllowanceError(err) {
-    return err?.code === 'WB_COST_ALLOWANCE';
+    // WebBrain Cloud's free-tier 402 is also an allowance terminal, but it
+    // originates in the provider rather than _costAllowanceError(). Treat it
+    // like the local cost cap so the agent does not retry it and then emit a
+    // second generic error card beside the actionable Subscribe prompt.
+    return err?.code === 'WB_COST_ALLOWANCE'
+      || /Subscribe for more usage:\s*https?:\/\/\S+/i.test(String(err?.message || ''));
   }
 
   async _chatWithCostAllowance(provider, messages, options, costState) {
@@ -2073,7 +2078,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         capabilities.push(Capability.DOWNLOAD);
       }
       await this._ensureGateSetting();
-      const skillEndpointRedirect = this._skillEndpointToolRedirect(fnName, fnArgs);
+      const skillEndpointRedirect = this._skillEndpointToolRedirect(fnName, fnArgs, tabId);
       if (skillEndpointRedirect) {
         messages.push({
           role: 'tool',
@@ -5345,10 +5350,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this._refreshSystemPrompts();
   }
 
-  _skillToolDefinitions(mode, tier) {
+  _activeSkillSiteAdapter(tabId) {
+    if (!this.useSiteAdapters) return '';
+    return this.lastSeenAdapter.get(tabId) || '';
+  }
+
+  _skillToolDefinitions(mode, tier, siteAdapter = '') {
     return buildSkillToolDefinitions(this.customSkills, {
       mode,
       tier: tier || 'full',
+      siteAdapter,
       excludeNames: RESERVED_AGENT_TOOL_NAMES,
     });
   }
@@ -5373,7 +5384,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return { ...args, url: inputUrl };
   }
 
-  _skillToolForEndpoint(url) {
+  _skillToolForEndpoint(url, siteAdapter = '') {
     if (!url) return null;
     let target;
     try {
@@ -5385,6 +5396,10 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     const normalizePath = (value) => String(value || '/').replace(/\/+$/, '') || '/';
     for (const tool of this._skillToolRegistry().values()) {
       if (!tool || !tool.endpoint) continue;
+      if (Array.isArray(tool.siteAdapters) && tool.siteAdapters.length > 0) {
+        const activeAdapter = String(siteAdapter || '').toLowerCase();
+        if (!activeAdapter || !tool.siteAdapters.includes(activeAdapter)) continue;
+      }
       try {
         const endpoint = new URL(tool.endpoint);
         endpoint.hash = '';
@@ -5404,9 +5419,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     return null;
   }
 
-  _skillEndpointToolRedirect(name, args) {
+  _skillEndpointToolRedirect(name, args, tabId = null) {
     if (name !== 'fetch_url' && name !== 'research_url') return null;
-    const skillTool = this._skillToolForEndpoint(args?.url);
+    const skillTool = this._skillToolForEndpoint(args?.url, this._activeSkillSiteAdapter(tabId));
     if (!skillTool) return null;
     return {
       success: false,
@@ -8697,7 +8712,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (skillTool) {
       return await executeHttpSkillTool(skillTool, args, { tabId });
     }
-    const skillEndpointRedirect = this._skillEndpointToolRedirect(name, args);
+    const skillEndpointRedirect = this._skillEndpointToolRedirect(name, args, tabId);
     if (skillEndpointRedirect) {
       return skillEndpointRedirect;
     }
@@ -11763,16 +11778,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       await this._ensureProgressSessionForCurrentTask(tabId, { provider, costState });
     }
     const tier = provider.promptTier;
-    const skillTools = this._skillToolDefinitions(mode, tier);
+    let skillTools = this._skillToolDefinitions(mode, tier, this._activeSkillSiteAdapter(tabId));
     const cloudRunContext = this.cloudRunContexts.get(tabId) || null;
-    const tools = getToolsForMode(mode, {
+    let tools = getToolsForMode(mode, {
       strictSecretMode: this.strictSecretMode,
       tier,
       skillTools,
       cloudRun: !!cloudRunContext,
       outputSchema: cloudRunContext?.outputSchema || null,
     });
-    const allowedToolNames = new Set(tools.map(t => t.function.name));
+    let allowedToolNames = new Set(tools.map(t => t.function.name));
     const plannerTemperature = this._isActionMode(mode) ? 0.15 : 0.3;
     let steps = 0;
     // Tracks whether we've already nudged the model after an empty
@@ -11814,6 +11829,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       if (steps > 0) {
         await this._maybeReinjectAdapter(tabId, messages);
       }
+
+      skillTools = this._skillToolDefinitions(mode, tier, this._activeSkillSiteAdapter(tabId));
+      tools = getToolsForMode(mode, {
+        strictSecretMode: this.strictSecretMode,
+        tier,
+        skillTools,
+        cloudRun: !!cloudRunContext,
+        outputSchema: cloudRunContext?.outputSchema || null,
+      });
+      allowedToolNames = new Set(tools.map(t => t.function.name));
 
       // Auto-compact mid-run when the conversation outgrows the budget — not
       // just between user turns. Uses the previous step's reported token count,
@@ -12161,16 +12186,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       await this._ensureProgressSessionForCurrentTask(tabId, { provider, costState });
     }
     const tier = provider.promptTier;
-    const skillTools = this._skillToolDefinitions(mode, tier);
+    let skillTools = this._skillToolDefinitions(mode, tier, this._activeSkillSiteAdapter(tabId));
     const cloudRunContext = this.cloudRunContexts.get(tabId) || null;
-    const tools = getToolsForMode(mode, {
+    let tools = getToolsForMode(mode, {
       strictSecretMode: this.strictSecretMode,
       tier,
       skillTools,
       cloudRun: !!cloudRunContext,
       outputSchema: cloudRunContext?.outputSchema || null,
     });
-    const allowedToolNames = new Set(tools.map(t => t.function.name));
+    let allowedToolNames = new Set(tools.map(t => t.function.name));
     const plannerTemperature = this._isActionMode(mode) ? 0.15 : 0.3;
     let steps = 0;
     // See processMessage — used to break the empty-response→nudge cycle.
@@ -12196,6 +12221,16 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       if (steps > 0) {
         await this._maybeReinjectAdapter(tabId, messages);
       }
+
+      skillTools = this._skillToolDefinitions(mode, tier, this._activeSkillSiteAdapter(tabId));
+      tools = getToolsForMode(mode, {
+        strictSecretMode: this.strictSecretMode,
+        tier,
+        skillTools,
+        cloudRun: !!cloudRunContext,
+        outputSchema: cloudRunContext?.outputSchema || null,
+      });
+      allowedToolNames = new Set(tools.map(t => t.function.name));
 
       // Auto-compact mid-run when the conversation outgrows the budget. The
       // streaming path doesn't get a per-call token count, so this leans on
