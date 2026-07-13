@@ -124,7 +124,7 @@ export default {
 
   'sp.api.enabled_html': '🔓 <strong>เปิดการแก้ไขผ่าน API</strong> สำหรับการสนทนานี้แล้ว เอเจนต์สามารถใช้ POST/PUT/PATCH/DELETE ผ่าน fetch_url และ execute_js เมื่อพิจารณาว่า API น่าเชื่อถือกว่า UI สำหรับขั้นตอนหนึ่ง โดย UI ยังคงเป็นค่าเริ่มต้น แฟล็กนี้จะถูกล้างเมื่อคุณรีเซ็ตการสนทนา',
   'sp.api.badge_html': '<span>🔓 อนุญาตการแก้ไขผ่าน API</span>',
-  'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
+  'sp.permissions.disabled_html': '⚠️ <strong>การถามสิทธิ์ถูกปิดอยู่</strong> WebBrain จะคลิก พิมพ์ นำทาง รัน JavaScript อัปโหลด ดาวน์โหลด บันทึก และตั้งเวลางานในอนาคตโดยไม่ถามก่อน เปิดใช้งานอีกครั้งได้ที่ การตั้งค่า → สิทธิ์ → ถามก่อนการดำเนินการสำคัญ',
 
   'tool.read_page': 'กำลังอ่านหน้า',
   'tool.get_interactive_elements': 'กำลังสแกนองค์ประกอบโต้ตอบได้',
@@ -331,7 +331,7 @@ export default {
   "sp.perm.verb.download": "ดาวน์โหลดไฟล์จาก",
   "sp.perm.verb.upload": "อัปโหลดไฟล์ไปยัง",
   "sp.perm.verb.record": "บันทึกแท็บ (และไมโครโฟน) บน",
-  "sp.help_html": "<strong>คำสั่งสแลช</strong><br><code>/help</code> — แสดงรายการนี้<br><code>/clear-scratchpad</code> — ล้างกระดานร่างปัจจุบัน<br><code>/allow-api</code> — อนุญาตการแก้ไขผ่าน API สำหรับการสนทนานี้<br><code>/dangerously-skip-permissions</code> — Disable permission prompts globally<br><code>/compact</code> — บีบอัดบริบทของการสนทนานี้<br><code>/verbose</code> — สลับการแสดงเครื่องมือแบบละเอียด/กระชับ<br><code>/reset</code> — ล้างการสนทนา<br><code>/screenshot</code> — จับภาพแท็บปัจจุบัน<br><code>/export</code> — ดาวน์โหลดการสนทนาเป็น Markdown<br><code>/profile</code> — สลับการกรอกโปรไฟล์อัตโนมัติ<br><code>/vision</code> — สลับโหมดการมองเห็นบนผู้ให้บริการที่ใช้งานอยู่",
+  "sp.help_html": "<strong>คำสั่ง Slash</strong><br><code>/help</code> — แสดงรายการนี้<br><code>/schedule</code> — สร้างงานที่กำหนดเวลา<br><code>/list-schedules</code> — แสดงงานที่กำหนดเวลา<br><code>/check-progress</code> — แสดงบันทึกความคืบหน้าปัจจุบัน<br><code>/show-scratchpad</code> — แสดงกระดานร่างปัจจุบัน<br><code>/edit-scratchpad &lt;text&gt;</code> — เพิ่มข้อความไปยังกระดานร่างปัจจุบัน<br><code>/clear-scratchpad</code> — ล้างกระดานร่างปัจจุบัน<br><code>/remember &lt;text&gt;</code> — บันทึกค่ากำหนดของผู้ใช้ลงในหน่วยความจำ<br><code>/show-memory</code> — แสดงหน่วยความจำผู้ใช้ที่บันทึกไว้<br><code>/forget-memory &lt;id&gt;</code> — ลืมหน่วยความจำที่บันทึกไว้ตาม ID<br><code>/allow-api</code> — อนุญาตการแก้ไขผ่าน API สำหรับการสนทนานี้<br><code>/dangerously-skip-permissions</code> — ปิดการถามสิทธิ์ทั่วทั้งระบบ<br><code>/compact</code> — บีบอัดบริบทของการสนทนานี้<br><code>/verbose</code> — สลับการแสดงเครื่องมือแบบละเอียด/กระชับ<br><code>/reset</code> — ล้างการสนทนา<br><code>/screenshot</code> — จับภาพแท็บปัจจุบัน<br><code>/full-page-screenshot</code> — จับภาพทั้งหน้า (เฉพาะ Chrome)<br><code>/record</code> — เริ่มบันทึกแท็บปัจจุบัน<br><code>/record --transcribe</code> — บันทึกและบันทึกบทถอดเสียง Whisper หลังหยุด<br><code>/record-full-screen</code> — บันทึกหน้าจอหรือหน้าต่าง (เฉพาะ Chrome)<br><code>/record-full-screen --transcribe</code> — บันทึกหน้าจอ/หน้าต่างและบันทึกบทถอดเสียง<br><code>/export</code> — ดาวน์โหลดการสนทนาเป็น Markdown<br><code>/export-with-traces</code> — ส่งออกลำดับเครื่องมือ (traces)<br><code>/profile</code> — สลับการกรอกโปรไฟล์อัตโนมัติ<br><code>/vision</code> — สลับโหมดการมองเห็นบนผู้ให้บริการที่ใช้งานอยู่<br><code>/ask</code> — เปลี่ยนไปโหมดถาม<br><code>/act</code> — เปลี่ยนไปโหมดทำ<br><code>/dev</code> — เปลี่ยนไปโหมดนักพัฒนา<br><br><strong>แป้นพิมพ์ลัด</strong><br><code>Ctrl/Cmd+/</code> — โฟกัสช่องป้อนข้อความ<br><code>Ctrl/Cmd+Shift+A</code> — เปลี่ยนไปโหมดถาม<br><code>Ctrl/Cmd+Shift+X</code> — เปลี่ยนไปโหมดทำ<br><code>Ctrl/Cmd+Shift+D</code> — เปลี่ยนไปโหมดนักพัฒนา<br><code>Ctrl/Cmd+M</code> — สลับการป้อนด้วยเสียง",
   "sp.compact.verbose_on": "โหมดละเอียด <strong>เปิด</strong> — แสดง JSON ของการเรียกใช้เครื่องมือเต็มรูปแบบ",
   "sp.compact.verbose_off": "โหมดละเอียด <strong>ปิด</strong> — แสดงเครื่องมือแบบกระชับ",
   "sp.screenshot.error": "จับภาพหน้าจอไม่สำเร็จ: {msg}",
@@ -490,7 +490,7 @@ export default {
   'sp.slash.show_scratchpad': 'แสดงสมุดบันทึกปัจจุบัน',
   'sp.slash.clear_scratchpad': 'ล้างกระดานร่างปัจจุบัน',
   'sp.slash.allow_api': 'อนุญาตการเปลี่ยนแปลง API สำหรับการสนทนานี้',
-  'sp.slash.dangerously_skip_permissions': 'Disable permission prompts globally',
+  'sp.slash.dangerously_skip_permissions': 'ปิดการถามสิทธิ์ทั่วทั้งระบบ',
   'sp.slash.compact': 'บีบอัดบริบทการสนทนานี้',
   'sp.slash.verbose': 'สลับการแสดงเครื่องมือระหว่างละเอียดและกระชับ',
   'sp.slash.reset': 'ล้างการสนทนานี้',

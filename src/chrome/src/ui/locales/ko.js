@@ -124,7 +124,7 @@ export default {
 
   'sp.api.enabled_html': '🔓 이 대화에서 <strong>API 변경이 허용</strong>되었습니다. 에이전트는 이제 UI보다 API가 더 안정적이라고 판단할 때 fetch_url과 execute_js를 통해 POST/PUT/PATCH/DELETE를 사용할 수 있습니다. 기본적으로는 UI 우선 방침을 유지합니다. 이 플래그는 대화를 초기화하면 해제됩니다.',
   'sp.api.badge_html': '<span>🔓 API 변경 허용됨</span>',
-  'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
+  'sp.permissions.disabled_html': '⚠️ <strong>권한 확인이 꺼져 있습니다.</strong> WebBrain은 묻지 않고 클릭, 입력, 이동, JavaScript 실행, 업로드, 다운로드, 녹화 및 예약 작업을 수행합니다. 설정 → 권한 → 중요한 작업 전 확인에서 다시 활성화하세요.',
 
   'tool.read_page': '페이지 읽는 중',
   'tool.get_interactive_elements': '인터랙티브 요소 스캔 중',
@@ -331,7 +331,7 @@ export default {
   "sp.perm.verb.download": "파일 다운로드",
   "sp.perm.verb.upload": "파일 업로드",
   "sp.perm.verb.record": "탭(및 마이크) 녹화",
-  "sp.help_html": "<strong>슬래시 명령어</strong><br><code>/help</code> — 이 목록 표시<br><code>/clear-scratchpad</code> — 현재 스크래치패드 지우기<br><code>/allow-api</code> — 이 대화에서 API 변경 허용<br><code>/dangerously-skip-permissions</code> — Disable permission prompts globally<br><code>/compact</code> — 이 대화의 컨텍스트 압축<br><code>/verbose</code> — 상세/간결 도구 표시 전환<br><code>/reset</code> — 대화 지우기<br><code>/screenshot</code> — 현재 탭 캡처<br><code>/export</code> — 대화를 Markdown으로 다운로드<br><code>/profile</code> — 프로필 자동 입력 전환<br><code>/vision</code> — 활성 제공자의 비전 모드 전환",
+  "sp.help_html": "<strong>슬래시 명령어</strong><br><code>/help</code> — 이 목록 표시<br><code>/schedule</code> — 예약 작업 만들기<br><code>/list-schedules</code> — 예약 작업 표시<br><code>/check-progress</code> — 현재 진행 로그 표시<br><code>/show-scratchpad</code> — 현재 스크래치패드 표시<br><code>/edit-scratchpad &lt;text&gt;</code> — 현재 스크래치패드에 텍스트 추가<br><code>/clear-scratchpad</code> — 현재 스크래치패드 지우기<br><code>/remember &lt;text&gt;</code> — 사용자 기본 설정을 메모리에 저장<br><code>/show-memory</code> — 저장된 사용자 메모리 표시<br><code>/forget-memory &lt;id&gt;</code> — 저장된 메모리 삭제<br><code>/allow-api</code> — 이 대화에서 API 변경 허용<br><code>/dangerously-skip-permissions</code> — 권한 확인을 전역적으로 비활성화<br><code>/compact</code> — 이 대화의 컨텍스트 압축<br><code>/verbose</code> — 상세/간결 도구 표시 전환<br><code>/reset</code> — 대화 지우기<br><code>/screenshot</code> — 현재 탭 캡처<br><code>/full-page-screenshot</code> — 전체 페이지 캡처 (Chrome 전용)<br><code>/record</code> — 현재 탭 녹화 시작<br><code>/record --transcribe</code> — 녹화 후 Whisper 전사본 저장<br><code>/record-full-screen</code> — 화면 또는 창 녹화 (Chrome 전용)<br><code>/record-full-screen --transcribe</code> — 화면/창 녹화 후 전사본 저장<br><code>/export</code> — 대화를 Markdown으로 다운로드<br><code>/export-with-traces</code> — 도구 체인(트레이스) 내보내기<br><code>/profile</code> — 프로필 자동 입력 전환<br><code>/vision</code> — 활성 제공자의 비전 모드 전환<br><code>/ask</code> — 질문 모드로 전환<br><code>/act</code> — 실행 모드로 전환<br><code>/dev</code> — 개발 모드로 전환<br><br><strong>키보드 단축키</strong><br><code>Ctrl/Cmd+/</code> — 입력에 포커스<br><code>Ctrl/Cmd+Shift+A</code> — 질문 모드로 전환<br><code>Ctrl/Cmd+Shift+X</code> — 실행 모드로 전환<br><code>Ctrl/Cmd+Shift+D</code> — 개발 모드로 전환<br><code>Ctrl/Cmd+M</code> — 음성 입력 전환",
   "sp.compact.verbose_on": "상세 모드 <strong>켜짐</strong> — 전체 도구 호출 JSON이 표시됩니다.",
   "sp.compact.verbose_off": "상세 모드 <strong>꺼짐</strong> — 간결한 도구 표시.",
   "sp.screenshot.error": "스크린샷에 실패했습니다: {msg}",
@@ -490,7 +490,7 @@ export default {
   'sp.slash.show_scratchpad': '현재 스크래치패드 표시',
   'sp.slash.clear_scratchpad': '현재 스크래치패드 지우기',
   'sp.slash.allow_api': '이 대화에서 API 변경 허용',
-  'sp.slash.dangerously_skip_permissions': 'Disable permission prompts globally',
+  'sp.slash.dangerously_skip_permissions': '권한 확인을 전역적으로 비활성화',
   'sp.slash.compact': '이 대화 컨텍스트 압축',
   'sp.slash.verbose': '도구 표시를 상세 또는 압축으로 전환',
   'sp.slash.reset': '이 대화 지우기',

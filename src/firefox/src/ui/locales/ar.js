@@ -124,7 +124,7 @@ export default {
 
   'sp.api.enabled_html': '🔓 <strong>تفعيل تعديلات واجهة API</strong> لهذه المحادثة. يمكن للوكيل الآن استخدام POST/PUT/PATCH/DELETE عبر fetch_url و execute_js عندما يرى أن API أكثر موثوقية من الواجهة. يظل التفاعل عبر الواجهة هو الافتراضي. تُمسح هذه العلامة عند تصفير المحادثة.',
   'sp.api.badge_html': '<span>🔓 تعديلات API مسموح بها</span>',
-  'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
+  'sp.permissions.disabled_html': '⚠️ <strong>مطالبات الأذونات مُعطّلة.</strong> سيُنقر WebBrain ويكتب ويتنقّل ويُشغّل JavaScript ويرفع ويُنزّل ويُسجّل ويجدول أعمالًا مستقبلية دون أن يسأل أولًا. أعد تفعيل هذا من الإعدادات ← الأذونات ← السؤال قبل الإجراءات المهمة.',
 
   'tool.read_page': 'قراءة الصفحة',
   'tool.get_interactive_elements': 'فحص العناصر التفاعلية',
@@ -331,7 +331,7 @@ export default {
   "sp.perm.verb.download": "يُنزّل ملفات من",
   "sp.perm.verb.upload": "يرفع ملفًا إلى",
   "sp.perm.verb.record": "يُسجّل علامة التبويب (والميكروفون) على",
-  'sp.help_html': '<strong>أوامر الشرطة المائلة</strong><br><code>/help</code> — إظهار هذه القائمة<br><code>/edit-scratchpad &lt;text&gt;</code> — إلحاق نص بمنطقة المسودة الحالية<br><code>/clear-scratchpad</code> — مسح منطقة المسودة الحالية<br><code>/allow-api</code> — السماح بتعديلات API لهذه المحادثة<br><code>/dangerously-skip-permissions</code> — Disable permission prompts globally<br><code>/compact</code> — ضغط سياق هذه المحادثة<br><code>/verbose</code> — تبديل العرض المفصّل/المختصر للأدوات<br><code>/reset</code> — مسح المحادثة<br><code>/screenshot</code> — التقاط علامة التبويب الحالية<br><code>/export</code> — تنزيل المحادثة بصيغة Markdown<br><code>/profile</code> — تبديل تعبئة الملف الشخصي تلقائيًا<br><code>/vision</code> — تبديل وضع الرؤية على المزوّد النشط',
+  'sp.help_html': '<strong>أوامر الشرطة المائلة</strong><br><code>/help</code> — إظهار هذه القائمة<br><code>/schedule</code> — إنشاء مهمة مجدولة<br><code>/list-schedules</code> — عرض المهام المجدولة<br><code>/check-progress</code> — عرض سجل التقدم الحالي<br><code>/show-scratchpad</code> — عرض منطقة المسودة الحالية<br><code>/edit-scratchpad &lt;text&gt;</code> — إلحاق نص بمنطقة المسودة الحالية<br><code>/clear-scratchpad</code> — مسح منطقة المسودة الحالية<br><code>/remember &lt;text&gt;</code> — حفظ تفضيل المستخدم في الذاكرة<br><code>/show-memory</code> — عرض ذاكرة المستخدم المحفوظة<br><code>/forget-memory &lt;id&gt;</code> — نسيان ذاكرة محفوظة<br><code>/allow-api</code> — السماح بتعديلات API لهذه المحادثة<br><code>/dangerously-skip-permissions</code> — تعطيل مطالبات الأذونات عالميًا<br><code>/compact</code> — ضغط سياق هذه المحادثة<br><code>/verbose</code> — تبديل العرض المفصّل/المختصر للأدوات<br><code>/reset</code> — مسح المحادثة<br><code>/screenshot</code> — التقاط علامة التبويب الحالية<br><code>/export</code> — تنزيل المحادثة بصيغة Markdown<br><code>/export-with-traces</code> — تصدير سلسلة الأدوات (التتبّعات)<br><code>/profile</code> — تبديل تعبئة الملف الشخصي تلقائيًا<br><code>/vision</code> — تبديل وضع الرؤية على المزوّد النشط<br><code>/ask</code> — التبديل إلى وضع السؤال<br><code>/act</code> — التبديل إلى وضع التنفيذ<br><code>/dev</code> — التبديل إلى وضع التطوير',
   "sp.compact.verbose_on": "الوضع المفصّل <strong>مُفعّل</strong> — يظهر كامل JSON لاستدعاءات الأدوات.",
   "sp.compact.verbose_off": "الوضع المفصّل <strong>مُعطّل</strong> — عرض مختصر للأدوات.",
   "sp.screenshot.error": "فشل التقاط لقطة الشاشة: {msg}",
@@ -490,7 +490,7 @@ export default {
   'sp.slash.show_scratchpad': 'عرض لوحة المسودة الحالية',
   'sp.slash.clear_scratchpad': 'مسح منطقة المسودة الحالية',
   'sp.slash.allow_api': 'السماح بتعديلات API لهذه المحادثة',
-  'sp.slash.dangerously_skip_permissions': 'Disable permission prompts globally',
+  'sp.slash.dangerously_skip_permissions': 'تعطيل مطالبات الأذونات عالميًا',
   'sp.slash.compact': 'ضغط سياق هذه المحادثة',
   'sp.slash.verbose': 'تبديل عرض الأدوات بين مفصل ومضغوط',
   'sp.slash.reset': 'مسح هذه المحادثة',

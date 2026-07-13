@@ -124,7 +124,7 @@ export default {
 
   'sp.api.enabled_html': '🔓 本次会话已<strong>启用 API 变更</strong>。当代理判断 API 比界面更可靠时，可以通过 fetch_url 和 execute_js 使用 POST/PUT/PATCH/DELETE。默认仍优先使用界面。重置会话后此标志会清除。',
   'sp.api.badge_html': '<span>🔓 已允许 API 变更</span>',
-  'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
+  'sp.permissions.disabled_html': '⚠️ <strong>权限提示已关闭。</strong>WebBrain 将在不事先询问的情况下点击、输入、导航、运行 JavaScript、上传、下载、录制和安排后续任务。请在设置 → 权限 → 执行重要操作前询问中重新启用。',
 
   'tool.read_page': '正在阅读页面',
   'tool.get_interactive_elements': '扫描可交互元素',
@@ -331,7 +331,7 @@ export default {
   "sp.perm.verb.download": "下载文件自",
   "sp.perm.verb.upload": "上传文件到",
   "sp.perm.verb.record": "录制标签页（及麦克风）于",
-  "sp.help_html": "<strong>斜杠命令</strong><br><code>/help</code> —— 显示此列表<br><code>/clear-scratchpad</code> — 清除当前草稿板<br><code>/allow-api</code> —— 在本次会话中允许 API 变更<br><code>/compact</code> —— 压缩本次会话的上下文<br><code>/verbose</code> —— 切换详细 / 精简工具显示<br><code>/reset</code> —— 清除会话<br><code>/screenshot</code> —— 截取当前标签页<br><code>/export</code> —— 将会话导出为 Markdown<br><code>/profile</code> —— 切换个人资料自动填充<br><code>/vision</code> —— 在当前提供商上切换视觉模式",
+  "sp.help_html": "<strong>斜杠命令</strong><br><code>/help</code> —— 显示此列表<br><code>/schedule</code> —— 创建计划任务<br><code>/list-schedules</code> —— 显示计划任务<br><code>/check-progress</code> —— 显示当前进度日志<br><code>/show-scratchpad</code> —— 显示当前草稿板<br><code>/edit-scratchpad &lt;text&gt;</code> —— 将文本追加到当前草稿板<br><code>/clear-scratchpad</code> —— 清除当前草稿板<br><code>/remember &lt;text&gt;</code> —— 将用户偏好保存到记忆<br><code>/show-memory</code> —— 显示已保存的用户记忆<br><code>/forget-memory &lt;id&gt;</code> —— 忘记已保存的记忆<br><code>/allow-api</code> —— 在本次会话中允许 API 变更<br><code>/dangerously-skip-permissions</code> —— 全局关闭权限提示<br><code>/compact</code> —— 压缩本次会话的上下文<br><code>/verbose</code> —— 切换详细/精简工具显示<br><code>/reset</code> —— 清除会话<br><code>/screenshot</code> —— 截取当前标签页<br><code>/full-page-screenshot</code> —— 捕获整个页面（仅限 Chrome）<br><code>/record</code> —— 开始录制当前标签页<br><code>/record --transcribe</code> —— 录制并在停止后保存 Whisper 转写<br><code>/record-full-screen</code> —— 录制屏幕或窗口（仅限 Chrome）<br><code>/record-full-screen --transcribe</code> —— 录制屏幕/窗口并保存转写<br><code>/export</code> —— 将会话下载为 Markdown<br><code>/export-with-traces</code> —— 导出工具链（跟踪）<br><code>/profile</code> —— 切换个人资料自动填充<br><code>/vision</code> —— 在当前提供商上切换视觉模式<br><code>/ask</code> —— 切换到提问模式<br><code>/act</code> —— 切换到执行模式<br><code>/dev</code> —— 切换到开发模式<br><br><strong>键盘快捷键</strong><br><code>Ctrl/Cmd+/</code> —— 聚焦输入框<br><code>Ctrl/Cmd+Shift+A</code> —— 切换到提问模式<br><code>Ctrl/Cmd+Shift+X</code> —— 切换到执行模式<br><code>Ctrl/Cmd+Shift+D</code> —— 切换到开发模式<br><code>Ctrl/Cmd+M</code> —— 切换语音输入",
   "sp.compact.verbose_on": "详细模式<strong>已开启</strong> —— 显示完整的工具调用 JSON。",
   "sp.compact.verbose_off": "详细模式<strong>已关闭</strong> —— 精简工具显示。",
   "sp.screenshot.error": "截图失败：{msg}",
@@ -490,7 +490,7 @@ export default {
   'sp.slash.show_scratchpad': '显示当前草稿板',
   'sp.slash.clear_scratchpad': '清除当前草稿板',
   'sp.slash.allow_api': '允许此对话进行 API 修改',
-  'sp.slash.dangerously_skip_permissions': 'Disable permission prompts globally',
+  'sp.slash.dangerously_skip_permissions': '全局关闭权限提示',
   'sp.slash.compact': '压缩此对话上下文',
   'sp.slash.verbose': '切换工具显示的详细或紧凑模式',
   'sp.slash.reset': '清除此对话',

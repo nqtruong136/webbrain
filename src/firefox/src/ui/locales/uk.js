@@ -124,7 +124,7 @@ export default {
 
   'sp.api.enabled_html': '🔓 <strong>Зміни через API ввімкнено</strong> для цього діалогу. Агент тепер може використовувати POST/PUT/PATCH/DELETE через fetch_url та execute_js, якщо вважає API надійнішим за інтерфейс. За замовчуванням пріоритет — інтерфейс. Цей прапор скидається після очищення діалогу.',
   'sp.api.badge_html': '<span>🔓 Зміни через API дозволено</span>',
-  'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
+  'sp.permissions.disabled_html': '⚠️ <strong>Запити дозволів ВИМКНЕНО.</strong> WebBrain натискатиме, друкуватиме, переходитиме, запускатиме JavaScript, вивантажуватиме, завантажуватиме, записуватиме та заплановуватиме майбутню роботу без попереднього запиту. Увімкніть знову в Налаштуваннях → Дозволи → Питати перед важливими діями.',
 
   'tool.read_page': 'Читання сторінки',
   'tool.get_interactive_elements': 'Сканування інтерактивних елементів',
@@ -331,7 +331,7 @@ export default {
   "sp.perm.verb.download": "завантажити файли з",
   "sp.perm.verb.upload": "вивантажити файл на",
   "sp.perm.verb.record": "записати вкладку (і мікрофон) на",
-  'sp.help_html': '<strong>Слеш-команди</strong><br><code>/help</code> — Показати цей список<br><code>/edit-scratchpad &lt;text&gt;</code> — Додати текст до поточного чернетника<br><code>/clear-scratchpad</code> — Очистити поточний чернетник<br><code>/allow-api</code> — Дозволити зміни через API для цього діалогу<br><code>/dangerously-skip-permissions</code> — Disable permission prompts globally<br><code>/compact</code> — Стиснути контекст цього діалогу<br><code>/verbose</code> — Перемкнути детальний/компактний показ інструментів<br><code>/reset</code> — Очистити діалог<br><code>/screenshot</code> — Зробити скриншот поточної вкладки<br><code>/export</code> — Завантажити діалог як Markdown<br><code>/profile</code> — Перемкнути автозаповнення профілю<br><code>/vision</code> — Перемкнути режим зору на активному провайдері',
+  'sp.help_html': '<strong>Слеш-команди</strong><br><code>/help</code> — Показати цей список<br><code>/schedule</code> — Створити заплановане завдання<br><code>/list-schedules</code> — Показати заплановані завдання<br><code>/check-progress</code> — Показати поточний журнал прогресу<br><code>/show-scratchpad</code> — Показати поточний чернетник<br><code>/edit-scratchpad &lt;text&gt;</code> — Додати текст до поточного чернетника<br><code>/clear-scratchpad</code> — Очистити поточний чернетник<br><code>/remember &lt;text&gt;</code> — Зберегти налаштування користувача в пам\'ять<br><code>/show-memory</code> — Показати збережену пам\'ять користувача<br><code>/forget-memory &lt;id&gt;</code> — Забути збережений запис у пам\'яті<br><code>/allow-api</code> — Дозволити зміни через API для цього діалогу<br><code>/dangerously-skip-permissions</code> — Вимкнути запити дозволів глобально<br><code>/compact</code> — Стиснути контекст цього діалогу<br><code>/verbose</code> — Перемкнути детальний/компактний показ інструментів<br><code>/reset</code> — Очистити діалог<br><code>/screenshot</code> — Зробити скриншот поточної вкладки<br><code>/export</code> — Завантажити діалог як Markdown<br><code>/export-with-traces</code> — Експортувати ланцюг інструментів (траси)<br><code>/profile</code> — Перемкнути автозаповнення профілю<br><code>/vision</code> — Перемкнути режим зору на активному провайдері<br><code>/ask</code> — Перейти в режим запитань<br><code>/act</code> — Перейти в режим дій<br><code>/dev</code> — Перейти в режим розробки',
   "sp.compact.verbose_on": "Детальний режим <strong>увімкнено</strong> — видно повний JSON викликів інструментів.",
   "sp.compact.verbose_off": "Детальний режим <strong>вимкнено</strong> — компактний показ інструментів.",
   "sp.screenshot.error": "Не вдалося зробити скриншот: {msg}",
@@ -490,7 +490,7 @@ export default {
   'sp.slash.show_scratchpad': 'Показати поточний блокнот',
   'sp.slash.clear_scratchpad': 'Очистити поточний чернетник',
   'sp.slash.allow_api': 'Дозволити зміни API для цієї розмови',
-  'sp.slash.dangerously_skip_permissions': 'Disable permission prompts globally',
+  'sp.slash.dangerously_skip_permissions': 'Вимкнути запити дозволів глобально',
   'sp.slash.compact': 'Стиснути контекст цієї розмови',
   'sp.slash.verbose': 'Перемкнути докладний або компактний вигляд інструментів',
   'sp.slash.reset': 'Очистити цю розмову',

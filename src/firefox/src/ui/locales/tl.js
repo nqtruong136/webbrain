@@ -124,7 +124,7 @@ export default {
 
   'sp.api.enabled_html': '🔓 <strong>Naka-enable ang mga pagbabago sa API</strong> para sa pag-uusap na ito. Maaari nang gamitin ng ahente ang POST/PUT/PATCH/DELETE sa pamamagitan ng fetch_url at execute_js kapag sa tingin niyang mas maaasahan ang API kaysa UI para sa isang hakbang. UI-first pa rin ang default. Maaaclear ang flag na ito kapag ni-reset mo ang pag-uusap.',
   'sp.api.badge_html': '<span>🔓 Pinahihintulutan ang mga pagbabago sa API</span>',
-  'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
+  'sp.permissions.disabled_html': '⚠️ <strong>Naka-off ang mga prompt ng pahintulot.</strong> Mag-cli-click, magta-type, magna-navigate, magpapatakbo ng JavaScript, mag-aupload, mag-dadownload, magre-record, at mag-iiskedyul ng mga gawaing hinaharap ang WebBrain nang hindi nagtatanong. I-enable muli mula sa Settings → Pahintulot → Magtanong bago ang mahahalagang aksyon.',
 
   'tool.read_page': 'Binabasa ang pahina',
   'tool.get_interactive_elements': 'Sina-scan ang mga interactive na elemento',
@@ -331,7 +331,7 @@ export default {
   "sp.perm.verb.download": "mag-download ng files mula sa",
   "sp.perm.verb.upload": "mag-upload ng file sa",
   "sp.perm.verb.record": "i-record ang tab (at mikropono) sa",
-  'sp.help_html': '<strong>Slash Commands</strong><br><code>/help</code> — Ipakita ang listahang ito<br><code>/edit-scratchpad &lt;text&gt;</code> — Magdagdag ng teksto sa kasalukuyang scratchpad<br><code>/clear-scratchpad</code> — I-clear ang kasalukuyang scratchpad<br><code>/allow-api</code> — Payagan ang mga pagbabago sa API para sa pag-uusap na ito<br><code>/dangerously-skip-permissions</code> — Disable permission prompts globally<br><code>/compact</code> — I-compact ang konteksto ng pag-uusap na ito<br><code>/verbose</code> — I-toggle ang verbose/compact na pagpapakita ng tool<br><code>/reset</code> — I-clear ang pag-uusap<br><code>/screenshot</code> — Kumuha ng kasalukuyang tab<br><code>/export</code> — I-download ang pag-uusap bilang Markdown<br><code>/profile</code> — I-toggle ang profile auto-fill<br><code>/vision</code> — I-toggle ang vision mode sa aktibong provider',
+  'sp.help_html': '<strong>Slash Commands</strong><br><code>/help</code> — Ipakita ang listahang ito<br><code>/schedule</code> — Gumawa ng naka-schedule na gawain<br><code>/list-schedules</code> — Ipakita ang mga naka-schedule na gawain<br><code>/check-progress</code> — Ipakita ang kasalukuyang progress ledger<br><code>/show-scratchpad</code> — Ipakita ang kasalukuyang scratchpad<br><code>/edit-scratchpad &lt;text&gt;</code> — Magdagdag ng teksto sa kasalukuyang scratchpad<br><code>/clear-scratchpad</code> — I-clear ang kasalukuyang scratchpad<br><code>/remember &lt;text&gt;</code> — I-save ang kagustuhan ng user sa memory<br><code>/show-memory</code> — Ipakita ang naka-save na memory ng user<br><code>/forget-memory &lt;id&gt;</code> — Kalimutan ang naka-save na memory<br><code>/allow-api</code> — Payagan ang mga pagbabago sa API para sa pag-uusap na ito<br><code>/dangerously-skip-permissions</code> — I-disable ang mga prompt ng pahintulot sa pangkalahatan<br><code>/compact</code> — I-compact ang konteksto ng pag-uusap na ito<br><code>/verbose</code> — I-toggle ang verbose/compact na pagpapakita ng tool<br><code>/reset</code> — I-clear ang pag-uusap<br><code>/screenshot</code> — Kumuha ng screenshot ng kasalukuyang tab<br><code>/export</code> — I-download ang pag-uusap bilang Markdown<br><code>/export-with-traces</code> — I-export ang tool chain (traces)<br><code>/profile</code> — I-toggle ang profile auto-fill<br><code>/vision</code> — I-toggle ang vision mode sa aktibong provider<br><code>/ask</code> — Lumipat sa Ask mode<br><code>/act</code> — Lumipat sa Act mode<br><code>/dev</code> — Lumipat sa Dev mode',
   "sp.compact.verbose_on": "Verbose mode <strong>naka-on</strong> — nakikita ang buong tool call JSON.",
   "sp.compact.verbose_off": "Verbose mode <strong>naka-off</strong> — compact na pagpapakita ng tool.",
   "sp.screenshot.error": "Nabigo ang screenshot: {msg}",
@@ -490,7 +490,7 @@ export default {
   'sp.slash.show_scratchpad': 'Ipakita ang kasalukuyang scratchpad',
   'sp.slash.clear_scratchpad': 'I-clear ang kasalukuyang scratchpad',
   'sp.slash.allow_api': 'Payagan ang mga API mutation para sa pag-uusap na ito',
-  'sp.slash.dangerously_skip_permissions': 'Disable permission prompts globally',
+  'sp.slash.dangerously_skip_permissions': 'I-disable ang mga prompt ng pahintulot sa pangkalahatan',
   'sp.slash.compact': 'I-compact ang konteksto ng pag-uusap na ito',
   'sp.slash.verbose': 'I-toggle ang pagpapakita ng tool sa pagitan ng detalyado at compact',
   'sp.slash.reset': 'Linisin ang pag-uusap na ito',

@@ -158,7 +158,7 @@ export default {
 
   'sp.api.enabled_html': '🔓 Bu konuşma için <strong>API mutasyonları etkin</strong>. Aracı artık bir adım için API\'nin arayüzden daha güvenilir olduğuna karar verirse fetch_url ve execute_js üzerinden POST/PUT/PATCH/DELETE kullanabilir. Varsayılan yine arayüz öncelikli kalır. Bu bayrak konuşmayı sıfırladığında temizlenir.',
   'sp.api.badge_html': '<span>🔓 API mutasyonlarına izin verildi</span>',
-  'sp.permissions.disabled_html': '⚠️ <strong>Permission prompts are OFF.</strong> WebBrain will click, type, navigate, run JavaScript, upload, download, record, and schedule future work without asking first. Re-enable this from Settings → Permissions → Ask before consequential actions.',
+  'sp.permissions.disabled_html': '⚠️ <strong>İzin istemleri KAPALI.</strong> WebBrain, izin istemeden tıklayacak, yazacak, gezinecek, JavaScript çalıştıracak, dosya yükleyecek, indirecek, kaydı başlatacak ve gelecek görevler zamanlayacaktır. Bunu Ayarlar → İzinler → Önemli işlemlerden önce sor seçeneğinden yeniden etkinleştirin.',
 
   'tool.read_page': 'Sayfa okunuyor',
   'tool.get_interactive_elements': 'Etkileşimli öğeler taranıyor',
@@ -368,7 +368,7 @@ export default {
   "sp.perm.verb.download": "dosya indirmek",
   "sp.perm.verb.upload": "dosya yüklemek",
   "sp.perm.verb.record": "sekmeyi (ve mikrofonu) kaydetmek",
-  'sp.help_html': '<strong>Eğik Çizgi Komutları</strong><br><code>/help</code> — Bu listeyi göster<br><code>/edit-scratchpad &lt;text&gt;</code> — Geçerli not defterine metin ekle<br><code>/clear-scratchpad</code> — Geçerli not defterini temizle<br><code>/allow-api</code> — Bu konuşma için API mutasyonlarına izin ver<br><code>/dangerously-skip-permissions</code> — Disable permission prompts globally<br><code>/compact</code> — Bu konuşmanın bağlamını sıkıştır<br><code>/verbose</code> — Ayrıntılı/kompakt araç görünümünü aç/kapat<br><code>/reset</code> — Konuşmayı temizle<br><code>/screenshot</code> — Geçerli sekmenin ekran görüntüsünü al<br><code>/export</code> — Konuşmayı Markdown olarak indir<br><code>/profile</code> — Profil otomatik doldurmayı aç/kapat<br><code>/vision</code> — Aktif sağlayıcıda görme kipini aç/kapat',
+  'sp.help_html': '<strong>Eğik Çizgi Komutları</strong><br><code>/help</code> — Bu listeyi göster<br><code>/schedule</code> — Zamanlanmış görev oluştur<br><code>/list-schedules</code> — Zamanlanmış görevleri göster<br><code>/check-progress</code> — Geçerli ilerleme günlüğünü göster<br><code>/show-scratchpad</code> — Geçerli not defterini göster<br><code>/edit-scratchpad &lt;text&gt;</code> — Geçerli not defterine metin ekle<br><code>/clear-scratchpad</code> — Geçerli not defterini temizle<br><code>/remember &lt;text&gt;</code> — Bir kullanıcı tercihini belleğe kaydet<br><code>/show-memory</code> — Kaydedilmiş kullanıcı belleğini göster<br><code>/forget-memory &lt;id&gt;</code> — Kaydedilmiş bir belleği unut<br><code>/allow-api</code> — Bu konuşma için API mutasyonlarına izin ver<br><code>/dangerously-skip-permissions</code> — İzin istemlerini küresel olarak devre dışı bırak<br><code>/compact</code> — Bu konuşmanın bağlamını sıkıştır<br><code>/verbose</code> — Ayrıntılı/kompakt araç görünümünü aç/kapat<br><code>/reset</code> — Konuşmayı temizle<br><code>/screenshot</code> — Geçerli sekmenin ekran görüntüsünü al<br><code>/export</code> — Konuşmayı Markdown olarak indir<br><code>/export-with-traces</code> — Araç zincirini (izleri) dışa aktar<br><code>/profile</code> — Profil otomatik doldurmayı aç/kapat<br><code>/vision</code> — Aktif sağlayıcıda görme kipini aç/kapat<br><code>/ask</code> — Sor moduna geç<br><code>/act</code> — Uygula moduna geç<br><code>/dev</code> — Dev moduna geç',
   "sp.compact.verbose_on": "Ayrıntılı mod <strong>açık</strong> — tam araç çağrısı JSON'u görünür.",
   "sp.compact.verbose_off": "Ayrıntılı mod <strong>kapalı</strong> — kompakt araç görünümü.",
   "sp.screenshot.error": "Ekran görüntüsü başarısız: {msg}",
@@ -527,7 +527,7 @@ export default {
   'sp.slash.show_scratchpad': 'Mevcut not defterini göster',
   'sp.slash.clear_scratchpad': 'Geçerli not defterini temizle',
   'sp.slash.allow_api': 'Bu konuşma için API değişikliklerine izin ver',
-  'sp.slash.dangerously_skip_permissions': 'Disable permission prompts globally',
+  'sp.slash.dangerously_skip_permissions': 'İzin istemlerini küresel olarak devre dışı bırak',
   'sp.slash.compact': 'Bu konuşmanın bağlamını sıkıştır',
   'sp.slash.verbose': 'Araç görünümünü ayrıntılı ve kompakt arasında geçiş yap',
   'sp.slash.reset': 'Bu konuşmayı temizle',
