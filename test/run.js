@@ -19784,6 +19784,60 @@ test('upload_file (firefox) enforces Content-Length pre-read limit and handles r
   }
 });
 
+test('upload_file (firefox) enforces streaming size limit when Content-Length is absent', async () => {
+  const originalBrowser = globalThis.browser;
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.browser = {
+      downloads: {
+        async search() {
+          return [{ id: 8125, state: 'complete', url: 'https://example.com/stream.zip', filename: '/home/user/Downloads/stream.zip' }];
+        },
+      },
+      tabs: {
+        async get(tabId) {
+          return { id: tabId, url: 'https://example.com/page' };
+        },
+      },
+    };
+
+    let cancelled = false;
+    const oversized = new Uint8Array(26 * 1024 * 1024);
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: {
+        getReader() {
+          let done = false;
+          return {
+            async read() {
+              if (done) return { done: true, value: undefined };
+              done = true;
+              return { done: false, value: oversized };
+            },
+            async cancel() { cancelled = true; },
+          };
+        },
+      },
+      async arrayBuffer() {
+        throw new Error('Should stream via getReader instead of arrayBuffer');
+      },
+    });
+
+    const agent = new AgentFx({});
+    const result = await agent.executeTool(42, 'upload_file', { selector: 'input', downloadId: 8125 });
+    assert.equal(result.success, false);
+    assert.match(result.error, /exceeds 25MB limit/i);
+    assert.equal(cancelled, true, 'reader should be cancelled after exceeding the cap');
+  } finally {
+    if (originalBrowser === undefined) delete globalThis.browser;
+    else globalThis.browser = originalBrowser;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  }
+});
+
 test('_pinDownloadHandles pins downloadIds id-only across download tools (chrome & firefox)', () => {
   for (const AgentClass of [AgentCh, AgentFx]) {
     const agent = new AgentClass({});

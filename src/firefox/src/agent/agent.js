@@ -7712,18 +7712,45 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         if (!res || !res.ok) {
           return { success: false, error: `Failed to re-fetch downloaded file from ${targetUrl} (HTTP ${res ? res.status : 'unknown'})` };
         }
+        const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
         const clHeader = res.headers.get('content-length');
         if (clHeader != null) {
           const expectedLen = parseInt(clHeader, 10);
-          if (Number.isFinite(expectedLen) && expectedLen > 25 * 1024 * 1024) {
+          if (Number.isFinite(expectedLen) && expectedLen > UPLOAD_MAX_BYTES) {
             return { success: false, error: 'File size exceeds 25MB limit.' };
           }
         }
-        const buf = await res.arrayBuffer();
-        if (buf.byteLength > 25 * 1024 * 1024) {
-          return { success: false, error: 'File size exceeds 25MB limit.' };
+        // Stream the body with a hard cap so a missing/lying Content-Length
+        // cannot buffer an arbitrary payload into extension memory.
+        let bytes;
+        if (res.body && typeof res.body.getReader === 'function') {
+          const reader = res.body.getReader();
+          const chunks = [];
+          let total = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const part = value instanceof Uint8Array ? value : new Uint8Array(value);
+            if (total + part.byteLength > UPLOAD_MAX_BYTES) {
+              try { await reader.cancel(); } catch {}
+              return { success: false, error: 'File size exceeds 25MB limit.' };
+            }
+            chunks.push(part);
+            total += part.byteLength;
+          }
+          bytes = new Uint8Array(total);
+          let offset = 0;
+          for (const part of chunks) {
+            bytes.set(part, offset);
+            offset += part.byteLength;
+          }
+        } else {
+          const buf = await res.arrayBuffer();
+          if (buf.byteLength > UPLOAD_MAX_BYTES) {
+            return { success: false, error: 'File size exceeds 25MB limit.' };
+          }
+          bytes = new Uint8Array(buf);
         }
-        const bytes = new Uint8Array(buf);
         let binary = '';
         const chunk = 0x8000;
         for (let i = 0; i < bytes.length; i += chunk) {
