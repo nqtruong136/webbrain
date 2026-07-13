@@ -166,6 +166,8 @@ export default {
   'st.display.language.desc': 'WebBrain プラグインのインターフェース言語です。',
   'st.display.verbose.label': '詳細モード',
   'st.display.verbose.desc': 'ツール呼び出しの詳細・引数・生の JSON 結果をすべて表示します。チャットをすっきり見せるため、デフォルトはオフです。',
+  'st.display.selection_shortcut.label': '選択ショートカット',
+  'st.display.selection_shortcut.desc': 'ページ上のテキストを選択したときに WebBrain ボタンを表示します。オフにしても、右クリックの標準アクションは引き続き使用できます。',
   'st.display.screenshot.label': 'スクリーンショットのフォールバック',
   'st.display.screenshot.desc': 'DOM の読み取りに失敗、または内容が不十分なときにページのスクリーンショットを取得します。画像認識対応モデルが必要です。',
   'st.display.site_adapters.label': 'サイトアダプター',

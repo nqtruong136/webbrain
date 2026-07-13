@@ -168,6 +168,8 @@ export default {
   'st.display.language.desc': 'Язык интерфейса плагина WebBrain.',
   'st.display.verbose.label': 'Подробный режим',
   'st.display.verbose.desc': 'Показывать полные детали вызовов инструментов, аргументы и сырой JSON-результат. По умолчанию выключено для более чистого чата.',
+  'st.display.selection_shortcut.label': 'Быстрое действие для выделения',
+  'st.display.selection_shortcut.desc': 'Показывать кнопку WebBrain при выделении текста на странице. Встроенное действие в контекстном меню останется доступным, даже если эта настройка выключена.',
   'st.display.screenshot.label': 'Скриншот как резерв',
   'st.display.screenshot.desc': 'Делать скриншот страницы, когда чтение DOM не удаётся или возвращает недостаточно содержимого. Требуется модель с поддержкой зрения.',
   'st.display.site_adapters.label': 'Адаптеры для сайтов',

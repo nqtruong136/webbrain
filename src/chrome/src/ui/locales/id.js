@@ -168,6 +168,8 @@ export default {
   'st.display.language.desc': 'Bahasa antarmuka untuk plugin WebBrain.',
   'st.display.verbose.label': 'Mode terperinci',
   'st.display.verbose.desc': 'Tampilkan detail lengkap pemanggilan alat, argumen, dan hasil JSON mentah. Nonaktif secara bawaan demi tampilan obrolan yang lebih bersih.',
+  'st.display.selection_shortcut.label': 'Pintasan pilihan',
+  'st.display.selection_shortcut.desc': 'Tampilkan tombol WebBrain saat Anda memilih teks di halaman. Tindakan klik kanan bawaan tetap tersedia saat opsi ini dimatikan.',
   'st.display.screenshot.label': 'Tangkapan layar cadangan',
   'st.display.screenshot.desc': 'Ambil tangkapan layar halaman saat pembacaan DOM gagal atau mengembalikan konten yang kurang. Memerlukan model yang mendukung visi.',
   'st.display.site_adapters.label': 'Adaptor situs',

@@ -168,6 +168,8 @@ export default {
   'st.display.language.desc': 'Langue de l\'interface de l\'extension WebBrain.',
   'st.display.verbose.label': 'Mode détaillé',
   'st.display.verbose.desc': 'Affiche tous les détails des appels d\'outils, les arguments et les résultats JSON bruts. Désactivé par défaut pour un chat plus épuré.',
+  'st.display.selection_shortcut.label': 'Raccourci de sélection',
+  'st.display.selection_shortcut.desc': 'Affiche un bouton WebBrain lorsque vous sélectionnez du texte sur une page. L’action native du menu contextuel reste disponible lorsque cette option est désactivée.',
   'st.display.screenshot.label': 'Capture de secours',
   'st.display.screenshot.desc': 'Capture une image de la page quand la lecture du DOM échoue ou renvoie un contenu insuffisant. Nécessite un modèle compatible vision.',
   'st.display.site_adapters.label': 'Adaptateurs de site',

@@ -18,7 +18,12 @@ import {
   getClaudeOAuthStatus,
 } from './providers/oauth-claude.js';
 import { getBalance as capsolverGetBalance } from './agent/captcha-solver.js';
-import { buildContextMenuPrompt, createContextMenuStorage } from './context-menu-storage.js';
+import {
+  SELECTION_TRANSLATION_LANGUAGES,
+  buildContextMenuPrompt,
+  buildSelectionPrompt,
+  createContextMenuStorage,
+} from './context-menu-storage.js';
 import { normalizeOllamaLaunchHandoff } from './ollama-handoff.js';
 import { RunUiJournal } from './run-ui-journal.js';
 import {
@@ -74,6 +79,11 @@ scheduler.start();
 const MAX_AGENT_STEPS_DEFAULT = 130;
 const MAX_AGENT_STEPS_UNLIMITED_SENTINEL = 200;
 const CONTEXT_MENU_ASK_SELECTION_ID = 'webbrain-ask-selection';
+const CONTEXT_MENU_OPEN_CHAT_ID = 'webbrain-selection-open-chat';
+const CONTEXT_MENU_ACTION_PREFIX = 'webbrain-selection-action-';
+const CONTEXT_MENU_TRANSLATE_ID = 'webbrain-selection-translate';
+const CONTEXT_MENU_TRANSLATE_PREFIX = 'webbrain-selection-translate-';
+const CONTEXT_MENU_GENERIC_ASK_ID = 'webbrain-selection-generic-ask';
 
 function getContextMenuApi() {
   return browser.contextMenus || browser.menus || null;
@@ -89,13 +99,9 @@ function createContextMenus() {
   const api = getContextMenuApi();
   if (!api?.create) return;
 
-  const create = () => {
+  const createItem = (item) => {
     try {
-      const result = api.create({
-        id: CONTEXT_MENU_ASK_SELECTION_ID,
-        title: 'Ask WebBrain about this',
-        contexts: ['selection'],
-      });
+      const result = api.create(item);
       Promise.resolve(result).catch((e) => {
         if (!/duplicate/i.test(String(e?.message || e))) {
           console.warn('[WebBrain] Failed to create context menu:', e?.message || e);
@@ -108,8 +114,32 @@ function createContextMenus() {
     }
   };
 
+  const create = () => {
+    createItem({
+      id: CONTEXT_MENU_ASK_SELECTION_ID,
+      title: 'Ask WebBrain about this',
+      contexts: ['selection'],
+    });
+    createItem({ id: CONTEXT_MENU_OPEN_CHAT_ID, parentId: CONTEXT_MENU_ASK_SELECTION_ID, title: 'Open sidebar to chat', contexts: ['selection'] });
+    createItem({ id: 'webbrain-selection-separator-1', parentId: CONTEXT_MENU_ASK_SELECTION_ID, type: 'separator', contexts: ['selection'] });
+    for (const [action, title] of [
+      ['summarize', 'Summarize'],
+      ['explain', 'Explain'],
+      ['quiz', 'Quiz me'],
+      ['proofread', 'Proofread'],
+    ]) {
+      createItem({ id: `${CONTEXT_MENU_ACTION_PREFIX}${action}`, parentId: CONTEXT_MENU_ASK_SELECTION_ID, title, contexts: ['selection'] });
+    }
+    createItem({ id: CONTEXT_MENU_TRANSLATE_ID, parentId: CONTEXT_MENU_ASK_SELECTION_ID, title: 'Translate to', contexts: ['selection'] });
+    for (const [code, title] of Object.entries(SELECTION_TRANSLATION_LANGUAGES)) {
+      createItem({ id: `${CONTEXT_MENU_TRANSLATE_PREFIX}${code}`, parentId: CONTEXT_MENU_TRANSLATE_ID, title, contexts: ['selection'] });
+    }
+    createItem({ id: 'webbrain-selection-separator-2', parentId: CONTEXT_MENU_ASK_SELECTION_ID, type: 'separator', contexts: ['selection'] });
+    createItem({ id: CONTEXT_MENU_GENERIC_ASK_ID, parentId: CONTEXT_MENU_ASK_SELECTION_ID, title: 'Ask about this', contexts: ['selection'] });
+  };
+
   try {
-    Promise.resolve(api.remove(CONTEXT_MENU_ASK_SELECTION_ID))
+    Promise.resolve(api.removeAll())
       .catch(() => {})
       .then(create);
   } catch {
@@ -852,8 +882,21 @@ function openSidebarForContextMenu(tab) {
 }
 
 async function handleContextMenuAsk(info, tab) {
-  if (info?.menuItemId !== CONTEXT_MENU_ASK_SELECTION_ID || !tab?.id) return;
-  const text = buildContextMenuPrompt(info.selectionText);
+  if (!tab?.id) return;
+  const menuItemId = String(info?.menuItemId || '');
+  if (menuItemId === CONTEXT_MENU_OPEN_CHAT_ID) {
+    openSidebarForContextMenu(tab);
+    return;
+  }
+
+  let text = '';
+  if (menuItemId === CONTEXT_MENU_GENERIC_ASK_ID) {
+    text = buildContextMenuPrompt(info.selectionText);
+  } else if (menuItemId.startsWith(CONTEXT_MENU_ACTION_PREFIX)) {
+    text = buildSelectionPrompt(info.selectionText, menuItemId.slice(CONTEXT_MENU_ACTION_PREFIX.length));
+  } else if (menuItemId.startsWith(CONTEXT_MENU_TRANSLATE_PREFIX)) {
+    text = buildSelectionPrompt(info.selectionText, 'translate', '', menuItemId.slice(CONTEXT_MENU_TRANSLATE_PREFIX.length));
+  }
   if (!text) return;
 
   const payload = {
@@ -874,6 +917,38 @@ async function handleContextMenuAsk(info, tab) {
 
 getContextMenuApi()?.onClicked?.addListener?.((info, tab) => {
   handleContextMenuAsk(info, tab).catch(() => {});
+});
+
+// Firefox does not treat a click in an injected page UI as an authorized
+// sidebarAction.open() gesture. Persist and notify the existing sidebar when
+// it is open; otherwise startup recovery will consume the prompt after the
+// user opens WebBrain manually.
+browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== 'WB_SELECTION_SHORTCUT_SUBMIT') return;
+  const tab = sender?.tab;
+  const text = buildSelectionPrompt(msg.selectionText, msg.action, msg.question, msg.language);
+  if (!tab?.id || !text) {
+    sendResponse({ ok: false, queued: false, requiresManualOpen: true, error: 'Invalid selection shortcut request.' });
+    return;
+  }
+
+  const payload = {
+    id: `selection-${tab.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    tabId: tab.id,
+    text,
+    createdAt: Date.now(),
+  };
+
+  (async () => {
+    try {
+      await contextMenuStorage.save(tab.id, payload);
+    } catch {}
+    notifySidePanelOfContextMenuPrompt(payload);
+    return { ok: true, queued: true, requiresManualOpen: true };
+  })().then(sendResponse).catch((error) => {
+    sendResponse({ ok: false, queued: false, requiresManualOpen: true, error: error?.message || String(error) });
+  });
+  return true;
 });
 
 // Forget the per-window mapping when the user manually ungroups.

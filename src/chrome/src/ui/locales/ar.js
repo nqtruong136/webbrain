@@ -168,6 +168,8 @@ export default {
   'st.display.language.desc': 'لغة واجهة إضافة WebBrain.',
   'st.display.verbose.label': 'الوضع المفصّل',
   'st.display.verbose.desc': 'إظهار تفاصيل استدعاءات الأدوات كاملة، والمعطيات، ونتائج JSON الأولية. مُعطَّل افتراضيًا للحصول على تجربة محادثة أنظف.',
+  'st.display.selection_shortcut.label': 'اختصار التحديد',
+  'st.display.selection_shortcut.desc': 'اعرض زر WebBrain عند تحديد نص في صفحة. يظل إجراء النقر بزر الماوس الأيمن الأصلي متاحًا عند إيقاف هذا الخيار.',
   'st.display.screenshot.label': 'لقطة شاشة احتياطية',
   'st.display.screenshot.desc': 'التقاط لقطة شاشة للصفحة عند فشل قراءة DOM أو إذا أعادت محتوى غير كافٍ. يتطلّب نموذجًا يدعم الرؤية.',
   'st.display.site_adapters.label': 'محوّلات المواقع',

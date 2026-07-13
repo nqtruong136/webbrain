@@ -18,9 +18,14 @@ import {
   getClaudeOAuthStatus,
 } from './providers/oauth-claude.js';
 import { getBalance as capsolverGetBalance } from './agent/captcha-solver.js';
-import { buildContextMenuPrompt, createContextMenuStorage } from './context-menu-storage.js';
-// (ensureOffscreen + transcribeAudio used to be imported here; both are
-// now consumed inside src/recorder/host.js, which background.js calls into.)
+import { createCloudRunController } from './cloud-runs.js';
+import { ensureOffscreen } from './offscreen/ensure.js';
+import {
+  SELECTION_TRANSLATION_LANGUAGES,
+  buildContextMenuPrompt,
+  buildSelectionPrompt,
+  createContextMenuStorage,
+} from './context-menu-storage.js';
 import {
   prepareRecordingHost,
   startTabRecording,
@@ -86,9 +91,22 @@ scheduler.start();
 // happen AFTER providerManager is constructed.
 setRecorderProviderManager(providerManager);
 
+const cloudRunController = createCloudRunController({
+  chromeApi: chrome,
+  agent,
+  ensureOffscreen,
+  sendIndicator: (tabId, type) => sendIndicatorMessage(tabId, type),
+});
+cloudRunController.syncBridge().catch(() => {});
+
 const MAX_AGENT_STEPS_DEFAULT = 130;
 const MAX_AGENT_STEPS_UNLIMITED_SENTINEL = 200;
 const CONTEXT_MENU_ASK_SELECTION_ID = 'webbrain-ask-selection';
+const CONTEXT_MENU_OPEN_CHAT_ID = 'webbrain-selection-open-chat';
+const CONTEXT_MENU_ACTION_PREFIX = 'webbrain-selection-action-';
+const CONTEXT_MENU_TRANSLATE_ID = 'webbrain-selection-translate';
+const CONTEXT_MENU_TRANSLATE_PREFIX = 'webbrain-selection-translate-';
+const CONTEXT_MENU_GENERIC_ASK_ID = 'webbrain-selection-generic-ask';
 
 function getContextMenuPromptStore() {
   return chrome.storage?.session || chrome.storage?.local || null;
@@ -98,19 +116,39 @@ const contextMenuStorage = createContextMenuStorage(getContextMenuPromptStore);
 
 function createContextMenus() {
   if (!chrome.contextMenus?.create) return;
-  chrome.contextMenus.remove(CONTEXT_MENU_ASK_SELECTION_ID, () => {
-    // Nonexistent menu IDs set lastError; that is expected on first install.
-    void chrome.runtime.lastError;
-    chrome.contextMenus.create({
-      id: CONTEXT_MENU_ASK_SELECTION_ID,
-      title: 'Ask WebBrain about this',
-      contexts: ['selection'],
-    }, () => {
+
+  const create = (item) => {
+    chrome.contextMenus.create(item, () => {
       const err = chrome.runtime.lastError;
       if (err && !/duplicate/i.test(String(err.message || err))) {
         console.warn('[WebBrain] Failed to create context menu:', err.message || err);
       }
     });
+  };
+
+  chrome.contextMenus.removeAll(() => {
+    void chrome.runtime.lastError;
+    create({
+      id: CONTEXT_MENU_ASK_SELECTION_ID,
+      title: 'Ask WebBrain about this',
+      contexts: ['selection'],
+    });
+    create({ id: CONTEXT_MENU_OPEN_CHAT_ID, parentId: CONTEXT_MENU_ASK_SELECTION_ID, title: 'Open side panel to chat', contexts: ['selection'] });
+    create({ id: 'webbrain-selection-separator-1', parentId: CONTEXT_MENU_ASK_SELECTION_ID, type: 'separator', contexts: ['selection'] });
+    for (const [action, title] of [
+      ['summarize', 'Summarize'],
+      ['explain', 'Explain'],
+      ['quiz', 'Quiz me'],
+      ['proofread', 'Proofread'],
+    ]) {
+      create({ id: `${CONTEXT_MENU_ACTION_PREFIX}${action}`, parentId: CONTEXT_MENU_ASK_SELECTION_ID, title, contexts: ['selection'] });
+    }
+    create({ id: CONTEXT_MENU_TRANSLATE_ID, parentId: CONTEXT_MENU_ASK_SELECTION_ID, title: 'Translate to', contexts: ['selection'] });
+    for (const [code, title] of Object.entries(SELECTION_TRANSLATION_LANGUAGES)) {
+      create({ id: `${CONTEXT_MENU_TRANSLATE_PREFIX}${code}`, parentId: CONTEXT_MENU_TRANSLATE_ID, title, contexts: ['selection'] });
+    }
+    create({ id: 'webbrain-selection-separator-2', parentId: CONTEXT_MENU_ASK_SELECTION_ID, type: 'separator', contexts: ['selection'] });
+    create({ id: CONTEXT_MENU_GENERIC_ASK_ID, parentId: CONTEXT_MENU_ASK_SELECTION_ID, title: 'Ask about this', contexts: ['selection'] });
   });
 }
 
@@ -161,7 +199,9 @@ async function loadImageBudget() {
   if (stored.maxScreenshotsPerTurn != null) agent.maxScreenshotsPerTurn = stored.maxScreenshotsPerTurn;
   if (stored.maxImageDimension != null) agent.maxImageDimension = stored.maxImageDimension;
 }
-loadImageBudget();
+// Retained so handleMessage can await hydration on a cold SW start — the first
+// chat must not race ahead of the persisted image-budget settings (issue #311).
+const imageBudgetReady = loadImageBudget().catch(() => {});
 
 async function loadStrictSecretMode() {
   const stored = await chrome.storage.local.get('strictSecretMode');
@@ -660,6 +700,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await providerManager.load();
   await loadMaxSteps();
   await syncAgentUserMemoryFromStorage().catch(() => {});
+  await cloudRunController.syncBridge().catch(() => {});
   scheduleUserMemoryExtractionDrain(5000);
   console.log('[WebBrain] Extension installed, providers loaded.');
 });
@@ -670,6 +711,7 @@ chrome.runtime.onStartup?.addListener(async () => {
   await providerManager.load();
   await loadMaxSteps();
   await syncAgentUserMemoryFromStorage().catch(() => {});
+  await cloudRunController.syncBridge().catch(() => {});
   scheduleUserMemoryExtractionDrain(5000);
 });
 
@@ -677,6 +719,9 @@ chrome.runtime.onStartup?.addListener(async () => {
 chrome.storage.onChanged.addListener((changes) => {
   if (PROFILE_SYNC_DATA_KEYS.some((key) => changes[key])) profileSync.noteChanges(changes).catch(() => {});
   if (changes.providers || changes.activeProvider) providerManager.load().catch(() => {});
+  if (changes.webbrainCloudBridgeEnabled || changes.webbrainCloudBridgeUrl) {
+    cloudRunController.syncBridge().catch(() => {});
+  }
   if (changes.maxAgentSteps) {
     agent.maxSteps = normalizeMaxAgentSteps(changes.maxAgentSteps.newValue);
   }
@@ -955,8 +1000,21 @@ function openSidePanelForContextMenu(tab) {
 }
 
 async function handleContextMenuAsk(info, tab) {
-  if (info?.menuItemId !== CONTEXT_MENU_ASK_SELECTION_ID || !tab?.id) return;
-  const text = buildContextMenuPrompt(info.selectionText);
+  if (!tab?.id) return;
+  const menuItemId = String(info?.menuItemId || '');
+  if (menuItemId === CONTEXT_MENU_OPEN_CHAT_ID) {
+    openSidePanelForContextMenu(tab);
+    return;
+  }
+
+  let text = '';
+  if (menuItemId === CONTEXT_MENU_GENERIC_ASK_ID) {
+    text = buildContextMenuPrompt(info.selectionText);
+  } else if (menuItemId.startsWith(CONTEXT_MENU_ACTION_PREFIX)) {
+    text = buildSelectionPrompt(info.selectionText, menuItemId.slice(CONTEXT_MENU_ACTION_PREFIX.length));
+  } else if (menuItemId.startsWith(CONTEXT_MENU_TRANSLATE_PREFIX)) {
+    text = buildSelectionPrompt(info.selectionText, 'translate', '', menuItemId.slice(CONTEXT_MENU_TRANSLATE_PREFIX.length));
+  }
   if (!text) return;
 
   const payload = {
@@ -978,6 +1036,38 @@ async function handleContextMenuAsk(info, tab) {
 
 chrome.contextMenus?.onClicked?.addListener?.((info, tab) => {
   handleContextMenuAsk(info, tab).catch(() => {});
+});
+
+// Selection-shortcut clicks originate in a content script. Keep this listener
+// synchronous until sidePanel.open() so Chrome preserves the originating user
+// gesture; prompt recovery storage can finish afterward.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== 'WB_SELECTION_SHORTCUT_SUBMIT') return;
+  const tab = sender?.tab;
+  const text = buildSelectionPrompt(msg.selectionText, msg.action, msg.question, msg.language);
+  if (!tab?.id || !text) {
+    sendResponse({ ok: false, queued: false, requiresManualOpen: false, error: 'Invalid selection shortcut request.' });
+    return;
+  }
+
+  const payload = {
+    id: `selection-${tab.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    tabId: tab.id,
+    text,
+    createdAt: Date.now(),
+  };
+
+  openSidePanelForContextMenu(tab);
+  (async () => {
+    try {
+      await contextMenuStorage.save(tab.id, payload);
+    } catch {}
+    notifySidePanelOfContextMenuPrompt(payload);
+    return { ok: true, queued: true, requiresManualOpen: false };
+  })().then(sendResponse).catch((error) => {
+    sendResponse({ ok: false, queued: false, requiresManualOpen: false, error: error?.message || String(error) });
+  });
+  return true;
 });
 
 // (See the panel visibility comment above for why we no longer
@@ -1443,9 +1533,22 @@ async function handleMessage(msg, sender) {
     // storage round-trip on every message.
     await Promise.all([planBeforeActReady, planReviewReady, customSkillsReady, userMemoryReady]);
     await screenshotRedactionReady;
+    await imageBudgetReady;
   }
 
   switch (msg.action) {
+    case 'cloud_run':
+      return await cloudRunController.startRun(msg);
+    case 'cloud_status':
+      return await cloudRunController.status(msg);
+    case 'cloud_abort':
+      return await cloudRunController.abort(msg);
+    case 'cloud_bridge_start':
+      return await cloudRunController.startBridge(msg.url);
+    case 'cloud_bridge_stop':
+      return await cloudRunController.stopBridge();
+    case 'cloud_bridge_status':
+      return await cloudRunController.bridgeStatus();
     case 'prepare_recording_host':
       return await prepareRecordingHost();
     case 'start_tab_recording': {

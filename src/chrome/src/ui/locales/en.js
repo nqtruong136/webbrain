@@ -380,6 +380,8 @@ export default {
   'st.display.advanced': 'Advanced',
   'st.display.verbose.label': 'Verbose Mode',
   'st.display.verbose.desc': 'Show full tool call details, arguments, and raw JSON results. Off by default for a cleaner chat experience.',
+  'st.display.selection_shortcut.label': 'Selection shortcut',
+  'st.display.selection_shortcut.desc': 'Show a WebBrain button when you select text on a page. The native right-click action remains available when this is off.',
   'st.display.screenshot.label': 'Screenshot Fallback',
   'st.display.screenshot.desc': 'Capture a screenshot of the page when DOM reading fails or returns insufficient content. Requires a vision-capable model.',
   'st.display.site_adapters.label': 'Site adapters',

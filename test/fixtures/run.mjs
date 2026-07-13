@@ -23,6 +23,8 @@ const accessibilityTreeJsPath = path.join(root, 'src', 'chrome', 'src', 'content
 const firefoxAccessibilityTreeJsPath = path.join(root, 'src', 'firefox', 'src', 'content', 'accessibility-tree.js');
 const contentJsPath = path.join(root, 'src', 'chrome', 'src', 'content', 'content.js');
 const firefoxContentJsPath = path.join(root, 'src', 'firefox', 'src', 'content', 'content.js');
+const selectionShortcutJsPath = path.join(root, 'src', 'chrome', 'src', 'content', 'selection-shortcut.js');
+const firefoxSelectionShortcutJsPath = path.join(root, 'src', 'firefox', 'src', 'content', 'selection-shortcut.js');
 const smdJsPath = path.join(root, 'src', 'chrome', 'src', 'agent', 'social-media-downloader.js');
 
 function fixtureUrl(name) {
@@ -110,8 +112,202 @@ async function collectSmd(page, mode = 'auto') {
   }, mode);
 }
 
+async function setupSelectionShortcut(page, sourcePath, { enabled = true, requiresManualOpen = false, locale = 'en' } = {}) {
+  await page.setViewportSize({ width: 360, height: 280 });
+  await page.setContent(`<!doctype html>
+    <style>body{margin:0;font:18px/1.5 sans-serif} #copy{position:absolute;right:2px;bottom:2px;width:210px}</style>
+    <p id="copy">Selected words near the viewport edge for WebBrain.</p>
+    <div id="editor" contenteditable="true">Editable selection text.</div>`);
+  await page.addScriptTag({ content: `
+    window.__selectionMessages = [];
+    window.__selectionStorage = { selectionShortcutEnabled: ${enabled ? 'true' : 'false'}, wbLocale: '${locale}' };
+    window.__selectionRuntimeListeners = [];
+    window.__selectionStorageListeners = [];
+    window.chrome = {
+      runtime: {
+        sendMessage: async (message) => {
+          window.__selectionMessages.push(message);
+          return { ok: true, queued: true, requiresManualOpen: ${requiresManualOpen ? 'true' : 'false'} };
+        },
+        onMessage: { addListener: (listener) => window.__selectionRuntimeListeners.push(listener) }
+      },
+      storage: {
+        local: {
+          get: async (defaults) => ({ ...defaults, ...window.__selectionStorage }),
+          set: async (update) => {
+            const changes = {};
+            for (const [key, value] of Object.entries(update)) {
+              changes[key] = { oldValue: window.__selectionStorage[key], newValue: value };
+              window.__selectionStorage[key] = value;
+            }
+            window.__selectionStorageListeners.forEach((listener) => listener(changes, 'local'));
+          }
+        },
+        onChanged: { addListener: (listener) => window.__selectionStorageListeners.push(listener) }
+      }
+    };
+    window.__setSelectionShortcutEnabled = async (value) => {
+      await window.chrome.storage.local.set({ selectionShortcutEnabled: value });
+    };
+    window.__setSelectionShortcutLocale = async (value) => {
+      await window.chrome.storage.local.set({ wbLocale: value });
+    };
+    window.__sendSelectionRuntimeMessage = (message) => {
+      window.__selectionRuntimeListeners.forEach((listener) => listener(message, {}, () => {}));
+    };
+  ` });
+  const src = await readFile(sourcePath, 'utf-8');
+  await page.addScriptTag({ content: src });
+  await page.waitForFunction(() => typeof window.__webbrainSelectionShortcut?.getState === 'function');
+}
+
+async function selectFixtureText(page, selector = '#copy') {
+  await page.evaluate(async (targetSelector) => {
+    const target = document.querySelector(targetSelector);
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+  }, selector);
+  await page.waitForFunction(() => window.__webbrainSelectionShortcut.getState().shortcutVisible);
+  await page.waitForTimeout(20);
+  return page.evaluate(() => window.__webbrainSelectionShortcut.getState());
+}
+
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
+
+for (const [label, sourcePath, manualOpen] of [
+  ['Chrome', selectionShortcutJsPath, false],
+  ['Firefox', firefoxSelectionShortcutJsPath, true],
+]) {
+  test(`${label}: selection shortcut clamps to the viewport and supports keyboard dismissal`, async (page) => {
+    await setupSelectionShortcut(page, sourcePath, { requiresManualOpen: manualOpen });
+    const state = await selectFixtureText(page);
+    const rect = state.shortcutRect;
+    if (!rect || rect.left < 8 || rect.top < 8 || rect.right > 352 || rect.bottom > 272) {
+      throw new Error(`shortcut was not clamped to the viewport: ${JSON.stringify(rect)}`);
+    }
+    await page.mouse.click(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    let popupState = await page.evaluate(() => window.__webbrainSelectionShortcut.getState());
+    if (!popupState.popupVisible) throw new Error('popup did not open for the selected text');
+    await page.keyboard.press('Escape');
+    popupState = await page.evaluate(() => window.__webbrainSelectionShortcut.getState());
+    if (popupState.popupVisible || !popupState.shortcutVisible) {
+      throw new Error(`Escape should close the popup and retain the shortcut: ${JSON.stringify(popupState)}`);
+    }
+  });
+
+  test(`${label}: selection shortcut submits once and dismisses before delivery`, async (page) => {
+    await setupSelectionShortcut(page, sourcePath, { requiresManualOpen: manualOpen });
+    const selectedState = await selectFixtureText(page, '#editor');
+    const shortcutRect = selectedState.shortcutRect;
+    await page.mouse.click(shortcutRect.left + shortcutRect.width / 2, shortcutRect.top + shortcutRect.height / 2);
+    const openState = await page.evaluate(() => window.__webbrainSelectionShortcut.getState());
+    const summarizeRect = openState.summarizeRect;
+    if (!summarizeRect) throw new Error('Summarize action was not visible after opening the popup');
+    await page.mouse.click(summarizeRect.left + summarizeRect.width / 2, summarizeRect.top + summarizeRect.height / 2);
+    await page.waitForFunction(() => window.__selectionMessages.length === 1);
+    await page.evaluate(() => window.__webbrainSelectionShortcut.submitPreset('summarize'));
+    const result = await page.evaluate(() => ({
+      messages: window.__selectionMessages,
+      state: window.__webbrainSelectionShortcut.getState(),
+    }));
+    if (result.messages.length !== 1) throw new Error(`expected exactly one submission, got ${result.messages.length}`);
+    if (result.messages[0].action !== 'summarize' || !/Editable selection text/.test(result.messages[0].selectionText)) {
+      throw new Error(`unexpected selection request: ${JSON.stringify(result.messages[0])}`);
+    }
+    if (result.state.shortcutVisible || result.state.popupVisible) {
+      throw new Error(`surface should dismiss before delivery: ${JSON.stringify(result.state)}`);
+    }
+
+    await selectFixtureText(page);
+    await page.evaluate(() => window.__webbrainSelectionShortcut.submitCustom('   '));
+    let messages = await page.evaluate(() => window.__selectionMessages.length);
+    if (messages !== 1) throw new Error('blank custom questions should not submit');
+    await page.evaluate(() => window.__webbrainSelectionShortcut.submitCustom('What is the point?'));
+    messages = await page.evaluate(() => window.__selectionMessages);
+    if (messages.length !== 2 || messages[1].action !== 'custom' || messages[1].question !== 'What is the point?') {
+      throw new Error(`custom question was not submitted correctly: ${JSON.stringify(messages)}`);
+    }
+
+    await page.evaluate(() => window.__setSelectionShortcutLocale('tr'));
+    const translationSelection = await selectFixtureText(page);
+    const translationShortcutRect = translationSelection.shortcutRect;
+    await page.mouse.click(
+      translationShortcutRect.left + translationShortcutRect.width / 2,
+      translationShortcutRect.top + translationShortcutRect.height / 2,
+    );
+    const translateState = await page.evaluate(() => window.__webbrainSelectionShortcut.getState());
+    const translateRect = translateState.translateRect;
+    if (!translateRect) throw new Error('Translate action was not visible in the popup');
+    await page.mouse.click(translateRect.left + translateRect.width / 2, translateRect.top + translateRect.height / 2);
+    await page.waitForFunction(() => window.__selectionMessages.length === 3);
+    const translated = await page.evaluate(() => ({
+      message: window.__selectionMessages[2],
+      state: window.__webbrainSelectionShortcut.getState(),
+    }));
+    if (translated.message.action !== 'translate' || translated.message.language !== 'tr') {
+      throw new Error(`translation request was not submitted correctly: ${JSON.stringify(translated.message)}`);
+    }
+    if (translated.state.popupVisible || translated.state.shortcutVisible) {
+      throw new Error(`Translate should submit directly and dismiss the surface: ${JSON.stringify(translated.state)}`);
+    }
+
+    await page.evaluate(() => window.__setSelectionShortcutLocale('fr'));
+    const updatedLocaleSelection = await selectFixtureText(page);
+    const updatedLocaleShortcutRect = updatedLocaleSelection.shortcutRect;
+    await page.mouse.click(
+      updatedLocaleShortcutRect.left + updatedLocaleShortcutRect.width / 2,
+      updatedLocaleShortcutRect.top + updatedLocaleShortcutRect.height / 2,
+    );
+    const updatedLocaleState = await page.evaluate(() => window.__webbrainSelectionShortcut.getState());
+    await page.mouse.click(
+      updatedLocaleState.translateRect.left + updatedLocaleState.translateRect.width / 2,
+      updatedLocaleState.translateRect.top + updatedLocaleState.translateRect.height / 2,
+    );
+    await page.waitForFunction(() => window.__selectionMessages.length === 4);
+    const updatedLocaleMessage = await page.evaluate(() => window.__selectionMessages[3]);
+    if (updatedLocaleMessage.action !== 'translate' || updatedLocaleMessage.language !== 'fr') {
+      throw new Error(`Translate did not follow the updated plugin locale: ${JSON.stringify(updatedLocaleMessage)}`);
+    }
+  });
+
+  test(`${label}: selection shortcut persists hiding and suppresses screenshot-time UI`, async (page) => {
+    await setupSelectionShortcut(page, sourcePath, { requiresManualOpen: manualOpen });
+    await selectFixtureText(page);
+    if (manualOpen) {
+      await page.evaluate(() => window.__webbrainSelectionShortcut.submitPreset('summarize'));
+      const toastState = await page.evaluate(() => window.__webbrainSelectionShortcut.getState());
+      if (!toastState.toastVisible) throw new Error(`manual-open guidance toast was not visible: ${JSON.stringify(toastState)}`);
+    }
+    await page.evaluate(() => window.__sendSelectionRuntimeMessage({ type: 'WB_HIDE_FOR_TOOL_USE' }));
+    let state = await page.evaluate(() => window.__webbrainSelectionShortcut.getState());
+    if (!state.suppressed || state.shortcutVisible || state.toastVisible) {
+      throw new Error(`tool-use hide should suppress the complete surface: ${JSON.stringify(state)}`);
+    }
+    await page.evaluate(() => window.__sendSelectionRuntimeMessage({ type: 'WB_SHOW_AFTER_TOOL_USE' }));
+    await selectFixtureText(page);
+    await page.evaluate(() => window.__webbrainSelectionShortcut.hideShortcut());
+    let stored = await page.evaluate(() => window.__selectionStorage.selectionShortcutEnabled);
+    if (stored !== false) throw new Error('Hide selection shortcut did not persist false');
+
+    await page.evaluate(() => {
+      document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    });
+    await page.waitForTimeout(20);
+    state = await page.evaluate(() => window.__webbrainSelectionShortcut.getState());
+    if (state.shortcutVisible) throw new Error('disabled shortcut reappeared after selection');
+
+    await page.evaluate(() => window.__setSelectionShortcutEnabled(true));
+    state = await selectFixtureText(page);
+    stored = await page.evaluate(() => window.__selectionStorage.selectionShortcutEnabled);
+    if (stored !== true || !state.shortcutVisible) throw new Error('settings re-enable did not restore future shortcut detection');
+  });
+}
 
 const gmailComposeRecipientFixture = `<!doctype html>
   <style>
