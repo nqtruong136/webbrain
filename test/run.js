@@ -4180,6 +4180,12 @@ test('cloud run controller uses the visible tab and persists terminal status', a
       nested: {
         apiKey: 'sk-test',
         sessionToken: 'session-secret',
+        accessKeyId: 'AKIAEXAMPLE',
+        secretAccessKey: 'aws-secret',
+        pin: '1234',
+        pinCode: '9999',
+        spin: 'keep-me',
+        mapPin: 'also-keep',
         headers: { 'x-api-key': 'header-secret' },
       },
       screenshot: `data:image/png;base64,${'a'.repeat(600)}`,
@@ -4192,6 +4198,12 @@ test('cloud run controller uses the visible tab and persists terminal status', a
   assert.equal(running.updates[2].data.args.authorization, '[redacted]');
   assert.equal(running.updates[2].data.args.nested.apiKey, '[redacted]');
   assert.equal(running.updates[2].data.args.nested.sessionToken, '[redacted]');
+  assert.equal(running.updates[2].data.args.nested.accessKeyId, '[redacted]');
+  assert.equal(running.updates[2].data.args.nested.secretAccessKey, '[redacted]');
+  assert.equal(running.updates[2].data.args.nested.pin, '[redacted]');
+  assert.equal(running.updates[2].data.args.nested.pinCode, '[redacted]');
+  assert.equal(running.updates[2].data.args.nested.spin, 'keep-me');
+  assert.equal(running.updates[2].data.args.nested.mapPin, 'also-keep');
   assert.equal(running.updates[2].data.args.nested.headers['x-api-key'], '[redacted]');
   assert.match(running.updates[2].data.args.screenshot, /^\[image omitted:/);
   finishRun('Google');
@@ -4200,6 +4212,56 @@ test('cloud run controller uses the visible tab and persists terminal status', a
   assert.equal(completed.status, 'completed');
   assert.equal(completed.result, 'Google');
   assert.equal(session.webbrainCloudRunSnapshots[0].status, 'completed');
+});
+
+test('cloud run text_delta coalesce scrubs live status payloads', async () => {
+  const session = {};
+  const tab = { id: 22, url: 'https://webbrain.one/', active: true, windowId: 3 };
+  let finishRun;
+  let emitUpdate;
+  const controller = createCloudRunController({
+    chromeApi: {
+      tabs: {
+        query: async () => [tab],
+        get: async () => tab,
+        update: async () => tab,
+      },
+      windows: { update: async () => ({}) },
+      storage: {
+        local: { get: async () => ({ webbrainCloudBridgeEnabled: false }) },
+        session: {
+          get: async key => ({ [key]: session[key] || [] }),
+          set: async value => Object.assign(session, value),
+        },
+      },
+      runtime: { sendMessage: async () => ({ connected: false }) },
+    },
+    agent: {
+      isRunning: () => false,
+      abort: () => {},
+      processMessage: (_tabId, _task, onUpdate) => {
+        emitUpdate = onUpdate;
+        return new Promise(resolve => { finishRun = resolve; });
+      },
+    },
+    ensureOffscreen: async () => {},
+    makeRunId: () => 'run_delta_scrub',
+  });
+
+  await controller.startRun({ task: 'Stream a large reply' });
+  emitUpdate('text_delta', { content: 'a'.repeat(10 * 1024) });
+  emitUpdate('text_delta', { content: 'b'.repeat(10 * 1024) });
+  emitUpdate('text_delta', { content: 'c'.repeat(10 * 1024) });
+  const running = await controller.status({ runId: 'run_delta_scrub' });
+  assert.equal(running.updates.length, 1, 'consecutive text_delta events should upsert one seq');
+  assert.equal(running.updates[0].seq, 1);
+  assert.ok(
+    running.updates[0].data.content.length <= 16 * 1024 + 80,
+    'coalesced text_delta must re-apply CLOUD_STRING_LIMIT on the live status row',
+  );
+  assert.match(running.updates[0].data.content, /truncated .* chars for cloud persistence/);
+  finishRun('done');
+  await new Promise(resolve => setTimeout(resolve, 0));
 });
 
 test('cloud run controller keeps the newest 200 monotonically sequenced updates', async () => {

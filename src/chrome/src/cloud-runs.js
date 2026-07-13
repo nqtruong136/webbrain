@@ -6,7 +6,10 @@ const CLOUD_STRING_LIMIT = 16 * 1024;
 const CLOUD_RUN_PERSIST_BYTES_LIMIT = 256 * 1024;
 const CLOUD_PERSIST_BYTES_LIMIT = 4 * 1024 * 1024;
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'aborted']);
-const SENSITIVE_CLOUD_KEY = /(?:authorization|cookie|password|passwd|passphrase|passcode|pin|secret|credential|privatekey|apikey|token)$/i;
+// Suffix match on normalized keys (non-alnum stripped). Avoid bare `pin` as a
+// suffix — it over-matches `spin`, `mapPin`, etc. Short exact keys live in the set.
+const SENSITIVE_CLOUD_KEY = /(?:authorization|cookie|password|passwd|passphrase|passcode|pincode|secret|credential|privatekey|apikey|token|accesskeyid|secretaccesskey)$/i;
+const SENSITIVE_CLOUD_KEY_EXACT = new Set(['pin', 'otp', 'cvv', 'cvc', 'ssn']);
 const LARGE_IMAGE_KEY = /(?:attachimage|screenshot|image|imagedata|dataurl)$/i;
 
 function normalizedCloudKey(key) {
@@ -22,11 +25,17 @@ export function normalizeCloudBridgeUrl(value = DEFAULT_CLOUD_BRIDGE_URL) {
   return url.href;
 }
 
+function isSensitiveCloudKey(key) {
+  const normalizedKey = normalizedCloudKey(key);
+  if (!normalizedKey) return false;
+  return SENSITIVE_CLOUD_KEY.test(normalizedKey) || SENSITIVE_CLOUD_KEY_EXACT.has(normalizedKey);
+}
+
 function scrubCloudValue(value) {
   try {
     return JSON.parse(JSON.stringify(value, (key, item) => {
       const normalizedKey = normalizedCloudKey(key);
-      if (normalizedKey && SENSITIVE_CLOUD_KEY.test(normalizedKey)) {
+      if (normalizedKey && isSensitiveCloudKey(key)) {
         return '[redacted]';
       }
       if (typeof item === 'string' && /^data:image\//i.test(item)) {
@@ -181,7 +190,7 @@ export function createCloudRunController({
         if (!row?.runId) continue;
         const rawUpdates = Array.isArray(row.updates) ? row.updates : [];
         let nextUpdateSeq = 0;
-        const updates = rawUpdates.map((update, index) => {
+        const updates = rawUpdates.map((update) => {
           const candidate = Number(update?.seq);
           const seq = Number.isSafeInteger(candidate) && candidate > nextUpdateSeq
             ? candidate
@@ -252,11 +261,15 @@ export function createCloudRunController({
   function pushUpdate(run, type, data) {
     run.updatedAt = isoNow();
     const previous = run.updates.at(-1);
+    // Consecutive text_delta events upsert the same seq: content grows in place
+    // and ts advances. Full-array pollers are fine; append-only / seq-cursor
+    // clients must re-read that row (or take a full snapshot) rather than
+    // assuming each seq is immutable.
     if (type === 'text_delta' && previous?.type === 'text_delta') {
-      previous.data = {
+      previous.data = scrubCloudValue({
         ...previous.data,
         content: `${previous.data?.content || ''}${data?.content || ''}`,
-      };
+      });
       previous.ts = run.updatedAt;
       schedulePersist();
       return;
