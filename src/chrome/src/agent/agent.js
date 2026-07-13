@@ -3557,14 +3557,23 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // Original crop/CSS space (used to map the vision box back for cropping).
     const origW = Math.max(1, Math.round(screenshot.width || 0));
     const origH = Math.max(1, Math.round(screenshot.height || 0));
-    // Model-facing image may already be budget-resized by the capture path;
-    // re-apply the budget here so localization never bypasses maxImageDimension
-    // even if the caller handed us an unshrunk dataUrl (issue #311).
-    const shrunk = await this._shrinkImageForBudget(
-      screenshot.dataUrl, origW, origH, this._budgetForCapture(),
-    );
-    const visionW = Math.max(1, Math.round(shrunk.width || origW));
-    const visionH = Math.max(1, Math.round(shrunk.height || origH));
+    // Prefer already-budgeted vision dims from capture — re-shrinking with CSS
+    // dims double-encodes JPEG and can desync scale (issue #311 review).
+    let visionDataUrl;
+    let visionW;
+    let visionH;
+    if (screenshot.visionWidth && screenshot.visionHeight) {
+      visionDataUrl = screenshot.dataUrl;
+      visionW = Math.max(1, Math.round(screenshot.visionWidth));
+      visionH = Math.max(1, Math.round(screenshot.visionHeight));
+    } else {
+      const shrunk = await this._shrinkImageForBudget(
+        screenshot.dataUrl, origW, origH, this._budgetForCapture(),
+      );
+      visionDataUrl = shrunk.dataUrl;
+      visionW = Math.max(1, Math.round(shrunk.width || origW));
+      visionH = Math.max(1, Math.round(shrunk.height || origH));
+    }
     const started = Date.now();
     const runId = this.currentRunId.get(tabId);
     const costState = opts.costState || this.currentCostState.get(tabId) || null;
@@ -3583,7 +3592,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           role: 'user',
           content: [
             { type: 'text', text: prompt },
-            { type: 'image_url', image_url: this._withImageDetail({ url: shrunk.dataUrl }) },
+            { type: 'image_url', image_url: this._withImageDetail({ url: visionDataUrl }) },
           ],
         },
       ], {

@@ -109,6 +109,17 @@ export class Agent {
     this._compactCooldown = new Map();
     this.autoScreenshot = 'state_change';
     this.useSiteAdapters = true;
+    // Image budget (issue #311): screenshot quality + capture limits. All
+    // loaded from browser.storage.local in background.js. Defaults preserve
+    // previous behavior: no explicit `detail`, unlimited auto-screenshots
+    // per turn, and images capped at 1568px per side.
+    this.imageDetail = 'auto';       // 'high' | 'low' | 'auto' (provider-dependent)
+    this.maxScreenshotsPerTurn = 0;  // 0 = unlimited
+    this.maxImageDimension = 1568;   // max width/height in px for any vision image
+    // tabId -> auto-screenshot count within the current turn/run. Enforces
+    // `maxScreenshotsPerTurn` for every automatic capture (initial viewport
+    // AND post-action). Reset when a run starts and on tab cleanup.
+    this.autoScreenshotCount = new Map();
     this.costAllowanceSessionUsd = DEFAULT_CLOUD_COST_ALLOWANCE_USD;
     this.costAllowanceTotalUsd = DEFAULT_CLOUD_COST_ALLOWANCE_USD;
     this.cloudCostSpentUsd = 0;
@@ -2093,7 +2104,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           role: 'user',
           content: [
             { type: 'text', text: noteText },
-            { type: 'image_url', image_url: { url: attachedImage } },
+            { type: 'image_url', image_url: this._withImageDetail({ url: attachedImage }) },
           ],
         });
       }
@@ -2186,7 +2197,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       const lastTs = this.lastAutoScreenshotTs.get(tabId) || 0;
       if (Date.now() - lastTs >= 500) {
         await new Promise(r => setTimeout(r, 250));
-        const shot = await this._captureAutoScreenshot(tabId);
+        const shot = await this._captureBudgetedAutoScreenshot(tabId);
         if (shot) {
           this.lastAutoScreenshotTs.set(tabId, Date.now());
           const visible = await this._getVisibleInteractiveElements(tabId);
@@ -2226,7 +2237,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
               role: 'user',
               content: [
                 { type: 'text', text: textBlock },
-                { type: 'image_url', image_url: { url: shot.dataUrl } },
+                { type: 'image_url', image_url: this._withImageDetail({ url: shot.dataUrl }) },
               ],
             });
             pushed = true;
@@ -2394,6 +2405,49 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     } catch {
       return { dataUrl, width: origW, height: origH };
     }
+  }
+
+  /**
+   * Build a snapshot of the active image budget for a single capture. Starts
+   * from the static defaults and applies the user's `maxImageDimension` cap
+   * (issue #311) so the per-side pixel limit AND the total-token budget both
+   * track the setting. When the cap is the limiting factor, the token budget
+   * is widened to exactly fit a square image at the cap so the dimension cap
+   * (not the legacy 1568px token budget) governs sizing.
+   */
+  _budgetForCapture() {
+    const base = Agent.IMAGE_BUDGET;
+    const cap = Math.max(1, Math.min(2048, Number(this.maxImageDimension) || 1568));
+    const tokensForCap = Math.ceil((cap / base.pxPerToken) * (cap / base.pxPerToken));
+    // Defaults must preserve the pre-#311 behavior. The default cap (1568)
+    // maps to the legacy budget byte-for-byte — same per-side limit AND same
+    // total-token limit.
+    if (cap === base.maxTargetPx) {
+      return { ...base };
+    }
+    return {
+      ...base,
+      maxTargetPx: cap,
+      maxTargetTokens: tokensForCap,
+    };
+  }
+
+  /**
+   * The `detail` value to attach to an OpenAI-style image_url block, driven by
+   * the `imageDetail` setting (issue #311). Returns null when the setting is
+   * 'auto' so the provider uses its own default; 'high' and 'low' pass through.
+   */
+  _imageDetailField() {
+    return this.imageDetail === 'auto' ? null : this.imageDetail;
+  }
+
+  /**
+   * Return a copy of `imageUrl` with a `detail` field merged in when the user
+   * has chosen a non-auto image detail (issue #311). No-op for 'auto'.
+   */
+  _withImageDetail(imageUrl) {
+    const detail = this._imageDetailField();
+    return detail ? { ...imageUrl, detail } : imageUrl;
   }
 
   /**
@@ -2834,13 +2888,46 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   /**
+   * Whether another automatic screenshot is allowed under maxScreenshotsPerTurn
+   * (issue #311). 0 means unlimited. Does not mutate the counter.
+   */
+  _canTakeAutoScreenshot(tabId) {
+    const cap = Number(this.maxScreenshotsPerTurn) || 0;
+    if (cap <= 0) return true;
+    return (this.autoScreenshotCount.get(tabId) || 0) < cap;
+  }
+
+  /**
+   * Record a successful automatic screenshot against the per-turn budget.
+   * No-op when the budget is unlimited.
+   */
+  _recordAutoScreenshot(tabId) {
+    const cap = Number(this.maxScreenshotsPerTurn) || 0;
+    if (cap <= 0) return;
+    this.autoScreenshotCount.set(tabId, (this.autoScreenshotCount.get(tabId) || 0) + 1);
+  }
+
+  /**
+   * Capture an automatic screenshot only when the per-turn budget allows it.
+   * Check-then-capture-then-increment so a failed capture does not burn a slot,
+   * and both the initial viewport shot and post-action shots share one counter.
+   */
+  async _captureBudgetedAutoScreenshot(tabId, opts = {}) {
+    if (!this._canTakeAutoScreenshot(tabId)) return null;
+    const shot = await this._captureAutoScreenshot(tabId, opts);
+    if (shot) this._recordAutoScreenshot(tabId);
+    return shot;
+  }
+
+  /**
    * Capture a viewport screenshot via the WebExtension tabs API. Firefox
    * supports `scale: 1` on captureVisibleTab to force a CSS-pixel-aligned
    * image (otherwise it captures at devicePixelRatio, causing the same
    * coordinate-mismatch loop chrome had pre-1.5.1). Returns
-   * { dataUrl, width, height } in CSS pixels, or null on failure.
+   * { dataUrl, width, height } in (possibly budget-resized) pixels, or null.
+   * `opts` accepted for Chrome call-site parity; capture is always CSS-locked.
    */
-  async _captureAutoScreenshot(tabId) {
+  async _captureAutoScreenshot(tabId, _opts = {}) {
     try {
       const tab = await browser.tabs.get(tabId);
       if (!tab) return null;
@@ -2853,6 +2940,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       const probe = await this._captureViewportProbe(tabId);
       const w = Math.max(1, Math.round(probe?.innerWidth || 1024));
       const h = Math.max(1, Math.round(probe?.innerHeight || 768));
+      const budget = this._budgetForCapture();
       const captureOnce = async () => {
         // scale: 1 forces 1 image pixel per CSS pixel (Firefox-specific option,
         // ignored by Chrome but Chrome path uses CDP anyway).
@@ -2869,7 +2957,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         // lets us downsize during capture (scale:1 is viewport-lock, not a
         // factor). So we capture at CSS size and shrink via DOM canvas to
         // the token budget. On small viewports this is a no-op fast-exit.
-        const shrunk = await this._shrinkImageForBudget(rawDataUrl, w, h);
+        const shrunk = await this._shrinkImageForBudget(rawDataUrl, w, h, budget);
         let dataUrl = shrunk.dataUrl;
         if (this.screenshotRedaction) {
           dataUrl = await this._redactScreenshotDataUrl(tabId, dataUrl, { coordinateSpace: 'viewport' });
@@ -2910,7 +2998,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           role: 'user',
           content: [
             { type: 'text', text: 'Describe this screenshot of the current browser viewport for a web-automation agent. Follow the format in the system prompt.' },
-            { type: 'image_url', image_url: { url: dataUrl } },
+            { type: 'image_url', image_url: this._withImageDetail({ url: dataUrl }) },
           ],
         },
       ];
@@ -3020,11 +3108,23 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         })
       );
       if (!cropDataUrl) return null;
-      let dataUrl = await this._compressJpegToByteCeiling(cropDataUrl);
+      // Model-facing path honors maxImageDimension (issue #311). Keep the raw
+      // `cropDataUrl` at full CSS resolution for the local download crop;
+      // `_locateVisibleMediaWithVision` maps vision boxes back to that space.
+      const shrunk = await this._shrinkImageForBudget(cropDataUrl, width, height, this._budgetForCapture());
+      let dataUrl = shrunk.dataUrl;
       if (this.screenshotRedaction) {
         dataUrl = await this._redactScreenshotDataUrl(tabId, dataUrl, { coordinateSpace: 'viewport' });
       }
-      return { dataUrl, cropDataUrl, width, height, coordAligned: true };
+      return {
+        dataUrl,
+        cropDataUrl,
+        width,
+        height,
+        visionWidth: shrunk.width,
+        visionHeight: shrunk.height,
+        coordAligned: true,
+      };
     } catch (_) {
       const fallback = await this._captureAutoScreenshot(tabId);
       return fallback ? { ...fallback, cropDataUrl: fallback.dataUrl } : null;
@@ -3047,13 +3147,31 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
 
     const target = ['image', 'video', 'media'].includes(opts.target) ? opts.target : 'media';
-    const width = Math.max(1, Math.round(screenshot.width || 0));
-    const height = Math.max(1, Math.round(screenshot.height || 0));
+    // Original crop/CSS space (used to map the vision box back for cropping).
+    const origW = Math.max(1, Math.round(screenshot.width || 0));
+    const origH = Math.max(1, Math.round(screenshot.height || 0));
+    // Prefer already-budgeted vision dims from capture — re-shrinking with CSS
+    // dims double-encodes JPEG and can desync scale (issue #311 review).
+    let visionDataUrl;
+    let visionW;
+    let visionH;
+    if (screenshot.visionWidth && screenshot.visionHeight) {
+      visionDataUrl = screenshot.dataUrl;
+      visionW = Math.max(1, Math.round(screenshot.visionWidth));
+      visionH = Math.max(1, Math.round(screenshot.visionHeight));
+    } else {
+      const shrunk = await this._shrinkImageForBudget(
+        screenshot.dataUrl, origW, origH, this._budgetForCapture(),
+      );
+      visionDataUrl = shrunk.dataUrl;
+      visionW = Math.max(1, Math.round(shrunk.width || origW));
+      visionH = Math.max(1, Math.round(shrunk.height || origH));
+    }
     const started = Date.now();
     const runId = this.currentRunId.get(tabId);
     const costState = opts.costState || this.currentCostState.get(tabId) || null;
     const prompt = [
-      `Image size: ${width}x${height} pixels.`,
+      `Image size: ${visionW}x${visionH} pixels.`,
       `Task: locate the single visible ${target} the user most likely means by "this image", "this video", or "this media" on the current page.`,
       'Return JSON only with this exact shape:',
       '{"found":true,"x":0,"y":0,"width":100,"height":100,"confidence":0.9,"mediaType":"image","reason":"largest central visible media"}',
@@ -3067,7 +3185,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           role: 'user',
           content: [
             { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: screenshot.dataUrl } },
+            { type: 'image_url', image_url: this._withImageDetail({ url: visionDataUrl }) },
           ],
         },
       ], {
@@ -3077,9 +3195,19 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       }, costState);
 
       const raw = res?.content || '';
-      const rect = Agent._normalizeVisibleMediaLocation(raw, { width, height });
-      if (!rect) throw new Error('vision model did not return a usable media box');
-      if (rect.confidence < 0.45) throw new Error(`vision confidence too low (${rect.confidence})`);
+      const visionRect = Agent._normalizeVisibleMediaLocation(raw, { width: visionW, height: visionH });
+      if (!visionRect) throw new Error('vision model did not return a usable media box');
+      if (visionRect.confidence < 0.45) throw new Error(`vision confidence too low (${visionRect.confidence})`);
+      // Map vision-image pixels back to the original cropDataUrl coordinate space.
+      const scaleX = origW / visionW;
+      const scaleY = origH / visionH;
+      const rect = {
+        ...visionRect,
+        x: Math.round(visionRect.x * scaleX),
+        y: Math.round(visionRect.y * scaleY),
+        width: Math.round(visionRect.width * scaleX),
+        height: Math.round(visionRect.height * scaleY),
+      };
       const latencyMs = Date.now() - started;
       trace.recordVisionSubCall(runId, {
         context: 'download_social_media_visible_media',
@@ -3232,7 +3360,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       return { role: 'user', content: contextLine + userMessage };
     }
 
-    const shot = await this._captureAutoScreenshot(tabId);
+    const shot = await this._captureBudgetedAutoScreenshot(tabId);
     if (!shot) return { role: 'user', content: contextLine + userMessage };
 
     // Vision-model path: sub-call the dedicated vision model, drop a text
@@ -3261,7 +3389,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       role: 'user',
       content: [
         { type: 'text', text: contextLine + screenshotNote + userMessage },
-        { type: 'image_url', image_url: { url: shot.dataUrl } },
+        { type: 'image_url', image_url: this._withImageDetail({ url: shot.dataUrl }) },
       ],
     };
   }
@@ -4608,6 +4736,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this.progressSessions.delete(tabId);
     this.mastodonStates.delete(tabId);
     this.lastAutoScreenshotTs.delete(tabId);
+    this.autoScreenshotCount.delete(tabId);
     this.lastSeenAdapter.delete(tabId);
     this._doneBlockCount.delete(tabId);
     this._recentSubmitClicks.delete(tabId);
@@ -7383,7 +7512,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           // Shrink to the vision budget before handing the image to the
           // model. Same two-stage dance as Chrome: decode → pick target dims
           // → draw at target → iterative JPEG quality until bytes fit.
-          const shrunk = await this._shrinkImageForBudget(rawUrl, 0, 0);
+          // Honors user maxImageDimension (issue #311).
+          const shrunk = await this._shrinkImageForBudget(rawUrl, 0, 0, this._budgetForCapture());
           return {
             dataUrl: shrunk.dataUrl,
             description: `Screenshot captured (${shrunk.dataUrl.length} base64 chars, ${shrunk.width}×${shrunk.height})`,
@@ -8002,6 +8132,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             let verifyShotUrl = await this._withIndicatorsHidden(tabId, () =>
               browser.tabs.captureVisibleTab(tab.windowId, { format: 'png', quality: 80 })
             );
+            // Budget-resize for the model (issue #311 maxImageDimension).
+            verifyShotUrl = (await this._shrinkImageForBudget(verifyShotUrl, 0, 0, this._budgetForCapture())).dataUrl;
             // Local screenshot redaction (issue #312): pixelate form fields +
             // email/phone text BEFORE the image reaches the model.
             if (this.screenshotRedaction) {
@@ -8489,7 +8621,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    * provider — the caller surfaces `error` as the turn's plain-text response,
    * without ever pushing the message to the conversation.
    */
-  _applyAttachments(enriched, attachments, provider, options = {}) {
+  async _applyAttachments(enriched, attachments, provider, options = {}) {
     const blocks = [];
     const textAttachmentCount = (attachments || []).filter(att => att?.kind === 'text').length;
     let textBudgetRemaining = this._textAttachmentContentBudget(provider, { ...options, enriched });
@@ -8502,7 +8634,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             error: `The active provider (${provider?.name || 'unknown'}) does not support image attachments. Switch to a vision-capable model (e.g. Claude 3+, GPT-4o) or remove the attached image and try again.`,
           };
         }
-        blocks.push({ type: 'image_url', image_url: { url: att.dataUrl } });
+        // Budget-resize a model-facing copy; leave the original attachment
+        // untouched so the UI/history still has the user-picked full image
+        // (issue #311 maxImageDimension).
+        const shrunk = await this._shrinkImageForBudget(att.dataUrl, 0, 0, this._budgetForCapture());
+        blocks.push({ type: 'image_url', image_url: this._withImageDetail({ url: shrunk.dataUrl }) });
       } else if (att.kind === 'document') {
         if (!provider?.supportsDocuments) {
           return {
@@ -8536,6 +8672,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   async _processMessageInner(tabId, userMessage, onUpdate, mode, attachments = [], runOptions = {}) {
     await this._hydrate(tabId);
+    // Reset the per-turn auto-screenshot budget (issue #311) for a fresh turn.
+    this.autoScreenshotCount.delete(tabId);
     const messages = this.getConversation(tabId, mode);
     // Scheduled resumes get the live ledger appended at fire time, so the
     // model's first turn sees current row state even if it never calls
@@ -8576,7 +8714,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     // agent run, and the message must never be pushed to history this way.
     if (attachments && attachments.length) {
       const canUseScratchpadTool = this._isActionMode(mode);
-      const attachResult = this._applyAttachments(enriched, attachments, provider, {
+      const attachResult = await this._applyAttachments(enriched, attachments, provider, {
         canUseScratchpadTool,
         tabId,
         messages,
@@ -8942,6 +9080,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   async _processMessageStreamInner(tabId, userMessage, onUpdate, mode, runOptions = {}) {
     await this._hydrate(tabId);
+    // Reset the per-turn auto-screenshot budget (issue #311) for a fresh turn.
+    this.autoScreenshotCount.delete(tabId);
     const messages = this.getConversation(tabId, mode);
     const costState = this._newCostRunState();
     this.currentCostState.set(tabId, costState);

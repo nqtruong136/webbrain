@@ -901,8 +901,10 @@ test('remaining model-facing screenshot fallbacks apply redaction', () => {
 
 test('firefox auto and media screenshot helpers redact model-facing data URLs', () => {
   const source = fs.readFileSync(path.join(ROOT, 'src/firefox/src/agent/agent.js'), 'utf8');
-  const autoStart = source.indexOf('async _captureAutoScreenshot(tabId)');
+  // Signature may include optional opts for Chrome call-site parity.
+  const autoStart = source.indexOf('async _captureAutoScreenshot(tabId');
   const autoEnd = source.indexOf('async _describeScreenshot', autoStart);
+  assert.ok(autoStart >= 0 && autoEnd > autoStart, 'firefox auto capture method not found');
   const autoBody = source.slice(autoStart, autoEnd);
   assert.match(
     autoBody,
@@ -912,11 +914,12 @@ test('firefox auto and media screenshot helpers redact model-facing data URLs', 
 
   const mediaStart = source.indexOf('async _captureVisibleMediaScreenshot(tabId)');
   const mediaEnd = source.indexOf('async _locateVisibleMediaWithVision', mediaStart);
+  assert.ok(mediaStart >= 0 && mediaEnd > mediaStart, 'firefox media capture method not found');
   const mediaBody = source.slice(mediaStart, mediaEnd);
   assert.match(
     mediaBody,
-    /let dataUrl = await this\._compressJpegToByteCeiling\(cropDataUrl\);[\s\S]*?if \(this\.screenshotRedaction\) \{[\s\S]*?dataUrl = await this\._redactScreenshotDataUrl\(tabId, dataUrl, \{ coordinateSpace: 'viewport' \}\);[\s\S]*?return \{ dataUrl, cropDataUrl, width, height, coordAligned: true \};/,
-    'firefox visible-media localization should redact the model-facing screenshot while keeping the raw crop source local'
+    /const shrunk = await this\._shrinkImageForBudget\(cropDataUrl, width, height, this\._budgetForCapture\(\)\);[\s\S]*?let dataUrl = shrunk\.dataUrl;[\s\S]*?if \(this\.screenshotRedaction\) \{[\s\S]*?dataUrl = await this\._redactScreenshotDataUrl\(tabId, dataUrl, \{ coordinateSpace: 'viewport' \}\);[\s\S]*?return \{[\s\S]*?dataUrl,[\s\S]*?cropDataUrl,[\s\S]*?width,[\s\S]*?height,[\s\S]*?visionWidth: shrunk\.width,[\s\S]*?visionHeight: shrunk\.height,/,
+    'firefox visible-media localization should budget+redact the model-facing screenshot while keeping the raw crop source local'
   );
 });
 
@@ -2579,6 +2582,87 @@ test('custom budget is honored', () => {
   assert.ok(w <= 400);
   assert.ok(h <= 400);
   assert.ok(estimateImageTokens(w, h, 28) <= 400);
+});
+
+test('image budget helpers: default budget equals IMAGE_BUDGET', () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({});
+    assert.equal(agent.imageDetail, 'auto', `${AgentClass.name}: default imageDetail`);
+    assert.equal(agent.maxScreenshotsPerTurn, 0, `${AgentClass.name}: unlimited default`);
+    assert.equal(agent.maxImageDimension, 1568, `${AgentClass.name}: default maxImageDimension`);
+    const budget = agent._budgetForCapture();
+    assert.equal(budget.maxTargetPx, AgentClass.IMAGE_BUDGET.maxTargetPx);
+    assert.equal(budget.maxTargetTokens, AgentClass.IMAGE_BUDGET.maxTargetTokens);
+    assert.equal(budget.pxPerToken, AgentClass.IMAGE_BUDGET.pxPerToken);
+  }
+});
+
+test('image budget helpers: lower/higher maxImageDimension remaps token cap', () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({});
+    agent.maxImageDimension = 512;
+    const low = agent._budgetForCapture();
+    assert.equal(low.maxTargetPx, 512);
+    assert.equal(low.maxTargetTokens, Math.ceil((512 / 28) * (512 / 28)));
+
+    agent.maxImageDimension = 2048;
+    const high = agent._budgetForCapture();
+    assert.equal(high.maxTargetPx, 2048);
+    assert.equal(high.maxTargetTokens, Math.ceil((2048 / 28) * (2048 / 28)));
+
+    agent.maxImageDimension = 0; // coerce to default
+    const coerced = agent._budgetForCapture();
+    assert.equal(coerced.maxTargetPx, AgentClass.IMAGE_BUDGET.maxTargetPx);
+  }
+});
+
+test('image budget helpers: _withImageDetail only when non-auto', () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({});
+    const base = { url: 'data:image/jpeg;base64,xx' };
+    assert.deepEqual(agent._withImageDetail(base), base, `${AgentClass.name}: auto omits detail`);
+    assert.equal(agent._imageDetailField(), null);
+
+    agent.imageDetail = 'high';
+    assert.deepEqual(agent._withImageDetail(base), { ...base, detail: 'high' });
+    assert.equal(agent._imageDetailField(), 'high');
+
+    agent.imageDetail = 'low';
+    assert.deepEqual(agent._withImageDetail(base), { ...base, detail: 'low' });
+  }
+});
+
+test('image budget helpers: auto-screenshot counter + failed capture does not burn slot', async () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({});
+    const tabId = 42;
+    agent.maxScreenshotsPerTurn = 1;
+
+    assert.equal(agent._canTakeAutoScreenshot(tabId), true);
+    agent._recordAutoScreenshot(tabId);
+    assert.equal(agent._canTakeAutoScreenshot(tabId), false);
+    assert.equal(agent.autoScreenshotCount.get(tabId), 1);
+
+    // Failed capture must not increment (budgeted wrapper checks then captures).
+    agent.autoScreenshotCount.delete(tabId);
+    agent._captureAutoScreenshot = async () => null;
+    const missed = await agent._captureBudgetedAutoScreenshot(tabId);
+    assert.equal(missed, null);
+    assert.equal(agent.autoScreenshotCount.has(tabId), false, `${AgentClass.name}: failed capture must not burn slot`);
+    assert.equal(agent._canTakeAutoScreenshot(tabId), true);
+
+    agent._captureAutoScreenshot = async () => ({ dataUrl: 'data:image/jpeg;base64,ok', width: 10, height: 10 });
+    const first = await agent._captureBudgetedAutoScreenshot(tabId);
+    assert.ok(first);
+    assert.equal(agent.autoScreenshotCount.get(tabId), 1);
+    const second = await agent._captureBudgetedAutoScreenshot(tabId);
+    assert.equal(second, null, `${AgentClass.name}: limit 1 blocks second auto shot`);
+
+    // Unlimited (0) never blocks.
+    agent.maxScreenshotsPerTurn = 0;
+    agent.autoScreenshotCount.set(tabId, 99);
+    assert.equal(agent._canTakeAutoScreenshot(tabId), true);
+  }
 });
 
 test('existing dims under caps stay within the monotonic bound', () => {
