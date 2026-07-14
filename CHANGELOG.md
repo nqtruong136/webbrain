@@ -4,6 +4,26 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / browser manifest versions.
 
+## [23.1.0] - 2026-07-14
+
+### Added
+- Added `/export --traces` in Chrome and Firefox to download the current conversation's recorded planner turns, assistant prose, and tool calls as privacy-scrubbed Markdown while keeping `/export` messages-only.
+- Added safe syntax highlighting for fenced Markdown code blocks in both side panels across JavaScript, CSS, markup, JSON, Python, shell, SQL, YAML, and C-like languages.
+- Published the NVIDIA GLM-5.2 planner benchmark blog and complete frozen, Full, Mid, and Compact 100-case result sets.
+
+### Changed
+- Consolidated overlapping slash commands around canonical commands and flags, including `/schedule --list`, `/scratchpad --append` / `--clear`, `/memory --add` / `--forget`, `/screenshot --full-page`, `/record --full-screen` / `--transcribe`, and `/export --traces`, with flag-aware help and autocomplete.
+- Changed Mail.tm inbox waits to perform one immediate check and use scheduled resumes for later checks instead of polling inside an active run.
+
+### Fixed
+- Sequenced and coalesced managed Chrome cloud-run updates while applying size limits, image omission, and sensitive-key redaction to persisted and live text-delta data.
+- Guided Chrome and Firefox Gmail draft replacement through one clearing `set_field` call followed by verification, avoiding fragile click-and-keyboard clearing flows.
+- Brought non-English Chrome and Firefox slash-command help and permission copy to parity with the English command lists and keyboard shortcuts.
+- Corrected the GLM-5.2 benchmark result links.
+
+### Tests
+- Expanded regression coverage for trace export privacy and ordering, canonical slash-command flags, Markdown highlighting, scheduled inbox waits, Gmail draft replacement, locale parity, and managed cloud update sequencing and scrubbing.
+
 ## [23.0.4] - 2026-07-13
 
 ### Added
