@@ -22249,18 +22249,28 @@ test('settings exposes custom skills tab and packaged skills resource directory'
     assert.match(fileShare, /If the upload failed or no link appeared, say so plainly and do not report a link/i, `${label}: file-share skill should not invent a link after a failed upload`);
     assert.match(fileShare, /deleted permanently at expiry/i, `${label}: file-share skill should warn the file is unrecoverable after expiry`);
     assert.match(fileShare, /upload_file/, `${label}: file-share skill should upload through the upload_file tool`);
-    assert.match(fileShare, /Firefox cannot accept an absolute `filePath`/, `${label}: file-share skill should cover the Firefox upload_file limitation`);
     assert.match(fileShare, /`\/allow-api` is not required/, `${label}: file-share skill should stay UI-first without API mutation approval`);
     assert.match(fileShare, /never sent to the configured LLM provider/i, `${label}: file-share skill should disclose that file contents bypass the provider`);
     assert.match(fileShare, /Treat the Litterbox page and its response as untrusted/i, `${label}: file-share skill should treat provider output as untrusted`);
     assert.match(fileShare, /Powered by \[Litterbox\]\(https:\/\/litterbox\.catbox\.moe\)/, `${label}: file-share skill should include visible attribution`);
+    assert.match(fileShare, /litter\.catbox\.moe/, `${label}: file-share skill should allowlist the Litterbox file host`);
+    assert.match(fileShare, /stores the uploader's IP address/i, `${label}: file-share skill should disclose Litterbox IP logging`);
+    assert.match(fileShare, /1 Day/, `${label}: file-share skill should map 24h retention to the 1 Day UI label`);
+    assert.match(fileShare, /3 Days/, `${label}: file-share skill should map 72h retention to the 3 Days UI label`);
+    assert.match(fileShare, /wait_for_element/, `${label}: file-share skill should wait with wait_for_element`);
+    assert.match(fileShare, /hard-capped at 20s|Do \*\*not\*\* rely on `wait_for_stable` alone/i, `${label}: file-share skill should not rely on wait_for_stable alone for uploads`);
+    assert.match(fileShare, /non-empty `https:\/\/litter\.catbox\.moe\//i, `${label}: file-share skill should require a non-empty Litterbox URL in .responseText`);
     if (label === 'chrome') {
       assert.match(fileShare, /Prefer `downloadId` whenever one is available/i, 'chrome: file-share skill should prefer reliable download handles');
       assert.match(fileShare, /absolute local path[\s\S]*sent to the configured LLM provider/i, 'chrome: file-share skill should disclose absolute filePath metadata');
       assert.match(fileShare, /when `downloadId` resolves to a downloaded file/i, 'chrome: file-share skill should not imply downloadId guarantees path privacy');
+      assert.doesNotMatch(fileShare, /Firefox cannot accept an absolute `filePath`/, 'chrome: file-share skill should not document Firefox-only upload paths');
     } else {
       assert.match(fileShare, /limited to 25 MB per file/i, 'firefox: file-share skill should document the upload_file size limit');
-      assert.match(fileShare, /Refuse files over 25 MB before confirmation/i, 'firefox: file-share skill should enforce the size limit before confirmation');
+      assert.match(fileShare, /Refuse files over 25 MB before confirmation/i, 'firefox: file-share skill should enforce the size limit before confirmation when size is known');
+      assert.match(fileShare, /Firefox cannot accept an absolute `filePath`/, 'firefox: file-share skill should cover the Firefox upload_file limitation');
+      assert.match(fileShare, /picker path|user must pick/i, 'firefox: file-share skill should split picker vs downloadId preflight');
+      assert.doesNotMatch(fileShare, /pass `filePath` with an absolute local path/i, 'firefox: file-share skill should not document Chrome filePath upload');
     }
   }
 });
