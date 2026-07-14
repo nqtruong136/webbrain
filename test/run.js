@@ -12082,6 +12082,33 @@ test('Chrome execute_js runs through CDP as an async function body and reports e
   }
 });
 
+test('CDP sendCommand rejects failures reported through chrome.runtime.lastError', async () => {
+  const originalChrome = globalThis.chrome;
+  const runtime = { lastError: null };
+  globalThis.chrome = {
+    runtime,
+    debugger: {
+      sendCommand(_target, _method, _params, callback) {
+        runtime.lastError = { message: 'Execution was terminated due to timeout' };
+        callback(undefined);
+        runtime.lastError = null;
+      },
+    },
+  };
+
+  try {
+    const cdp = new CDPClient();
+    cdp.sessions.set(42, { tabId: 42, attached: true });
+    await assert.rejects(
+      cdp.sendCommand(42, 'Runtime.evaluate', { expression: 'while (true) {}' }),
+      /terminated due to timeout/,
+    );
+  } finally {
+    if (originalChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = originalChrome;
+  }
+});
+
 test('CDP evaluate forwards a bounded Runtime timeout', async () => {
   const cdp = new CDPClient();
   const commands = [];

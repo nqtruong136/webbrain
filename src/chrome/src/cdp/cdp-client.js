@@ -75,9 +75,14 @@ export class CDPClient {
     }
 
     return new Promise((resolve, reject) => {
-      chrome.debugger.sendCommand({ tabId }, method, params, (result, error) => {
+      chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
+        // Chrome extension APIs expose callback failures through
+        // chrome.runtime.lastError, not a second callback argument. Read it
+        // synchronously while the callback is active; Chrome clears it after
+        // the callback returns.
+        const error = chrome.runtime.lastError;
         if (error) {
-          reject(new Error(error.message || error));
+          reject(new Error(error.message || String(error)));
           return;
         }
         resolve(result);
