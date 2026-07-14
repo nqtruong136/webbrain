@@ -22233,6 +22233,9 @@ test('settings exposes custom skills tab and packaged skills resource directory'
     assert.match(fileShare, /Continue only after the user confirms/i, `${label}: file-share skill should stop without confirmation`);
     assert.match(fileShare, /1 hour, 12 hours, 24 hours, and 72 hours/, `${label}: file-share skill should document the available retention windows`);
     assert.match(fileShare, /Always state the expiry as an absolute time/i, `${label}: file-share skill should report an absolute expiry time`);
+    assert.match(fileShare, /around YYYY-MM-DD HH:MM local time/, `${label}: file-share skill should use a date format placeholder in its expiry example`);
+    assert.match(fileShare, /Read the resulting link from the page/i, `${label}: file-share skill should read the provider's returned link`);
+    assert.match(fileShare, /If the upload failed or no link appeared, say so plainly and do not report a link/i, `${label}: file-share skill should not invent a link after a failed upload`);
     assert.match(fileShare, /deleted permanently at expiry/i, `${label}: file-share skill should warn the file is unrecoverable after expiry`);
     assert.match(fileShare, /upload_file/, `${label}: file-share skill should upload through the upload_file tool`);
     assert.match(fileShare, /Firefox cannot accept an absolute `filePath`/, `${label}: file-share skill should cover the Firefox upload_file limitation`);

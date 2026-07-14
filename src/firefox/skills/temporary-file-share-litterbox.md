@@ -40,7 +40,7 @@ Workflow:
 8. Submit the upload and wait for it to finish. Large files take time; use `wait_for_element` or `wait_for_stable` rather than re-submitting.
 9. Read the resulting link from the page. Do not invent or reconstruct the URL; take it from the page exactly as shown.
 10. Verify the link looks like a Litterbox file URL before reporting it. If the upload failed or no link appeared, say so plainly and do not report a link.
-11. Report the link, the retention that was chosen, and the absolute expiry time computed from the current time, for example "expires in 24 hours, around 2026-07-15 18:40 local time".
+11. Report the link, the retention that was chosen, and the absolute expiry time computed from the current time, for example "expires in 24 hours, around YYYY-MM-DD HH:MM local time".
 12. Remind the user that the file is public until it expires, that it is deleted permanently at expiry, and that it cannot be recovered afterward. Include visible attribution: Powered by [Litterbox](https://litterbox.catbox.moe).
 
 Expiry guidance:
