@@ -9,6 +9,7 @@ This changelog was generated from the repository Git history and release tags. V
 ### Added
 - Added universal `<command> --help` support for slash commands, returning the selected command's usage, description, and available options directly in chat.
 - Published the WebMCP integration blog post.
+- Added an opt-in packaged Litterbox temporary file-share skill for Chrome and Firefox, available from Settings with explicit `clarify` confirmation, public-link and absolute-expiry warnings, non-sensitive-file-only rules, and visible provider attribution. Uploads go through the Litterbox page with `upload_file`, so no `/allow-api` override is needed and file contents never reach the LLM provider.
 
 ### Fixed
 - Made Enter accept highlighted slash-command flag completions such as `/schedule --list` without prematurely executing the parent `/schedule` command.
@@ -16,6 +17,7 @@ This changelog was generated from the repository Git history and release tags. V
 
 ### Tests
 - Added Chrome and Firefox regression coverage for command-specific help, flag autocomplete ordering and completion, invalid mixed help flags, and trusted toast rendering.
+- Added packaged-skill catalog and Litterbox safety/expiry coverage.
 
 ## [23.1.0] - 2026-07-14
 
