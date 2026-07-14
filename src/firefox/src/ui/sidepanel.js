@@ -3355,6 +3355,34 @@ function getSlashAutocompleteContext() {
   };
 }
 
+function buildSlashAutocompleteMatches(context) {
+  if (!context) return [];
+  const candidates = context.kind === 'command'
+    ? SLASH_COMMANDS.filter(slashCommandIsDiscoverable)
+    : slashCommandOptions(context.command)
+      .filter((option) => slashOptionIsAvailable(option, context.selected, context.selectedGroups))
+      .map((option) => option === SLASH_HELP_OPTION
+        ? { ...option, descriptionKey: context.command.descriptionKey }
+        : option);
+  const matches = candidates
+    .filter((candidate) => candidate.value.startsWith(context.query))
+    .map((candidate) => ({
+      ...candidate,
+      kind: context.kind,
+      completionStart: context.completionStart,
+      completionEnd: context.completionEnd,
+    }));
+  if (context.kind === 'option' && !context.query && context.selected.size === 0) {
+    matches.unshift({
+      value: context.command.value,
+      label: '↵ Enter',
+      descriptionKey: context.command.descriptionKey,
+      kind: 'base-action',
+    });
+  }
+  return matches;
+}
+
 function getRecognizedSlashCommandPrefix(value) {
   const leadingWhitespace = value.match(/^\s*/)?.[0] || '';
   const text = value.slice(leadingWhitespace.length);
@@ -3430,12 +3458,13 @@ function renderSlashCommandAutocomplete() {
     option.type = 'button';
     option.id = `${SLASH_COMMAND_OPTION_ID_PREFIX}${index}`;
     option.className = 'slash-command-option';
+    option.classList.toggle('slash-command-base-action', command.kind === 'base-action');
     option.setAttribute('role', 'option');
     option.setAttribute('aria-selected', String(index === slashCommandSelectedIndex));
 
     const name = document.createElement('span');
     name.className = 'slash-command-name';
-    name.textContent = command.value;
+    name.textContent = command.label || command.value;
 
     const description = document.createElement('span');
     description.className = 'slash-command-description';
@@ -3444,7 +3473,8 @@ function renderSlashCommandAutocomplete() {
     option.append(name, description);
     option.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      applySlashCommandCompletion(index);
+      if (command.kind === 'base-action') activateSlashCommandBaseAction(index);
+      else applySlashCommandCompletion(index);
     });
     option.addEventListener('mousemove', () => setSlashCommandSelectedIndex(index));
     slashCommandMenuEl.appendChild(option);
@@ -3474,21 +3504,7 @@ function updateSlashCommandAutocomplete() {
   }
 
   const previouslySelected = slashCommandMatches[slashCommandSelectedIndex]?.value;
-  const candidates = context.kind === 'command'
-    ? SLASH_COMMANDS.filter(slashCommandIsDiscoverable)
-    : slashCommandOptions(context.command)
-      .filter((option) => slashOptionIsAvailable(option, context.selected, context.selectedGroups))
-      .map((option) => option === SLASH_HELP_OPTION
-        ? { ...option, descriptionKey: context.command.descriptionKey }
-        : option);
-  const matches = candidates
-    .filter((candidate) => candidate.value.startsWith(context.query))
-    .map((candidate) => ({
-      ...candidate,
-      kind: context.kind,
-      completionStart: context.completionStart,
-      completionEnd: context.completionEnd,
-    }));
+  const matches = buildSlashAutocompleteMatches(context);
   if (matches.length === 0) {
     hideSlashCommandAutocomplete();
     return;
@@ -3521,6 +3537,18 @@ function applySlashCommandCompletion(index = slashCommandSelectedIndex) {
   return true;
 }
 
+function activateSlashCommandBaseAction(index = slashCommandSelectedIndex) {
+  const match = slashCommandMatches[index];
+  if (match?.kind !== 'base-action' || !inputEl) return false;
+  inputEl.value = inputEl.value.trimEnd();
+  hideSlashCommandAutocomplete();
+  autoResizeInput();
+  syncSendButtonState();
+  inputEl.focus();
+  void sendMessage();
+  return true;
+}
+
 function isExactSlashCommandQuery() {
   const invocation = parseSlashInvocation(inputEl?.value || '');
   return !!invocation && !invocation.error;
@@ -3543,10 +3571,18 @@ function handleSlashCommandKeydown(e) {
   }
   if (e.key === 'Tab') {
     e.preventDefault();
-    return applySlashCommandCompletion();
+    const match = slashCommandMatches[slashCommandSelectedIndex];
+    const completionIndex = match?.kind === 'base-action'
+      ? slashCommandSelectedIndex + 1
+      : slashCommandSelectedIndex;
+    return applySlashCommandCompletion(completionIndex);
   }
   if (e.key === 'Enter') {
     const match = slashCommandMatches[slashCommandSelectedIndex];
+    if (match?.kind === 'base-action') {
+      e.preventDefault();
+      return activateSlashCommandBaseAction();
+    }
     if (match?.kind === 'option' || !isExactSlashCommandQuery()) {
       e.preventDefault();
       return applySlashCommandCompletion();

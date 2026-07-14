@@ -1541,6 +1541,12 @@ body {
   color: var(--text-primary);
 }
 
+.slash-command-option.slash-command-base-action {
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+}
+
 .slash-command-name {
   color: var(--accent);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

@@ -38,21 +38,33 @@ function loadSlashAutocompleteRuntime(panelRel) {
   assert.notEqual(start, -1, `${panelRel}: slash autocomplete context missing`);
   assert.notEqual(end, -1, `${panelRel}: slash autocomplete boundary missing`);
   const functionSource = source.slice(start, end + 2);
-  const getContext = Function(
+  const autocomplete = Function(
     'SLASH_COMMANDS',
+    'SLASH_HELP_OPTION',
     'slashCommandOptions',
     'findSlashCommand',
     'slashCommandIsDiscoverable',
     'slashOptionIsDiscoverable',
-    `let inputEl = null;\n${functionSource}\nreturn (value, cursor = value.length) => { inputEl = { value, selectionStart: cursor, selectionEnd: cursor }; return getSlashAutocompleteContext(); };`,
+    'slashOptionIsAvailable',
+    `let inputEl = null;\n${functionSource}\nreturn {
+      getContext(value, cursor = value.length) {
+        inputEl = { value, selectionStart: cursor, selectionEnd: cursor };
+        return getSlashAutocompleteContext();
+      },
+      getMatches(context) {
+        return buildSlashAutocompleteMatches(context);
+      },
+    };`,
   )(
     slash.SLASH_COMMANDS,
+    slash.SLASH_HELP_OPTION,
     slash.slashCommandOptions,
     slash.findSlashCommand,
     slash.slashCommandIsDiscoverable,
     slash.slashOptionIsDiscoverable,
+    slash.slashOptionIsAvailable,
   );
-  return { ...slash, getContext };
+  return { ...slash, ...autocomplete };
 }
 
 function packagedFreeSkillzRecord(prefix) {
@@ -7698,6 +7710,8 @@ test('canonical slash parser handles flags, values, casing, termination, and har
   ]) {
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     assert.match(panel, /if \(action === 'help'\) \{[\s\S]*?addPersistentSlashMessage\(systemHtml\(buildSlashCommandDetailHtml\(command\)\)\);[\s\S]*?return '';[\s\S]*?\}/, `${label}: command help should be posted as a persistent chat response`);
+    assert.match(panel, /function activateSlashCommandBaseAction\(index = slashCommandSelectedIndex\) \{[\s\S]*?match\?\.kind !== 'base-action'[\s\S]*?hideSlashCommandAutocomplete\(\);[\s\S]*?void sendMessage\(\);[\s\S]*?return true;/, `${label}: the base-action row should close autocomplete and execute the exact command`);
+    assert.match(panel, /if \(match\?\.kind === 'base-action'\) \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?return activateSlashCommandBaseAction\(\);/, `${label}: Enter should run the selected base-action row`);
     assert.match(panel, /if \(e\.key === 'Enter'\) \{[\s\S]*?const match = slashCommandMatches\[slashCommandSelectedIndex\];[\s\S]*?match\?\.kind === 'option'[\s\S]*?applySlashCommandCompletion\(\)/, `${label}: Enter should accept an option suggestion before submitting the parent command`);
   }
 });
@@ -7713,10 +7727,21 @@ test('slash autocomplete progressively suggests only available unused flags', ()
   const initial = chrome.getContext('/record ');
   assert.equal(initial.kind, 'option');
   assert.deepEqual(optionMatches(chrome, initial), ['--full-screen', '--transcribe', '--help']);
+  assert.deepEqual(
+    chrome.getMatches(chrome.getContext('/scratchpad ')).map(({ kind, value, label, descriptionKey }) => ({ kind, value, label, descriptionKey })),
+    [
+      { kind: 'base-action', value: '/scratchpad', label: '↵ Enter', descriptionKey: 'sp.slash.show_scratchpad' },
+      { kind: 'option', value: '--append', label: undefined, descriptionKey: 'sp.slash.edit_scratchpad' },
+      { kind: 'option', value: '--clear', label: undefined, descriptionKey: 'sp.slash.clear_scratchpad' },
+      { kind: 'option', value: '--help', label: undefined, descriptionKey: 'sp.slash.show_scratchpad' },
+    ],
+    'an exact command with no flags should expose its Enter action above flag completions',
+  );
 
   const partial = chrome.getContext('/record --trans');
   assert.equal(partial.query, '--trans');
   assert.deepEqual(optionMatches(chrome, partial), ['--transcribe']);
+  assert.equal(chrome.getMatches(partial).some((match) => match.kind === 'base-action'), false, 'typing a flag should hide the base-action row');
 
   const afterFullScreen = chrome.getContext('/record --full-screen ');
   assert.deepEqual([...afterFullScreen.selected], ['--full-screen']);
@@ -7731,8 +7756,10 @@ test('slash autocomplete progressively suggests only available unused flags', ()
   assert.deepEqual(optionMatches(chrome, chrome.getContext('/schedule ')), ['--list', '--help'], 'schedule should keep its real flags ahead of universal help');
   assert.deepEqual(optionMatches(chrome, chrome.getContext('/progress ')), ['--help'], 'commands without flags should still offer --help');
   assert.deepEqual(optionMatches(chrome, chrome.getContext('/schedule --help ')), [], '--help should finish option autocomplete');
+  assert.equal(chrome.getMatches(chrome.getContext('/scratchpad --clear ')).some((match) => match.kind === 'base-action'), false, 'selected flags should keep the base action out of autocomplete');
 
   assert.equal(firefox.getContext('/record '), null, 'Firefox should not discover unsupported recording');
+  assert.equal(firefox.getMatches(firefox.getContext('/scratchpad '))[0]?.kind, 'base-action', 'Firefox should mirror the base-action row');
   assert.deepEqual(optionMatches(firefox, firefox.getContext('/screenshot ')), ['--help'], 'Firefox should omit unsupported flags but still offer command help');
   assert.deepEqual(optionMatches(firefox, firefox.getContext('/scratchpad --clear ')), [], 'Firefox should not suggest conflicting scratchpad actions');
 });
