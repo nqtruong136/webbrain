@@ -1819,8 +1819,8 @@ body {
 .syntax-keyword,
 .syntax-decorator { color: var(--syntax-keyword); }
 .syntax-string { color: var(--syntax-string); }
-.syntax-number,
-.syntax-variable { color: var(--syntax-number); }
+.syntax-number { color: var(--syntax-number); }
+.syntax-variable { color: var(--syntax-variable); }
 .syntax-function,
 .syntax-builtin { color: var(--syntax-function); }
 .syntax-property { color: var(--syntax-property); }

@@ -53,6 +53,10 @@ export function normalizeCodeLanguage(language) {
   return LANGUAGE_ALIASES[String(language || '').trim().toLowerCase()] || '';
 }
 
+export function codeFenceLanguage(infoString) {
+  return String(infoString || '').trim().split(/\s+/, 1)[0] || '';
+}
+
 function tokenSpan(type, value) {
   const escaped = escapeCodeHtml(value);
   return type ? `<span class="syntax-${type}">${escaped}</span>` : escaped;

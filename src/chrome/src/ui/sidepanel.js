@@ -5,7 +5,7 @@
 
 import { t, getLocale, setLocale, LANGUAGES, applyDOMTranslations } from './i18n.js';
 import { sanitizeMarkdownLinks } from './markdown-link.js';
-import { highlightCode, renderMarkdownHeadings } from './markdown-render.js';
+import { codeFenceLanguage, highlightCode, renderMarkdownHeadings } from './markdown-render.js';
 import { applyMode, loadMode, watch } from './theme.js';
 import { buildRecommendedActions, shouldShowRecommendedActions } from './recommended-actions.js';
 import { createContextMenuPromptHandler } from './context-menu-prompts.js';
@@ -5552,7 +5552,8 @@ function formatMarkdown(text) {
 
   // 1. Extract fenced code blocks BEFORE escaping HTML
   const codeBlocks = [];
-  text = text.replace(/```[ \t]*([^\s`\r\n]*)[ \t]*\r?\n([\s\S]*?)```/g, (_match, lang, code) => {
+  text = text.replace(/```[ \t]*([^`\r\n]*)\r?\n([\s\S]*?)```/g, (_match, info, code) => {
+    const lang = codeFenceLanguage(info);
     const id = `__CODEBLOCK_${codeBlocks.length}__`;
     codeBlocks.push({ lang: lang || '', code });
     return id;

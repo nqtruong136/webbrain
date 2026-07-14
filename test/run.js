@@ -110,7 +110,7 @@ const { validateFetchUrl: validateFetchUrlFx, registrableDomain: registrableDoma
 const { sanitizeLink, sanitizeMarkdownLinks } = await import(
   'file://' + path.join(ROOT, 'src/chrome/src/ui/markdown-link.js').replace(/\\/g, '/')
 );
-const { highlightCode, renderMarkdownHeadings } = await import(
+const { codeFenceLanguage, highlightCode, renderMarkdownHeadings } = await import(
   'file://' + path.join(ROOT, 'src/chrome/src/ui/markdown-render.js').replace(/\\/g, '/')
 );
 
@@ -181,7 +181,7 @@ const {
 const { sanitizeMarkdownLinks: sanitizeMarkdownLinksFx } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/ui/markdown-link.js').replace(/\\/g, '/')
 );
-const { highlightCode: highlightCodeFx, renderMarkdownHeadings: renderMarkdownHeadingsFx } = await import(
+const { codeFenceLanguage: codeFenceLanguageFx, highlightCode: highlightCodeFx, renderMarkdownHeadings: renderMarkdownHeadingsFx } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/ui/markdown-render.js').replace(/\\/g, '/')
 );
 const {
@@ -3012,6 +3012,13 @@ test('common code-language aliases select their syntax grammar', () => {
   assert.match(highlightCode('std::vector<int> ids;', 'c++'), /syntax-/);
 });
 
+test('fenced code info strings use their first token as the language', () => {
+  assert.equal(codeFenceLanguage('js title="example.js"'), 'js');
+  assert.equal(codeFenceLanguage(' javascript {.numberLines}'), 'javascript');
+  assert.equal(codeFenceLanguage('c++ linenos'), 'c++');
+  assert.equal(codeFenceLanguage('   '), '');
+});
+
 test('ATX headings render as semantic headings and preserve inline Markdown', () => {
   const out = renderMarkdownHeadings('### Option A — **Center the tabs**\n\nRun this first');
   assert.equal(out, '<h3>Option A — **Center the tabs**</h3>\nRun this first');
@@ -3030,6 +3037,7 @@ test('Chrome and Firefox Markdown rendering helpers stay in parity', () => {
   }
   const heading = '### **Option A**\nBody';
   assert.equal(renderMarkdownHeadingsFx(heading), renderMarkdownHeadings(heading));
+  assert.equal(codeFenceLanguageFx('js title="example.js"'), codeFenceLanguage('js title="example.js"'));
 });
 
 test('sidepanels wire highlighting and heading rendering into fenced Markdown', () => {
@@ -3039,10 +3047,12 @@ test('sidepanels wire highlighting and heading rendering into fenced Markdown', 
   ]) {
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     const css = fs.readFileSync(path.join(ROOT, cssRel), 'utf8');
-    assert.match(panel, /import \{ highlightCode, renderMarkdownHeadings \} from '\.\/markdown-render\.js';/, `${label}: renderer helpers should be imported`);
+    assert.match(panel, /import \{ codeFenceLanguage, highlightCode, renderMarkdownHeadings \} from '\.\/markdown-render\.js';/, `${label}: renderer helpers should be imported`);
+    assert.match(panel, /const lang = codeFenceLanguage\(info\);/, `${label}: fenced code should tolerate metadata after its language token`);
     assert.match(panel, /const highlighted = highlightCode\(block\.code, block\.lang\);/, `${label}: fenced code should be highlighted by its language`);
     assert.match(panel, /text = renderMarkdownHeadings\(text\);/, `${label}: ATX headings should be rendered`);
     assert.match(css, /\.syntax-keyword[\s\S]*?var\(--syntax-keyword\)/, `${label}: token colors should be styled`);
+    assert.match(css, /\.syntax-variable \{ color: var\(--syntax-variable\); \}/, `${label}: variables should use their dedicated theme color`);
     assert.match(css, /\.message-content h3 \{ font-size: 14px; \}/, `${label}: level-three headings should be visually distinct`);
   }
 });
