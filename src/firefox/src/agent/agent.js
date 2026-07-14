@@ -43,6 +43,7 @@ import {
 import { extractFirstJsonObject } from './json-extract.js';
 import { sanitizeText as sanitizePlannerText } from './text-sanitize.js';
 import { buildCustomSkillsPrompt, buildSkillToolDefinitions, buildSkillToolRegistry, normalizeCustomSkills } from './skills.js';
+import { publicMediaUrlNeedsExplicitTarget } from './public-media-url.js';
 import { USER_MEMORY_DEFAULT_MAX_PROMPT_CHARS, formatUserMemoryPrompt, normalizeUserMemoryMaxPromptChars, normalizeUserMemoryStore } from './user-memory.js';
 import { mergeRedactionFrameRegions, mapRegionsToImage, pixelateDataUrl } from './screenshot-redaction.js';
 import { buildTrustedRuntimeContext, stripTrustedRuntimeContext } from './runtime-context.js';
@@ -1172,6 +1173,29 @@ export class Agent {
     }
   }
 
+  _publicMediaUrlNeedsExplicitTarget(url) {
+    return publicMediaUrlNeedsExplicitTarget(url);
+  }
+
+  _publicMediaExplicitUrlRequiredResult(currentUrl) {
+    return {
+      success: false,
+      needsExplicitMediaUrl: true,
+      currentUrl,
+      useTool: 'download_public_media',
+      suggestedTools: ['screenshot', 'get_accessibility_tree', 'download_public_media'],
+      error: 'The current page is a feed/profile, not one public media item. First inspect a screenshot to identify the single visible target, read visible links to obtain its exact post/reel permalink, then call download_public_media with that explicit url. Do not send the feed URL and do not export separate video/audio tracks for the user to merge.',
+    };
+  }
+
+  async _downloadPublicMediaExplicitUrlGuard(tabId, fnName, fnArgs) {
+    if (fnName !== 'download_public_media') return null;
+    const explicitUrl = typeof fnArgs?.url === 'string' ? fnArgs.url.trim() : '';
+    const targetUrl = explicitUrl || await this._currentUrl(tabId);
+    if (!this._publicMediaUrlNeedsExplicitTarget(targetUrl)) return null;
+    return this._publicMediaExplicitUrlRequiredResult(targetUrl);
+  }
+
   _downloadPublicMediaAttemptTargetChanged(toolName, toolResultMessage = null) {
     if (this.constructor.NAV_TOOLS?.has?.(toolName) === true) return true;
     if (this.constructor.NAV_PRONE_TOOLS?.has?.(toolName) !== true) return false;
@@ -1197,6 +1221,7 @@ export class Agent {
     let attempted = false;
     let succeeded = false;
     let explicitAttempted = false;
+    let explicitSucceeded = false;
     for (const msg of list.slice(scanStart)) {
       if (msg?.role === 'assistant' && Array.isArray(msg.tool_calls)) {
         for (const tc of msg.tool_calls) {
@@ -1213,6 +1238,7 @@ export class Agent {
         attempted = false;
         succeeded = false;
         explicitAttempted = false;
+        explicitSucceeded = false;
         continue;
       }
       if (toolCall?.name !== 'download_public_media') continue;
@@ -1222,9 +1248,11 @@ export class Agent {
       attempted = !explicitUrl || explicitMatchesCurrent;
       let parsed = null;
       try { parsed = JSON.parse(this._unwrapUntrusted(msg.content)); } catch { /* malformed result still counts as an attempt */ }
-      succeeded = attempted && !!(parsed && typeof parsed === 'object' && parsed.success === true);
+      const resultSucceeded = !!(parsed && typeof parsed === 'object' && parsed.success === true);
+      succeeded = attempted && resultSucceeded;
+      explicitSucceeded = explicitAttempted && resultSucceeded;
     }
-    return { attempted, succeeded, explicitAttempted };
+    return { attempted, succeeded, explicitAttempted, explicitSucceeded };
   }
 
   _downloadPublicMediaArgsFromSocialArgs(args) {
@@ -1240,13 +1268,23 @@ export class Agent {
     if (!this._skillToolForName('download_public_media')) return null;
     if (fnArgs?.scroll === true || fnArgs?.mode === 'all' || Number(fnArgs?.limit || 0) > 1) return null;
 
-    const publicAttempt = this._downloadPublicMediaAttempt(messages, await this._currentUrl(tabId));
-    if (publicAttempt.succeeded) {
+    const currentUrl = await this._currentUrl(tabId);
+    const publicAttempt = this._downloadPublicMediaAttempt(messages, currentUrl);
+    const needsExplicitTarget = this._publicMediaUrlNeedsExplicitTarget(currentUrl);
+    if (publicAttempt.succeeded || (needsExplicitTarget && publicAttempt.explicitSucceeded)) {
       return {
         success: true,
         skipped: true,
         skippedBecause: 'download_public_media_already_succeeded',
         error: 'Skipped download_social_media because download_public_media already succeeded. Do not run the browser-side fallback unless the user asks for an additional download.',
+      };
+    }
+    if (needsExplicitTarget && !publicAttempt.explicitAttempted) {
+      return {
+        ...this._publicMediaExplicitUrlRequiredResult(currentUrl),
+        wrongTool: true,
+        fallbackTool: 'download_social_media',
+        suggestedArgs: this._downloadPublicMediaArgsFromSocialArgs(fnArgs),
       };
     }
     if (publicAttempt.attempted || publicAttempt.explicitAttempted) return null;
@@ -1364,6 +1402,7 @@ export class Agent {
   static NAV_PRONE_TOOLS = new Set(['click', 'click_ax', 'navigate', 'go_back', 'go_forward', 'execute_js', 'iframe_click']);
   static RECOMMENDED_ACTION_FAST_PATH_IDS = new Set(['download-media']);
   static RECOMMENDED_ACTION_FIRST_TOOLS = Object.freeze({
+    'download-media': new Set(['screenshot']),
     'summarize-page': new Set(['read_page']),
     'explain-page': new Set(['read_page', 'get_accessibility_tree']),
     'summarize-youtube-video': new Set(['read_youtube_transcript']),
@@ -1372,7 +1411,7 @@ export class Agent {
     'rewrite-focused-draft': new Set(['get_accessibility_tree']),
     'compare-price': new Set(['get_accessibility_tree']),
   });
-  static RECOMMENDED_ACTION_READ_ONLY_FIRST_TOOLS = new Set(['read_page', 'get_accessibility_tree', 'read_youtube_transcript']);
+  static RECOMMENDED_ACTION_READ_ONLY_FIRST_TOOLS = new Set(['screenshot', 'read_page', 'get_accessibility_tree', 'read_youtube_transcript']);
 
   // System prompt for the dedicated "vision model" sub-call. Kept terse and
   // format-oriented so the description is actually useful to the planning
@@ -1694,6 +1733,17 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       const argRepair = this._repairToolCallArgs(fnName, parsedArgs.args);
       const fnArgs = this._toolCallArgsWithReplayMethod(tabId, fnName, argRepair.args);
       const argRepairNotice = argRepair.note || '';
+
+      const mediaTargetGuard = await this._downloadPublicMediaExplicitUrlGuard(tabId, fnName, fnArgs);
+      if (mediaTargetGuard) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: JSON.stringify(mediaTargetGuard),
+        });
+        onUpdate('warning', { message: 'Find the visible media permalink before calling download_public_media from a feed.' });
+        continue;
+      }
 
       // Deterministic capability × origin permission gate (permission-gate.js).
       // Maps the tool to a capability and requires a (capability, host) grant —
@@ -3600,6 +3650,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
   _recommendedActionFirstToolArgs(tool, args = {}) {
     const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+    if (tool === 'screenshot') {
+      return { save: false };
+    }
     if (tool === 'read_page') {
       return { includeChrome: input.includeChrome === true };
     }
@@ -3627,7 +3680,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     const id = sanitizePlannerText(action.id, 80, { collapseWhitespace: true });
     const allowedToolsForAction = this.constructor.RECOMMENDED_ACTION_FIRST_TOOLS[id];
     if (!allowedToolsForAction) return null;
-    const tool = sanitizePlannerText(action.tool, 80, { collapseWhitespace: true });
+    const tool = sanitizePlannerText(action.firstTool || action.tool, 80, { collapseWhitespace: true });
     if (!allowedToolsForAction.has(tool)) return null;
     if (!this.constructor.RECOMMENDED_ACTION_READ_ONLY_FIRST_TOOLS.has(tool)) return null;
     if (this.constructor.STATE_CHANGE_TOOLS.has(tool)) return null;
