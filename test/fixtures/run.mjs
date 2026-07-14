@@ -205,6 +205,8 @@ for (const [label, sourcePath, manualOpen] of [
     await setupSelectionShortcut(page, sourcePath, { requiresManualOpen: manualOpen });
     await page.evaluate(() => {
       window.__selectionPageKeys = [];
+      window.addEventListener('keydown', (event) => window.__selectionPageKeys.push(`window-capture:${event.key}`), true);
+      document.addEventListener('keydown', (event) => window.__selectionPageKeys.push(`document-capture:${event.key}`), true);
       document.addEventListener('keydown', (event) => window.__selectionPageKeys.push(`down:${event.key}`));
       document.addEventListener('keypress', (event) => window.__selectionPageKeys.push(`press:${event.key}`));
       document.addEventListener('keyup', (event) => window.__selectionPageKeys.push(`up:${event.key}`));
@@ -237,6 +239,30 @@ for (const [label, sourcePath, manualOpen] of [
     const closedState = await page.evaluate(() => window.__webbrainSelectionShortcut.getState());
     if (closedState.popupVisible || closedState.highlightRectCount !== 0) {
       throw new Error(`closing the popup should remove the sticky highlight: ${JSON.stringify(closedState)}`);
+    }
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__webbrainSelectionShortcut.getState().popupVisible);
+    const reopenedState = await page.evaluate(() => window.__webbrainSelectionShortcut.getState());
+    await page.mouse.click(
+      reopenedState.questionRect.left + reopenedState.questionRect.width / 2,
+      reopenedState.questionRect.top + reopenedState.questionRect.height / 2,
+    );
+    await page.keyboard.type('What is the point?');
+    await page.keyboard.press('Control+Enter');
+    await page.waitForFunction(() => window.__selectionMessages.length === 1);
+    const submittedState = await page.evaluate(() => ({
+      message: window.__selectionMessages[0],
+      surface: window.__webbrainSelectionShortcut.getState(),
+      pageKeys: window.__selectionPageKeys,
+    }));
+    if (submittedState.message.action !== 'custom' || submittedState.message.question !== 'What is the point?') {
+      throw new Error(`capture-phase containment broke keyboard submission: ${JSON.stringify(submittedState)}`);
+    }
+    if (submittedState.surface.popupVisible || submittedState.surface.highlightRectCount !== 0) {
+      throw new Error(`keyboard submission should dismiss the surface and highlight: ${JSON.stringify(submittedState)}`);
+    }
+    if (submittedState.pageKeys.length) {
+      throw new Error(`capture-phase dialog keystrokes leaked to the page: ${JSON.stringify(submittedState.pageKeys)}`);
     }
   });
 

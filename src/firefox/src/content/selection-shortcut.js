@@ -220,27 +220,12 @@
     question.addEventListener('input', () => {
       sendButton.disabled = !question.value.trim();
     });
-    question.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        submitSelection('custom', question.value);
-      }
-    });
     sendButton.addEventListener('click', (event) => {
       if (event.isTrusted) submitSelection('custom', question.value);
     });
     shadow.querySelector('.hide').addEventListener('click', (event) => {
       if (event.isTrusted) disableShortcut();
     });
-    shadow.addEventListener('keydown', (event) => {
-      event.stopPropagation();
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      if (!popup.hidden) closePopup(true);
-      else dismissSurface();
-    });
-    shadow.addEventListener('keypress', (event) => event.stopPropagation());
-    shadow.addEventListener('keyup', (event) => event.stopPropagation());
     host.addEventListener('pointerdown', () => { interacting = true; }, true);
     host.addEventListener('pointerup', () => {
       setTimeout(() => { interacting = false; }, 0);
@@ -289,6 +274,20 @@
       highlight.style.width = `${rect.width}px`;
       highlight.style.height = `${rect.height}px`;
       highlightLayer.appendChild(highlight);
+    }
+  }
+
+  function containSurfaceKeyboardEvent(event) {
+    if (!host || !event.composedPath?.().includes(host)) return;
+    event.stopImmediatePropagation();
+    if (event.type !== 'keydown') return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      if (!popup.hidden) closePopup(true);
+      else dismissSurface();
+    } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && shadow?.activeElement === question) {
+      event.preventDefault();
+      submitSelection('custom', question.value);
     }
   }
 
@@ -412,6 +411,9 @@
     if (!event.composedPath?.().includes(host)) dismissSurface();
   }, true);
   window.addEventListener('resize', dismissSurface);
+  window.addEventListener('keydown', containSurfaceKeyboardEvent, true);
+  window.addEventListener('keypress', containSurfaceKeyboardEvent, true);
+  window.addEventListener('keyup', containSurfaceKeyboardEvent, true);
 
   api.runtime.onMessage.addListener((message) => {
     if (message?.type === 'WB_HIDE_FOR_TOOL_USE') {

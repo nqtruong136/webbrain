@@ -10453,8 +10453,12 @@ test('selection shortcut is shipped, enabled by default, and keeps browser-speci
     ['firefox', 'src/firefox', 'browser'],
   ]) {
     const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, prefix, 'manifest.json'), 'utf8'));
-    const scripts = manifest.content_scripts?.flatMap((entry) => entry.js || []) || [];
+    const contentScripts = manifest.content_scripts || [];
+    const scripts = contentScripts.flatMap((entry) => entry.js || []);
     assert.ok(scripts.includes('src/content/selection-shortcut.js'), `${label}: manifest should ship the selection shortcut`);
+    const selectionEntries = contentScripts.filter((entry) => entry.js?.includes('src/content/selection-shortcut.js'));
+    assert.equal(selectionEntries.length, 1, `${label}: selection shortcut should be injected exactly once`);
+    assert.equal(selectionEntries[0].run_at, 'document_start', `${label}: keyboard containment must register before page capture listeners`);
 
     const content = fs.readFileSync(path.join(ROOT, prefix, 'src/content/selection-shortcut.js'), 'utf8');
     assert.match(content, /attachShadow\(\{ mode: 'closed' \}\)/, `${label}: selection UI should use a closed Shadow DOM`);
@@ -10469,8 +10473,8 @@ test('selection shortcut is shipped, enabled by default, and keeps browser-speci
     assert.doesNotMatch(content, /M12 2\.8c\.65 3\.78/, `${label}: Claude-like sparkle icon should be removed`);
     assert.match(content, /rects: \(rects\.length \? rects : \[rect\]\)\.map\(serializeRect\)/, `${label}: selection snapshots should retain every visual line of the selected range`);
     assert.match(content, /function showSelectionHighlight\(\)[\s\S]*?highlightLayer\.appendChild\(highlight\);/, `${label}: opening the dialog should render a sticky selection highlight`);
-    assert.match(content, /shadow\.addEventListener\('keydown', \(event\) => \{\s*event\.stopPropagation\(\);/, `${label}: selection dialog keydown events should not reach page shortcuts`);
-    assert.match(content, /shadow\.addEventListener\('keypress', \(event\) => event\.stopPropagation\(\)\);\s*shadow\.addEventListener\('keyup', \(event\) => event\.stopPropagation\(\)\);/, `${label}: selection dialog keypress and keyup events should not reach the page`);
+    assert.match(content, /function containSurfaceKeyboardEvent\(event\)[\s\S]*?event\.stopImmediatePropagation\(\);/, `${label}: selection dialog keyboard events should stop page capture listeners`);
+    assert.match(content, /window\.addEventListener\('keydown', containSurfaceKeyboardEvent, true\);\s*window\.addEventListener\('keypress', containSurfaceKeyboardEvent, true\);\s*window\.addEventListener\('keyup', containSurfaceKeyboardEvent, true\);/, `${label}: keyboard containment should run during window capture`);
     assert.match(content, /function dismissSurface\(\) \{\s*clearSelectionHighlight\(\);/, `${label}: dismissing the selection surface should clear the sticky highlight`);
     assert.match(content, /message\?\.type === 'WB_HIDE_FOR_TOOL_USE'[\s\S]*?suppressed = true;[\s\S]*?message\?\.type === 'WB_SHOW_AFTER_TOOL_USE'[\s\S]*?suppressed = false;/, `${label}: screenshot capture should suppress and restore future shortcut detection`);
     assert.match(content, /submitting = true;\s*dismissSurface\(\);\s*try \{\s*const response = await api\.runtime\.sendMessage\(request\);/, `${label}: submission should dismiss before sending to prevent duplicates`);
