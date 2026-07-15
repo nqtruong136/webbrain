@@ -1141,8 +1141,27 @@ export class ScheduledJobManager {
         }).catch((e) => {
           console.warn('[WebBrain] failed to mark scheduled job as waiting for input:', e);
         });
+      } else if (type === 'clarify_auto') {
+        // Auto-timeout settled the clarify; the agent is running again. Clear
+        // needs_user_input / pendingClarify so the job UI and rehydrated cards
+        // do not keep showing a stale wait-for-input prompt.
+        this._waitingForInput.delete(job.id);
+        this._updateJobIf(job.id, (prev) => prev.status === 'needs_user_input', () => ({
+          status: 'running',
+          lastError: null,
+          pendingClarify: null,
+        })).then((resumed) => {
+          if (resumed?.status === 'running') this._emit(resumed, 'running');
+        }).catch((e) => {
+          console.warn('[WebBrain] failed to resume scheduled job after clarify timeout:', e);
+        });
       }
-      this.sendUpdate(tabId, type, type === 'clarify' ? { ...data, scheduledJobId: job.id } : data);
+      // Tag scheduled clarify prompts (and their auto-timeout follow-ups) with
+      // the job id so the sidepanel can scope cards and lock on timeout.
+      const withJob = (type === 'clarify' || type === 'clarify_auto')
+        ? { ...data, scheduledJobId: job.id }
+        : data;
+      this.sendUpdate(tabId, type, withJob);
     };
 
     this.showIndicator(tabId);

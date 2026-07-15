@@ -10218,6 +10218,16 @@ test('clarify tool auto-timeout is configurable and mirrored across browsers', (
 
     assert.match(scheduler, /pending\.timeoutSec/, `${label}: scheduled pendingClarify should persist timeoutSec`);
     assert.match(scheduler, /pending\.deadlineTs/, `${label}: scheduled pendingClarify should persist deadlineTs`);
+    assert.match(
+      scheduler,
+      /type === 'clarify_auto'[\s\S]*?_waitingForInput\.delete\(job\.id\)[\s\S]*?status: 'running'[\s\S]*?pendingClarify: null/,
+      `${label}: scheduled clarify_auto should clear wait state and restore running`,
+    );
+    assert.match(
+      scheduler,
+      /type === 'clarify' \|\| type === 'clarify_auto'/,
+      `${label}: scheduled clarify_auto updates should carry scheduledJobId`,
+    );
 
     assert.match(bg, /loadClarifyTimeout/, `${label}: background should load clarify timeout from storage`);
     assert.match(bg, /changes\.clarifyTimeoutSec/, `${label}: background should hot-reload clarify timeout`);
