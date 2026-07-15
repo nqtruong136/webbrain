@@ -211,8 +211,10 @@ WebBrain separates model tier from conversation mode:
 - **Tier** (`compact`, `mid`, `full`) controls how many normal browser-agent tools a model sees.
 - **Mode** (`ask`, `act`, `dev`) controls what kind of task the user is allowing. Ask is read-only. Act exposes the selected tier's normal tools. Dev requires a Mid or Full provider and adds a small source/style/debug tool appendix, including deeper DOM/frame inspection for Mid-tier Dev runs.
 
-| Tool | Ask | Compact Act | Mid Act | Full Act | Dev Add-on |
-|---|---:|---:|---:|---:|---:|
+Legend: **Yes** = available · **-** = not available · **C** = Chrome only · **Dev** = Dev-mode add-on (Mid/Full providers; not Compact).
+
+| Tool | Ask | Compact | Mid | Full | Dev |
+|------|:---:|:-------:|:---:|:----:|:---:|
 | `get_accessibility_tree` | Yes | Yes | Yes | Yes | - |
 | `read_page` | Yes | Yes | Yes | Yes | - |
 | `read_pdf` | Yes | No | Yes | Yes | - |
@@ -254,22 +256,22 @@ WebBrain separates model tier from conversation mode:
 | `read_downloaded_file` | No | No | Yes | Yes | - |
 | `download_files` | No | No | Yes | Yes | - |
 | `download_resource_from_page` | No | No | Yes | Yes | - |
-| `upload_file` | No | No | Chrome | Chrome | - |
+| `upload_file` | No | No | C | C | - |
 | `verify_form` | No | No | Yes | Yes | - |
 | `hover` | No | No | No | Yes | - |
 | `drag_drop` | No | No | No | Yes | - |
 | `get_shadow_dom` | No | No | No | Yes | Yes |
-| `shadow_dom_query` | No | No | No | Chrome | Chrome |
+| `shadow_dom_query` | No | No | No | C | C |
 | `get_frames` | No | No | No | Yes | Yes |
-| `inject_css` | No | No | No | No | Chrome |
-| `remove_injected_css` | No | No | No | No | Chrome |
-| `patch_element` | No | No | No | No | Chrome |
-| `revert_patch` | No | No | No | No | Chrome |
+| `inject_css` | No | No | No | No | C |
+| `remove_injected_css` | No | No | No | No | C |
+| `patch_element` | No | No | No | No | C |
+| `revert_patch` | No | No | No | No | C |
 | `execute_js` | No | No | No | No | Yes |
-| `read_console` | No | No | No | No | Chrome |
-| `inspect_network_requests` | No | No | No | No | Chrome |
-| `inspect_event_listeners` | No | No | No | No | Chrome |
-| `highlight_element` | No | No | No | No | Chrome |
+| `read_console` | No | No | No | No | C |
+| `inspect_network_requests` | No | No | No | No | C |
+| `inspect_event_listeners` | No | No | No | No | C |
+| `highlight_element` | No | No | No | No | C |
 
 Loaded skills can append additional tool schemas for the current run. For example,
 the bundled FreeSkillz.xyz skill can expose `read_youtube_transcript` for YouTube
@@ -278,7 +280,7 @@ media URLs. These skill tools are not hard-coded in the static table above:
 before the skill is loaded (or if it is removed), the tools are absent. Ask
 also filters out mutating/download tools even when their owning skill is loaded.
 
-Dev Add-on tools are only exposed in Dev mode, and Dev mode is blocked for Compact-tier providers. Chrome's reversible editing tools return patch IDs: `inject_css` pairs with `remove_injected_css`, and `patch_element` pairs with `revert_patch`.
+Dev tools are only exposed in Dev mode, and Dev mode is blocked for Compact-tier providers. Chrome's reversible editing tools return patch IDs: `inject_css` pairs with `remove_injected_css`, and `patch_element` pairs with `revert_patch`.
 
 ### Dev-mode page editing and diagnostics
 
