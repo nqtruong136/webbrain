@@ -1501,7 +1501,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   handleMessage(msg, sender)
     .then(sendResponse)
-    .catch(e => sendResponse({ error: e.message }));
+    .catch(e => sendResponse({ error: e.message, status: e.status || 500 }));
 
   return true; // async response
 });
@@ -1525,6 +1525,8 @@ async function handleMessage(msg, sender) {
       return await cloudRunController.startRun(msg);
     case 'cloud_status':
       return await cloudRunController.status(msg);
+    case 'cloud_respond':
+      return await cloudRunController.respond(msg);
     case 'cloud_abort':
       return await cloudRunController.abort(msg);
     case 'cloud_bridge_start':

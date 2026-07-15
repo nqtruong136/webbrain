@@ -7,7 +7,7 @@
  */
 
 (() => {
-  const ALLOWED_BRIDGE_ACTIONS = new Set(['cloud_run', 'cloud_status', 'cloud_abort']);
+  const ALLOWED_BRIDGE_ACTIONS = new Set(['cloud_run', 'cloud_status', 'cloud_respond', 'cloud_abort']);
   let socket = null;
   let bridgeUrl = null;
   let enabled = false;
@@ -97,7 +97,7 @@
             && (response.runId != null || response.run_id != null)
             && typeof response.status === 'string';
           if (response?.error && !isRunSnapshot) {
-            sendJson({ id, ok: false, error: response.error }, nextSocket);
+            sendJson({ id, ok: false, error: response.error, status: response.status || 500 }, nextSocket);
           } else {
             sendJson({ id, ok: true, result: response }, nextSocket);
           }

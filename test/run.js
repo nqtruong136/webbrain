@@ -4671,6 +4671,112 @@ test('cloud run controller uses the visible tab and persists terminal status', a
   assert.equal(session.webbrainCloudRunSnapshots[0].status, 'completed');
 });
 
+test('cloud run controller pauses and resumes clarify, permission, and submit input', async () => {
+  const session = {};
+  const tab = { id: 20, url: 'https://webbrain.one/', active: true, windowId: 3 };
+  let emitUpdate;
+  let finishRun;
+  const submitted = [];
+  const controller = createCloudRunController({
+    chromeApi: {
+      tabs: {
+        query: async () => [tab],
+        get: async () => tab,
+        update: async () => tab,
+      },
+      windows: { update: async () => ({}) },
+      storage: {
+        local: { get: async () => ({ webbrainCloudBridgeEnabled: false }) },
+        session: {
+          get: async key => ({ [key]: session[key] || [] }),
+          set: async value => Object.assign(session, value),
+        },
+      },
+      runtime: { sendMessage: async () => ({ connected: false }) },
+    },
+    agent: {
+      isRunning: () => false,
+      abort: () => {},
+      submitClarifyResponse: (...args) => {
+        submitted.push(args);
+        return true;
+      },
+      processMessage: (_tabId, _task, onUpdate) => {
+        emitUpdate = onUpdate;
+        return new Promise(resolve => { finishRun = resolve; });
+      },
+    },
+    ensureOffscreen: async () => {},
+    makeRunId: () => 'run_input',
+  });
+
+  await controller.startRun({ task: 'Complete an interactive task' });
+  const cases = [
+    {
+      data: { clarifyId: 'clr_general', question: 'Which account?', options: ['Personal', 'Work'] },
+      answer: 'Work',
+    },
+    {
+      data: {
+        clarifyId: 'perm_network',
+        question: 'Allow network access?',
+        options: ['once', 'always', 'deny'],
+        permission: { capability: 'network', host: 'example.com' },
+      },
+      answer: 'once',
+    },
+    {
+      data: {
+        clarifyId: 'submit_form',
+        question: 'Submit this form?',
+        options: ['once', 'deny'],
+        submitConfirmation: { host: 'example.com', summary: 'Email form' },
+      },
+      answer: 'once',
+    },
+  ];
+
+  for (const [index, scenario] of cases.entries()) {
+    emitUpdate('clarify', scenario.data);
+    const paused = await controller.status({ runId: 'run_input' });
+    assert.equal(paused.status, 'needs_user_input');
+    assert.equal(paused.pendingInput.clarifyId, scenario.data.clarifyId);
+    if (index === 0) {
+      await assert.rejects(
+        () => controller.respond({ runId: 'run_input', clarifyId: 'stale', answer: scenario.answer }),
+        /no longer pending/,
+      );
+    }
+    const resumed = await controller.respond({
+      runId: 'run_input',
+      clarifyId: scenario.data.clarifyId,
+      answer: scenario.answer,
+    });
+    assert.equal(resumed.status, 'running');
+    assert.equal(resumed.pendingInput, null);
+    assert.deepEqual(resumed.updates.at(-1).data, {
+      clarifyId: scenario.data.clarifyId,
+      source: 'cloud_api',
+    });
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(resumed.updates.at(-1).data, 'answer'),
+      false,
+      'clarify answer leaked into the response update',
+    );
+  }
+
+  assert.deepEqual(submitted, [
+    [20, 'clr_general', 'Work', 'cloud_api'],
+    [20, 'perm_network', 'once', 'cloud_api'],
+    [20, 'submit_form', 'once', 'cloud_api'],
+  ]);
+  finishRun('Done');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const completed = await controller.status({ runId: 'run_input' });
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.pendingInput, null);
+});
+
 test('cloud run text_delta coalesce scrubs live status payloads', async () => {
   const session = {};
   const tab = { id: 22, url: 'https://webbrain.one/', active: true, windowId: 3 };
@@ -4819,7 +4925,13 @@ test('cloud run controller fails interrupted runs after service-worker restart',
     ],
     createdAt: '2020-01-01T00:00:00.000Z',
   };
-  const session = { webbrainCloudRunSnapshots: [row] };
+  const waitingRow = {
+    ...row,
+    runId: 'run_waiting',
+    status: 'needs_user_input',
+    pendingInput: { clarifyId: 'clr_old', question: 'Continue?' },
+  };
+  const session = { webbrainCloudRunSnapshots: [row, waitingRow] };
   const controller = createCloudRunController({
     chromeApi: {
       tabs: {},
@@ -4837,6 +4949,10 @@ test('cloud run controller fails interrupted runs after service-worker restart',
   assert.equal(restored.status, 'failed');
   assert.match(restored.error, /service worker restarted/i);
   assert.deepEqual(restored.updates.map(update => update.seq), [1, 8]);
+  const restoredWaiting = await controller.status({ runId: 'run_waiting' });
+  assert.equal(restoredWaiting.status, 'failed');
+  assert.equal(restoredWaiting.pendingInput, null);
+  assert.match(restoredWaiting.error, /service worker restarted/i);
 });
 
 test('cloud run persistence caps oversized strings, runs, and total snapshot bytes', () => {
@@ -5018,6 +5134,23 @@ test('offscreen cloud bridge preserves failed run envelopes and rejects unauthor
   const abortResponse = socket.sent.find(message => message.id === 'abort-1');
   assert.equal(abortResponse.ok, true, 'aborting snapshots with an error explanation must remain successful protocol responses');
   assert.equal(abortResponse.result.status, 'aborting');
+
+  socket.emit('message', {
+    data: JSON.stringify({
+      id: 'respond-1',
+      action: 'cloud_respond',
+      payload: { runId: 'run_input', clarifyId: 'clr_1', answer: 'Continue' },
+    }),
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  const respondCall = runtimeCalls.find(message => message.action === 'cloud_respond');
+  assert.deepEqual(JSON.parse(JSON.stringify(respondCall)), {
+    runId: 'run_input',
+    clarifyId: 'clr_1',
+    answer: 'Continue',
+    target: 'background',
+    action: 'cloud_respond',
+  });
 
   socket.emit('message', {
     data: JSON.stringify({ id: 'missing-1', action: 'cloud_status', payload: { runId: 'run_missing' } }),
