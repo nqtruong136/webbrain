@@ -85,6 +85,7 @@ function compactCloudRunForPersistence(run) {
   return scrubCloudValue({
     runId: run?.runId,
     status: run?.status,
+    parentRunId: run?.parentRunId || null,
     tabId: run?.tabId,
     task: run?.task,
     structured: !!run?.outputSchema || run?.structured === true,
@@ -123,6 +124,7 @@ function cloudSnapshot(run, { includeUpdates = true } = {}) {
   return {
     runId: run.runId,
     status: run.status,
+    parentRunId: run.parentRunId || null,
     tabId: run.tabId,
     task: run.task,
     structured: run.structured ?? !!run.outputSchema,
@@ -312,7 +314,24 @@ export function createCloudRunController({
 
   async function startRun(msg = {}) {
     await hydrate();
-    const tabId = await resolveTabId(msg.tabId ?? msg.tab_id);
+    const parentRunId = String(msg.parentRunId || msg.parent_run_id || '').trim() || null;
+    let requestedTabId = msg.tabId ?? msg.tab_id;
+    if (parentRunId) {
+      const parent = runs.get(parentRunId);
+      if (parent) {
+        if (!TERMINAL_STATUSES.has(parent.status)) {
+          throw cloudRunError('Parent cloud run must be finished before it can be continued.', 409);
+        }
+        const existingChild = [...runs.values()].find(candidate => candidate.parentRunId === parentRunId);
+        if (existingChild) {
+          throw cloudRunError(`Cloud run has already been continued as ${existingChild.runId}.`, 409);
+        }
+        requestedTabId = parent.tabId;
+      } else if (requestedTabId == null || requestedTabId === '') {
+        throw cloudRunError('Parent cloud run is no longer available and has no saved tab.', 409);
+      }
+    }
+    const tabId = await resolveTabId(requestedTabId);
     const task = String(msg.task || msg.text || '').trim();
     if (!task) throw new Error('cloud_run requires `task`.');
     if (agent.isRunning(tabId)) throw new Error(`Tab ${tabId} already has an active WebBrain run.`);
@@ -323,6 +342,7 @@ export function createCloudRunController({
     const run = {
       runId: msg.runId || msg.run_id || makeRunId(),
       status: 'running',
+      parentRunId,
       tabId,
       task,
       outputSchema,

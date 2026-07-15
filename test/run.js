@@ -4700,6 +4700,69 @@ test('cloud run controller uses the visible tab and persists terminal status', a
   assert.equal(session.webbrainCloudRunSnapshots[0].status, 'completed');
 });
 
+test('cloud run controller appends child runs to the same tab conversation', async () => {
+  const session = {};
+  const tab = { id: 17, url: 'https://example.com/', active: true, windowId: 3 };
+  const requestedTabIds = [];
+  const calls = [];
+  let nextRun = 0;
+  const controller = createCloudRunController({
+    chromeApi: {
+      tabs: {
+        query: async () => [tab],
+        get: async tabId => {
+          requestedTabIds.push(tabId);
+          return { ...tab, id: tabId };
+        },
+        update: async () => tab,
+      },
+      windows: { update: async () => ({}) },
+      storage: {
+        local: { get: async () => ({ webbrainCloudBridgeEnabled: false }) },
+        session: {
+          get: async key => ({ [key]: session[key] || [] }),
+          set: async value => Object.assign(session, value),
+        },
+      },
+      runtime: { sendMessage: async () => ({ connected: false }) },
+    },
+    agent: {
+      isRunning: () => false,
+      abort: () => {},
+      processMessage: async (tabId, task) => {
+        calls.push({ tabId, task });
+        return `Finished: ${task}`;
+      },
+    },
+    ensureOffscreen: async () => {},
+    makeRunId: () => (++nextRun === 1 ? 'run_parent' : 'run_child'),
+  });
+
+  await controller.startRun({ task: 'Find the results' });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal((await controller.status({ runId: 'run_parent' })).status, 'completed');
+
+  const child = await controller.startRun({
+    task: 'Open the first result',
+    parentRunId: 'run_parent',
+    tabId: 999,
+  });
+  assert.equal(child.parentRunId, 'run_parent');
+  assert.equal(child.tabId, 17, 'a continuation must ignore a caller tab override and reuse its parent tab');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(calls, [
+    { tabId: 17, task: 'Find the results' },
+    { tabId: 17, task: 'Open the first result' },
+  ]);
+  assert.equal(requestedTabIds.includes(999), false);
+  assert.equal(session.webbrainCloudRunSnapshots.find(run => run.runId === 'run_child').parentRunId, 'run_parent');
+
+  await assert.rejects(
+    () => controller.startRun({ task: 'Create a branch', parentRunId: 'run_parent' }),
+    /already been continued as run_child/,
+  );
+});
+
 test('cloud run controller pauses and resumes clarify, permission, and submit input', async () => {
   const session = {};
   const tab = { id: 20, url: 'https://webbrain.one/', active: true, windowId: 3 };
