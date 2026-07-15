@@ -1128,7 +1128,11 @@ export class ScheduledJobManager {
           lastError: null,
           pendingClarify: null,
         })).then((resumed) => {
-          if (resumed?.status === 'running') this._emit(resumed, 'running');
+          // Emit 'updated', not 'running': the sidepanel treats every
+          // scheduled_job running event as start-of-run and creates a new
+          // assistant bubble. Replaying that after clarify timeout orphans
+          // the original scheduled message and leaves a blank spinner open.
+          if (resumed?.status === 'running') this._emit(resumed, 'updated');
         }).catch((e) => {
           console.warn('[WebBrain] failed to resume scheduled job after clarify timeout:', e);
         });

@@ -5312,8 +5312,13 @@ function submitClarify(card, tabId, clarifyId, answer, source) {
     showActivity(t('sp.activity.thinking'));
   }
   const clarifyPayload = { tabId, clarifyId, answer, source };
-  if (card.dataset.memorySource) clarifyPayload.memorySource = card.dataset.memorySource;
-  if (card.dataset.memoryQuestion) clarifyPayload.question = card.dataset.memoryQuestion;
+  // Timeout auto-selects are not user answers — never feed them to user-memory.
+  if (source !== 'timeout' && card.dataset.memorySource) {
+    clarifyPayload.memorySource = card.dataset.memorySource;
+  }
+  if (source !== 'timeout' && card.dataset.memoryQuestion) {
+    clarifyPayload.question = card.dataset.memoryQuestion;
+  }
   sendToBackground('clarify_response', clarifyPayload)
     .catch(() => {
       if (isScheduledClarify) {

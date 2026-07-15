@@ -1719,10 +1719,12 @@ async function handleMessage(msg, sender) {
       const answer = String(msg.answer || '').trim();
       if (!clarifyId) return { ok: false, error: 'clarifyId required' };
       if (!answer) return { ok: false, error: 'answer required' };
-      const matched = agent.submitClarifyResponse(tabId, clarifyId, answer, msg.source || 'user');
-      if (matched && msg.memorySource === 'clarification_response') {
+      const source = String(msg.source || 'user');
+      const matched = agent.submitClarifyResponse(tabId, clarifyId, answer, source);
+      // Auto-timeout defaults are not user-authored preferences.
+      if (matched && source !== 'timeout' && msg.memorySource === 'clarification_response') {
         recordClarificationMemoryCandidate(tabId, msg.question, answer);
-      } else if (matched && msg.memorySource === 'form_confirmation') {
+      } else if (matched && source !== 'timeout' && msg.memorySource === 'form_confirmation') {
         recordFormCompletionMemoryCandidate(tabId, answer);
       }
       return { ok: matched, matched };

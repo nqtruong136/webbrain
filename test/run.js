@@ -10225,8 +10225,28 @@ test('clarify tool auto-timeout is configurable and mirrored across browsers', (
     );
     assert.match(
       scheduler,
+      /type === 'clarify_auto'[\s\S]*?_emit\(resumed, 'updated'\)/,
+      `${label}: scheduled clarify_auto must not re-emit running (would spawn a new assistant bubble)`,
+    );
+    assert.doesNotMatch(
+      scheduler,
+      /type === 'clarify_auto'[\s\S]*?_emit\(resumed, 'running'\)/,
+      `${label}: scheduled clarify_auto must not emit running after timeout`,
+    );
+    assert.match(
+      scheduler,
       /type === 'clarify' \|\| type === 'clarify_auto'/,
       `${label}: scheduled clarify_auto updates should carry scheduledJobId`,
+    );
+    assert.match(
+      panel,
+      /source !== 'timeout' && card\.dataset\.memorySource/,
+      `${label}: sidepanel should not attach memorySource for timeout auto-selects`,
+    );
+    assert.match(
+      bg,
+      /source !== 'timeout' && msg\.memorySource === 'clarification_response'/,
+      `${label}: background should not learn timeout clarify answers as user memory`,
     );
 
     assert.match(bg, /loadClarifyTimeout/, `${label}: background should load clarify timeout from storage`);
