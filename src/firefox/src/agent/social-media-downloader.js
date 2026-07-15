@@ -1214,7 +1214,7 @@ window.SocialMediaDownloader = (() => {
     //     for backwards compat with any external callers of
     //     _buildRecommendation. NOT consumed by download_social_media
     //     anymore.
-    if (mseBytes > 0) {
+    if (mseBytes > 0 && requestedTarget !== 'image') {
       if (mseSaveCode === 'split_mse_requires_server_merge') {
         return {
           kind: 'split_mse_unmerged',

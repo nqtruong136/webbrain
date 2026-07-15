@@ -10025,7 +10025,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
               let mseSavedFiles = null;
               let mseSaveError = null;
               let mseSaveCode = null;
-              if (mseBytes > 0 && completedRequestedFromStats === 0) {
+              if (mseBytes > 0 && runOpts.target !== 'image' && completedRequestedFromStats === 0) {
                 try {
                   mseSavedFiles = await window.SocialMediaDownloader.saveMse({
                     prefix: (window.location && window.location.hostname || 'mse').replace(/^www\./, ''),
