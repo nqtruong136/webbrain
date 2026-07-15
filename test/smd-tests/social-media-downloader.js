@@ -24,6 +24,7 @@
  *            'main'           - force "main content" mode
  *            'all'            - force "everything on page" mode
  *   all:     true|false       - scroll-and-collect (only useful in 'all')
+ *   target:  'auto'|'media'|'image'|'video' - filter before saving
  *   limit:   N                - max downloads
  *
  * --------------------------------------------------------------------
@@ -1364,6 +1365,12 @@ window.SocialMediaDownloader = (() => {
     String(url || '').startsWith('blob:') ||
     /v\.redd\.it/i.test(url || '');
 
+  const filterUrlsForTarget = (urls, target = 'auto') => {
+    if (target === 'video') return urls.filter(isVideoDownloadUrl);
+    if (target === 'image') return urls.filter(url => !isVideoDownloadUrl(url));
+    return urls;
+  };
+
   const focusedDownloadUrls = urls => {
     urls = videoFirstUrls(urls);
     const httpVideoUrl = urls.find(isHttpVideoUrl);
@@ -1713,6 +1720,7 @@ window.SocialMediaDownloader = (() => {
   // ---------- Public API ----------
   const run = async ({
     mode = 'auto',
+    target = 'auto',
     all = false,
     maxScrolls = 40, scrollDelay = 1000, settleDelay = 1500,
     limit = Infinity,
@@ -1723,8 +1731,9 @@ window.SocialMediaDownloader = (() => {
       ? await scrollAndCollect({ maxScrolls, scrollDelay, settleDelay,
                                   mode: mode === 'auto' ? 'all' : mode })
       : list(mode);
-    const selected = urls.slice(0, limit);
-    console.log(`[SMD] downloading ${selected.length} of ${urls.length}`);
+    const eligibleUrls = filterUrlsForTarget(urls, target);
+    const selected = eligibleUrls.slice(0, limit);
+    console.log(`[SMD] downloading ${selected.length} of ${eligibleUrls.length} target-matching URLs`);
     // Track per-status counts so the calling tool can report honestly to
     // the agent. Before this we returned only the URL list, which made it
     // look like a 713-URL run completed 713 downloads when in practice
@@ -1792,6 +1801,7 @@ window.SocialMediaDownloader = (() => {
     _hexToBytes,
     _extractYoutubeProgressive,
     _buildRecommendation,
+    _filterUrlsForTarget: filterUrlsForTarget,
     _groupRedditDash: groupRedditDash,
     _preferHighQuality: preferHighQuality
   };

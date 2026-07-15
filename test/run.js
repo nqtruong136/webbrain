@@ -13044,6 +13044,27 @@ test('social media downloader names extensionless HTTP videos as videos', () => 
   }
 });
 
+test('social media downloader filters requested media type before saving', () => {
+  const { smd } = loadSocialMediaDownloaderRuntime();
+  const imageUrl = 'https://i.ytimg.com/vi/abc/maxresdefault.jpg';
+  const videoUrl = 'https://rr1---sn-foo.googlevideo.com/videoplayback?id=abc&mime=video%2Fmp4';
+  const urls = [imageUrl, videoUrl];
+
+  assert.deepEqual(Array.from(smd._filterUrlsForTarget(urls, 'video')), [videoUrl]);
+  assert.deepEqual(Array.from(smd._filterUrlsForTarget(urls, 'image')), [imageUrl]);
+  assert.deepEqual(Array.from(smd._filterUrlsForTarget(urls, 'media')), urls);
+  assert.deepEqual(Array.from(smd._filterUrlsForTarget(urls)), urls);
+
+  for (const relPath of [
+    'src/chrome/src/agent/social-media-downloader.js',
+    'src/firefox/src/agent/social-media-downloader.js',
+    'test/smd-tests/social-media-downloader.js',
+  ]) {
+    const source = fs.readFileSync(path.join(ROOT, relPath), 'utf8');
+    assert.match(source, /const eligibleUrls = filterUrlsForTarget\(urls, target\);[\s\S]*const selected = eligibleUrls\.slice\(0, limit\);/);
+  }
+});
+
 test('probeLocalFile uses a detached isolated input for validation', async () => {
   const cdp = new CDPClient();
   const commands = [];
