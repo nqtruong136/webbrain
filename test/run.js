@@ -1646,8 +1646,11 @@ test('routes AWS console tasks through the specific CloudShell adapter', () => {
   }
 
   const cloudShell = getActiveAdapter(cloudShellUrls[0]);
-  assert.match(cloudShell?.notes || '', /smallest concrete Bash\/AWS CLI command sequence/);
+  assert.match(cloudShell?.notes || '', /smallest concrete, shell-neutral AWS CLI command sequence/);
   assert.match(cloudShell?.notes || '', /never type natural-language instructions into the terminal/i);
+  assert.match(cloudShell?.notes || '', /Do not assume the active shell is Bash.*zsh or PowerShell/s);
+  assert.match(cloudShell?.notes || '', /Bash-only heredocs, loops, quoting, or command substitution.*`bash` as a standalone command.*new prompt/s);
+  assert.doesNotMatch(cloudShell?.notes || '', /CloudShell is a Bash terminal/);
   assert.match(cloudShell?.notes || '', /aws sts get-caller-identity --no-cli-pager/);
   assert.match(cloudShell?.notes || '', /CloudShell is unavailable.*us-east-1.*--region <target-region>.*never silently operate on the fallback region/s);
   assert.match(cloudShell?.notes || '', /destructive, permission-changing, or cost-generating.*dry-run or preview.*explicitly authorized by the user/s);
