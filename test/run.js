@@ -24368,10 +24368,14 @@ test('sidepanel: restored plan review cards rebind approve and cancel actions', 
     assert.match(source, /plan-review-change[\s\S]*revealPlanReviewEditor\(card, true\)/, `${file} should reveal editing only through Change`);
     assert.match(source, /plan-review-cancel[\s\S]*submitPlanReview\(card, tabId, planId, 'reject'/, `${file} should rebind cancel`);
     assert.match(source, /renderPlanReviewView\(data\.plan, compactMarkdown\)/, `${file} should render a read-only steps view`);
+    assert.match(source, /const skillIds = Array\.isArray\(plan\?\.skill_ids\)[\s\S]*plan-review-skills[\s\S]*for \(const skillId of skillIds\)/, `${file} should show planned skill activation before approval`);
     assert.match(source, /card\.dataset\.editing = 'false';/, `${file} should start plan cards in read-only mode`);
     const css = fs.readFileSync(path.join(ROOT, file.replace(/src\/ui\/sidepanel\.js$/, 'styles/sidepanel.css')), 'utf8');
     assert.match(css, /\.plan-review-card:not\(\[data-editing="true"\]\) \.plan-review-edit/, `${file} css should hide the plan edit textarea until editing`);
     assert.match(css, /\.plan-review-card\[data-editing="true"\] \.plan-review-view/, `${file} css should hide the read-only view while editing`);
+    assert.match(css, /\.plan-review-skills[\s\S]*\.plan-review-skill-list[\s\S]*\.plan-review-skill/, `${file} css should make planned skill activation visible`);
+    const enLocale = fs.readFileSync(path.join(ROOT, file.replace(/src\/ui\/sidepanel\.js$/, 'src/ui/locales/en.js')), 'utf8');
+    assert.match(enLocale, /'sp\.plan\.skills': 'Skills to activate'/, `${file} should label the visible skill activation disclosure`);
     assert.match(source, /const useVerbosePlan = verboseMode && !!data\.verboseMarkdown;/, `${file} should use the verbose plan only in verbose mode`);
     assert.match(source, /card\.dataset\.planMarkdownMode = useVerbosePlan \? 'verbose' : 'compact';/, `${file} should remember which plan text was displayed`);
     assert.match(source, /markdownMode === 'verbose'/, `${file} should pin the displayed verbose plan when approved`);

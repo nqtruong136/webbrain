@@ -219,6 +219,7 @@ export default {
   'sp.plan.cancel': 'Cancel',
   'sp.plan.edit_hint': 'Optional: edit the plan before approving',
   'sp.plan.confidence': 'Confidence {confidence}',
+  'sp.plan.skills': 'Skills to activate',
   'sp.plan.auto_approved': 'Plan auto-approved (confidence {confidence}) — running…',
   'sp.plan.approved': 'Plan approved — running…',
   'sp.plan.cancelled': 'Plan cancelled.',
