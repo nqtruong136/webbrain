@@ -49,7 +49,7 @@
 - **Smart Context** — Token-aware auto-compaction (summarizes older turns once the conversation nears the model's context window, with a visible "Context automatically compacted" notice), tool result limits, and emergency overflow recovery
 - **Browser History Control** — Act mode can use native `go_back` / `go_forward` history tools instead of CSP-sensitive page JavaScript
 - **API Shortcut Hints** — Repeated clicks that fire the same XHR/fetch request can surface a matching `fetch_url` suggestion while preserving the UI-first and `/allow-api` mutation policy
-- **On-demand Skills and Skill Tools** — Settings → Skills can import trusted skill text or URLs. Mid/Full runs receive a small eligible name/summary catalog and load full instructions plus compatible `webbrain-tools` only when relevant; Compact disables skills. FreeSkillz.xyz and the browser-only email verification-code helper are enabled by default, and either can be removed.
+- **On-demand Skills and Skill Tools** — Settings → Skills can import trusted skill text or URLs. Mid/Full runs receive a small eligible ID/name/summary/semantic-intent catalog and load full instructions plus compatible `webbrain-tools` only when relevant; Compact disables skills. FreeSkillz.xyz and the browser-only email verification-code helper are enabled by default, and either can be removed.
 - **Copy Support** — Copy buttons on code blocks and full messages
 - **Page Inspection Banner** — Visual indicator when the agent is interacting with the page
 - **Stop Button** — Abort the agent mid-execution at any time
@@ -146,34 +146,36 @@ Click the gear icon or go to the extension's Options page to configure:
 **Skills:**
 - FreeSkillz.xyz ships enabled by default and can expose `read_youtube_transcript`, `resolve_public_media`, and `download_public_media` through its skill manifest after it is loaded for a relevant run; remove it from Settings → Skills if you do not want it available.
 - The OTP / verification-code helper also ships enabled by default and loads only for relevant requests. It declares no network tool: on the active run tab, it prefers selected text or a bounded accessibility-tree subtree, matches the newest relevant service code, excludes SMS/native-app access, and honors Strict secret handling. When used, the scoped page content and code are included in the normal request to your configured LLM provider. If Record traces is enabled, raw tool results and model responses are also stored locally until those traces are deleted. Remove the skill from Settings → Skills if you do not want this guidance available.
-- Imported skills are copied into browser local storage. Mid/Full runs send eligible names and summaries in the `load_skill` catalog; full instructions are appended to the system prompt only after activation for the current run. Compact exposes no loader, skill prompt, or skill tools.
-- Optional fenced `webbrain-skill` JSON metadata can declare a summary (maximum 200 characters) and `modes` (`ask`, `act`, or `dev`). Skills without metadata infer the first prose paragraph as their summary and default to Act/Dev.
+- Imported skills are copied into browser local storage. Mid/Full runs send eligible IDs, names, summaries, and optional canonical semantic intents to the planner and `load_skill` catalog; full instructions are appended to the system prompt only after activation for the current run. Compact exposes no loader, skill prompt, or skill tools.
+- Optional fenced `webbrain-skill` JSON metadata can declare a summary (maximum 200 characters), `modes` (`ask`, `act`, or `dev`), and up to six canonical `intents` such as `verification_code` or `public_media_download`. Intents are cross-language meaning hints for the LLM, not literal keyword matching. Skills without metadata infer the first prose paragraph as their summary, have no inferred intents, and default to Act/Dev.
 - A skill can expose read-only HTTP tools or short-lived download-job tools with a fenced `webbrain-tools` JSON manifest. Importing a skill is the trust boundary for its declared HTTPS endpoint; download-job skill tools still run in Act mode and use the normal Downloads permission gate before saving files.
 - Tool results from third-party content should be marked `resultPolicy: "untrusted"` so they are wrapped as data, not instructions.
 
 **Providers:**
 
-| Provider | Base URL | API Key | Default Model |
-|----------|----------|---------|---------------|
-| llama.cpp | `http://localhost:8080` | Not needed | (your loaded model) |
-| Ollama | `http://localhost:11434/v1` | Not needed | (your loaded model) |
-| LM Studio | `http://localhost:1234/v1` | Not needed | (your loaded model) |
-| Jan | `http://localhost:1337/v1` | Not needed | (your loaded model) |
-| vLLM | `http://localhost:8000/v1` | Optional | (your served model) |
-| SGLang | `http://localhost:30000/v1` | Optional | (your served model) |
-| LocalAI | `http://localhost:8080/v1` | Optional | (your loaded model) |
-| OpenAI | `https://api.openai.com/v1` | Required | gpt-5.5 |
-| Anthropic Claude | `https://api.anthropic.com` | Required | claude-sonnet-4-6 |
-| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | Required | gemini-3.1-flash |
-| Cloudflare Workers AI | `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1` | Required (plus Account ID) | @cf/zai-org/glm-5.2 |
-| Mistral AI | `https://api.mistral.ai/v1` | Required | mistral-large-latest |
-| DeepSeek | `https://api.deepseek.com/v1` | Required | deepseek-v4-flash |
-| xAI Grok | `https://api.x.ai/v1` | Required | grok-4.3 |
-| Nvidia NIM | `https://integrate.api.nvidia.com/v1` | Required | meta/llama-3.1-8b-instruct |
-| Groq | `https://api.groq.com/openai/v1` | Required | llama-3.3-70b-versatile |
-| MiniMax | `https://api.minimax.chat/v1` | Required | minimax-m2.7 |
-| Alibaba Cloud (Qwen) | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Required | qwen-max |
-| OpenRouter | `https://openrouter.ai/api/v1` | Required | openrouter/free |
+Base URLs are pre-filled in Settings when you select a provider. Local servers use the default port shown below.
+
+| Provider | API Key | Default Model |
+|----------|---------|---------------|
+| llama.cpp (`:8080`) | Not needed | (your loaded model) |
+| Ollama (`:11434/v1`) | Not needed | (your loaded model) |
+| LM Studio (`:1234/v1`) | Not needed | (your loaded model) |
+| Jan (`:1337/v1`) | Not needed | (your loaded model) |
+| vLLM (`:8000/v1`) | Optional | (your served model) |
+| SGLang (`:30000/v1`) | Optional | (your served model) |
+| LocalAI (`:8080/v1`) | Optional | (your loaded model) |
+| OpenAI | Required | gpt-5.5 |
+| Anthropic Claude | Required | claude-sonnet-4-6 |
+| Google Gemini | Required | gemini-3.1-flash |
+| Cloudflare Workers AI | Required (+ Account ID) | @cf/zai-org/glm-5.2 |
+| Mistral AI | Required | mistral-large-latest |
+| DeepSeek | Required | deepseek-v4-flash |
+| xAI Grok | Required | grok-4.3 |
+| Nvidia NIM | Required | meta/llama-3.1-8b-instruct |
+| Groq | Required | llama-3.3-70b-versatile |
+| MiniMax | Required | minimax-m2.7 |
+| Alibaba Cloud (Qwen) | Required | qwen-max |
+| OpenRouter | Required | openrouter/free |
 
 ## Architecture
 
@@ -209,65 +211,67 @@ WebBrain separates model tier from conversation mode:
 - **Tier** (`compact`, `mid`, `full`) controls how many normal browser-agent tools a model sees.
 - **Mode** (`ask`, `act`, `dev`) controls what kind of task the user is allowing. Ask is read-only. Act exposes the selected tier's normal tools. Dev requires a Mid or Full provider and adds a small source/style/debug tool appendix, including deeper DOM/frame inspection for Mid-tier Dev runs.
 
-| Tool | Ask | Compact Act | Mid Act | Full Act | Dev Add-on |
-|---|---:|---:|---:|---:|---:|
-| `get_accessibility_tree` | Yes | Yes | Yes | Yes | No |
-| `read_page` | Yes | Yes | Yes | Yes | No |
-| `read_pdf` | Yes | No | Yes | Yes | No |
+Legend: **Yes** = available · **-** = not available · **C** = Chrome only · **Dev** = Dev-mode add-on (Mid/Full providers; not Compact).
+
+| Tool | Ask | Compact | Mid | Full | Dev |
+|------|:---:|:-------:|:---:|:----:|:---:|
+| `get_accessibility_tree` | Yes | Yes | Yes | Yes | - |
+| `read_page` | Yes | Yes | Yes | Yes | - |
+| `read_pdf` | Yes | No | Yes | Yes | - |
 | `read_page_source` | No | No | No | No | Yes |
-| `get_window_info` | Yes | Yes | Yes | Yes | No |
-| `get_interactive_elements` | Yes | No | Yes | Yes | No |
-| `scroll` | Yes | Yes | Yes | Yes | No |
-| `extract_data` | Yes | Yes | Yes | Yes | No |
+| `get_window_info` | Yes | Yes | Yes | Yes | - |
+| `get_interactive_elements` | Yes | No | Yes | Yes | - |
+| `scroll` | Yes | Yes | Yes | Yes | - |
+| `extract_data` | Yes | Yes | Yes | Yes | - |
 | `inspect_element_styles` | No | No | No | No | Yes |
-| `wait_for_stable` | Yes | No | Yes | Yes | No |
-| `get_selection` | Yes | Yes | Yes | Yes | No |
-| `done` | Yes | Yes | Yes | Yes | No |
-| `clarify` | No | Yes | Yes | Yes | No |
-| `fetch_url` | Yes | Yes | Yes | Yes | No |
-| `research_url` | Yes | No | Yes | Yes | No |
-| `list_downloads` | Yes | No | Yes | Yes | No |
-| `click_ax` | No | Yes | Yes | Yes | No |
-| `type_ax` | No | Yes | Yes | Yes | No |
-| `set_field` | No | Yes | Yes | Yes | No |
-| `resize_window` | No | No | No | Yes | No |
-| `click` | No | Yes | Yes | Yes | No |
-| `type_text` | No | Yes | Yes | Yes | No |
-| `press_keys` | No | Yes | Yes | Yes | No |
-| `navigate` | No | Yes | Yes | Yes | No |
-| `wait_for_element` | No | Yes | Yes | Yes | No |
-| `new_tab` | No | Yes | Yes | Yes | No |
-| `scratchpad_write` | No | Yes | Yes | Yes | No |
-| `progress_update` | No | Yes | Yes | Yes | No |
-| `progress_read` | No | Yes | Yes | Yes | No |
-| `download_social_media` | No | No | Yes | Yes | No |
-| `solve_captcha` | No | No | Yes | Yes | No |
-| `go_back` | No | No | Yes | Yes | No |
-| `go_forward` | No | No | Yes | Yes | No |
-| `schedule_resume` | No | No | Yes | Yes | No |
-| `schedule_task` | No | No | Yes | Yes | No |
-| `iframe_read` | No | No | Yes | Yes | No |
-| `iframe_click` | No | No | Yes | Yes | No |
-| `iframe_type` | No | No | Yes | Yes | No |
-| `read_downloaded_file` | No | No | Yes | Yes | No |
-| `download_files` | No | No | Yes | Yes | No |
-| `download_resource_from_page` | No | No | Yes | Yes | No |
-| `upload_file` | No | No | Chrome | Chrome | No |
-| `verify_form` | No | No | Yes | Yes | No |
-| `hover` | No | No | No | Yes | No |
-| `drag_drop` | No | No | No | Yes | No |
+| `wait_for_stable` | Yes | No | Yes | Yes | - |
+| `get_selection` | Yes | Yes | Yes | Yes | - |
+| `done` | Yes | Yes | Yes | Yes | - |
+| `clarify` | No | Yes | Yes | Yes | - |
+| `fetch_url` | Yes | Yes | Yes | Yes | - |
+| `research_url` | Yes | No | Yes | Yes | - |
+| `list_downloads` | Yes | No | Yes | Yes | - |
+| `click_ax` | No | Yes | Yes | Yes | - |
+| `type_ax` | No | Yes | Yes | Yes | - |
+| `set_field` | No | Yes | Yes | Yes | - |
+| `resize_window` | No | No | No | Yes | - |
+| `click` | No | Yes | Yes | Yes | - |
+| `type_text` | No | Yes | Yes | Yes | - |
+| `press_keys` | No | Yes | Yes | Yes | - |
+| `navigate` | No | Yes | Yes | Yes | - |
+| `wait_for_element` | No | Yes | Yes | Yes | - |
+| `new_tab` | No | Yes | Yes | Yes | - |
+| `scratchpad_write` | No | Yes | Yes | Yes | - |
+| `progress_update` | No | Yes | Yes | Yes | - |
+| `progress_read` | No | Yes | Yes | Yes | - |
+| `download_social_media` | No | No | Yes | Yes | - |
+| `solve_captcha` | No | No | Yes | Yes | - |
+| `go_back` | No | No | Yes | Yes | - |
+| `go_forward` | No | No | Yes | Yes | - |
+| `schedule_resume` | No | No | Yes | Yes | - |
+| `schedule_task` | No | No | Yes | Yes | - |
+| `iframe_read` | No | No | Yes | Yes | - |
+| `iframe_click` | No | No | Yes | Yes | - |
+| `iframe_type` | No | No | Yes | Yes | - |
+| `read_downloaded_file` | No | No | Yes | Yes | - |
+| `download_files` | No | No | Yes | Yes | - |
+| `download_resource_from_page` | No | No | Yes | Yes | - |
+| `upload_file` | No | No | C | C | - |
+| `verify_form` | No | No | Yes | Yes | - |
+| `hover` | No | No | No | Yes | - |
+| `drag_drop` | No | No | No | Yes | - |
 | `get_shadow_dom` | No | No | No | Yes | Yes |
-| `shadow_dom_query` | No | No | No | Chrome | Chrome |
+| `shadow_dom_query` | No | No | No | C | C |
 | `get_frames` | No | No | No | Yes | Yes |
-| `inject_css` | No | No | No | No | Chrome |
-| `remove_injected_css` | No | No | No | No | Chrome |
-| `patch_element` | No | No | No | No | Chrome |
-| `revert_patch` | No | No | No | No | Chrome |
-| `execute_js` | No | No | No | No | Chrome / Firefox |
-| `read_console` | No | No | No | No | Chrome |
-| `inspect_network_requests` | No | No | No | No | Chrome |
-| `inspect_event_listeners` | No | No | No | No | Chrome |
-| `highlight_element` | No | No | No | No | Chrome |
+| `inject_css` | No | No | No | No | C |
+| `remove_injected_css` | No | No | No | No | C |
+| `patch_element` | No | No | No | No | C |
+| `revert_patch` | No | No | No | No | C |
+| `execute_js` | No | No | No | No | Yes |
+| `read_console` | No | No | No | No | C |
+| `inspect_network_requests` | No | No | No | No | C |
+| `inspect_event_listeners` | No | No | No | No | C |
+| `highlight_element` | No | No | No | No | C |
 
 Loaded skills can append additional tool schemas for the current run. For example,
 the bundled FreeSkillz.xyz skill can expose `read_youtube_transcript` for YouTube
@@ -276,7 +280,7 @@ media URLs. These skill tools are not hard-coded in the static table above:
 before the skill is loaded (or if it is removed), the tools are absent. Ask
 also filters out mutating/download tools even when their owning skill is loaded.
 
-Dev Add-on tools are only exposed in Dev mode, and Dev mode is blocked for Compact-tier providers. Chrome's reversible editing tools return patch IDs: `inject_css` pairs with `remove_injected_css`, and `patch_element` pairs with `revert_patch`.
+Dev tools are only exposed in Dev mode, and Dev mode is blocked for Compact-tier providers. Chrome's reversible editing tools return patch IDs: `inject_css` pairs with `remove_injected_css`, and `patch_element` pairs with `revert_patch`.
 
 ### Dev-mode page editing and diagnostics
 
@@ -326,7 +330,7 @@ WebBrain accepts slash commands as the first thing on a line in the input box. T
 | `/reset` | Clear the conversation and all per-conversation flags |
 | `/screenshot [--full-page]` | Capture the visible tab, or the full scrollable page with `--full-page` (Chrome only) |
 | `/record [--full-screen] [--transcribe]` | Record the current tab, or a selected screen/window with `--full-screen` (Chrome only); add `--transcribe` to save a transcript after stop |
-| `/export [--traces]` | Download the conversation as Markdown, or export the tool chain with `--traces` |
+| `/export [--traces]` | Download version-stamped conversation Markdown, or export the version-stamped tool chain with `--traces` |
 | `/profile` | Toggle profile auto-fill on/off without opening Settings |
 | `/vision` | Toggle vision mode (screenshot understanding) on the active provider |
 | `/ask` | Switch to Ask mode before sending |

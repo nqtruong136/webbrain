@@ -1658,7 +1658,8 @@ body {
   caret-color: var(--text-primary);
   resize: none;
   outline: none;
-  overflow-y: auto;
+  /* autoResizeInput flips to auto only when content exceeds max-height */
+  overflow-y: hidden;
 }
 
 #user-input::placeholder {
@@ -2262,6 +2263,35 @@ body {
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.plan-review-skills {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+}
+
+.plan-review-skills-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.plan-review-skill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.plan-review-skill {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 
