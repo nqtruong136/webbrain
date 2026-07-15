@@ -4778,6 +4778,12 @@ function handleAgentUpdateMessage(msg) {
       renderClarifyCard(data);
       break;
 
+    case 'clarify_auto':
+      // Agent auto-selected an answer after the clarify timeout. Lock the
+      // matching card in the UI (agent already resolved the pending Promise).
+      lockClarifyCardFromAuto(data);
+      break;
+
     case 'plan_review':
       renderPlanReviewCard({ ...data, tabId: msg.tabId ?? currentTabId, requestId: msg.requestId, runId: msg.runId });
       break;
@@ -4992,9 +4998,90 @@ function renderClarifyCard(data) {
   row.appendChild(submitBtn);
   card.appendChild(row);
 
+  // Countdown for auto-select (agent is authoritative; UI is display + backup).
+  if (data.timeoutSec > 0 && data.deadlineTs) {
+    startClarifyCountdown(card, {
+      tabId,
+      clarifyId,
+      deadlineTs: Number(data.deadlineTs),
+      firstOption: options[0] || '(no response — timed out)',
+    });
+  }
+
   content.appendChild(card);
   scrollToBottom();
   try { input.focus(); } catch {}
+}
+
+function clearClarifyCountdown(card) {
+  if (!card) return;
+  if (card._clarifyCountdownTimer) {
+    try { clearInterval(card._clarifyCountdownTimer); } catch {}
+    card._clarifyCountdownTimer = null;
+  }
+  const timerEl = card.querySelector('.clarify-timeout');
+  if (timerEl) timerEl.remove();
+}
+
+/**
+ * Show a live countdown on a regular clarify card. When the deadline hits,
+ * lock the card and post the first option as a backup if the agent timer
+ * already fired, submitClarifyResponse is a no-op.
+ */
+function startClarifyCountdown(card, { tabId, clarifyId, deadlineTs, firstOption }) {
+  if (!card || !deadlineTs || deadlineTs <= 0) return;
+  clearClarifyCountdown(card);
+
+  const timerEl = document.createElement('div');
+  timerEl.className = 'clarify-timeout';
+  card.appendChild(timerEl);
+
+  const tick = () => {
+    if (card.classList.contains('clarify-answered')) {
+      clearClarifyCountdown(card);
+      return;
+    }
+    const remainingMs = Math.max(0, deadlineTs - Date.now());
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    timerEl.textContent = typeof t === 'function'
+      ? t('sp.clarify.auto_timeout', { seconds: remainingSec })
+      : `Auto-selects in ${remainingSec}s`;
+    if (remainingMs <= 0) {
+      clearClarifyCountdown(card);
+      // Backup path: if agent already settled, this is a no-op on the agent
+      // side; still locks the card for the user.
+      submitClarify(card, tabId, clarifyId, firstOption, 'timeout');
+    }
+  };
+  tick();
+  card._clarifyCountdownTimer = setInterval(tick, 250);
+}
+
+/**
+ * Lock a clarify card after the agent auto-selected (timeout). Does not re-send
+ * clarify_response — the agent already resolved its pending Promise.
+ */
+function lockClarifyCardFromAuto(data) {
+  const clarifyId = String(data?.clarifyId || '');
+  if (!clarifyId) return;
+  const answer = String(data?.answer || '').trim();
+  for (const card of document.querySelectorAll('.clarify-card')) {
+    if (String(card.dataset.clarifyId || '') !== clarifyId) continue;
+    if (card.classList.contains('clarify-answered')) return;
+    if (card.dataset.permission === '1' || card.dataset.submitConfirmation === '1') return;
+    clearClarifyCountdown(card);
+    card.classList.add('clarify-answered');
+    for (const el of card.querySelectorAll('button, input')) {
+      el.disabled = true;
+    }
+    const answered = document.createElement('div');
+    answered.className = 'clarify-your-answer';
+    const prefix = typeof t === 'function' ? t('sp.clarify.auto_selected') : 'Auto-selected (timed out):';
+    answered.textContent = `${prefix} ${answer}`;
+    card.appendChild(answered);
+    scrollToBottom();
+    return;
+  }
 }
 
 /**
@@ -5159,6 +5246,7 @@ function submitClarify(card, tabId, clarifyId, answer, source) {
   // accepts the first response anyway, but UI feedback matters.
   if (card.classList.contains('clarify-answered')) return;
   card.classList.add('clarify-answered');
+  clearClarifyCountdown(card);
 
   // Permission cards are transient: once the user chooses, remove the card
   // entirely so it doesn't linger at the bottom of the conversation (it could
@@ -5172,7 +5260,10 @@ function submitClarify(card, tabId, clarifyId, answer, source) {
     }
     const answered = document.createElement('div');
     answered.className = 'clarify-your-answer';
-    answered.textContent = (typeof t === 'function' ? t('sp.clarify.your_answer') : 'Your answer:') + ' ' + answer;
+    const prefix = source === 'timeout'
+      ? (typeof t === 'function' ? t('sp.clarify.auto_selected') : 'Auto-selected (timed out):')
+      : (typeof t === 'function' ? t('sp.clarify.your_answer') : 'Your answer:');
+    answered.textContent = `${prefix} ${answer}`;
     card.appendChild(answered);
     scrollToBottom();
   }

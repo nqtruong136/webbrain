@@ -165,6 +165,20 @@ async function loadMaxSteps() {
 }
 loadMaxSteps();
 
+function normalizeClarifyTimeoutSec(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 60;
+  return Math.min(1200, Math.floor(n));
+}
+
+async function loadClarifyTimeout() {
+  const stored = await browser.storage.local.get('clarifyTimeoutSec');
+  agent.clarifyTimeoutSec = normalizeClarifyTimeoutSec(
+    stored.clarifyTimeoutSec != null ? stored.clarifyTimeoutSec : 60,
+  );
+}
+loadClarifyTimeout();
+
 async function loadAutoScreenshot() {
   const stored = await browser.storage.local.get('autoScreenshot');
   if (stored.autoScreenshot != null) agent.autoScreenshot = stored.autoScreenshot;
@@ -680,6 +694,7 @@ browser.runtime.onInstalled.addListener(async () => {
   createContextMenus();
   await providerManager.load();
   await loadMaxSteps();
+  await loadClarifyTimeout();
   await loadAutoScreenshot();
   await syncAgentUserMemoryFromStorage().catch(() => {});
   scheduleUserMemoryExtractionDrain(5000);
@@ -698,6 +713,9 @@ browser.storage.onChanged.addListener((changes) => {
   if (changes.providers || changes.activeProvider) providerManager.load().catch(() => {});
   if (changes.maxAgentSteps) {
     agent.maxSteps = normalizeMaxAgentSteps(changes.maxAgentSteps.newValue);
+  }
+  if (changes.clarifyTimeoutSec) {
+    agent.clarifyTimeoutSec = normalizeClarifyTimeoutSec(changes.clarifyTimeoutSec.newValue);
   }
   if (changes.autoScreenshot) {
     agent.autoScreenshot = changes.autoScreenshot.newValue;

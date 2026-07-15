@@ -8990,6 +8990,7 @@ test('settings moves profile and memory controls into Memory while CAPTCHA stays
 
     for (const id of [
       'toggle-screenshot-fallback',
+      'range-clarify-timeout',
       'toggle-site-adapters',
       'toggle-api-mutation-observer',
       'select-auto-screenshot',
@@ -10152,6 +10153,66 @@ test('settings page awaits immediate preference writes before moving on', () => 
       /requestTimeoutRange\.addEventListener\('change', async \(\) => \{[\s\S]*?await (chrome|browser)\.storage\.local\.set\(\{ requestTimeoutMs: sec \* 1000 \}\)\.catch\(\(\) => \{\}\);[\s\S]*?\}\);/,
       `${label}: request timeout changes should await persistence`,
     );
+    assert.match(
+      settings,
+      /clarifyTimeoutRange\.addEventListener\('change', async \(\) => \{[\s\S]*?await (chrome|browser)\.storage\.local\.set\(\{ clarifyTimeoutSec: sec \}\)\.catch\(\(\) => \{\}\);[\s\S]*?\}\);/,
+      `${label}: clarify timeout changes should await persistence`,
+    );
+  }
+});
+
+test('clarify tool auto-timeout is configurable and mirrored across browsers', () => {
+  for (const [label, paths] of [
+    ['chrome', {
+      agent: 'src/chrome/src/agent/agent.js',
+      bg: 'src/chrome/src/background.js',
+      settings: 'src/chrome/src/ui/settings.js',
+      settingsHtml: 'src/chrome/src/ui/settings.html',
+      panel: 'src/chrome/src/ui/sidepanel.js',
+      locale: 'src/chrome/src/ui/locales/en.js',
+    }],
+    ['firefox', {
+      agent: 'src/firefox/src/agent/agent.js',
+      bg: 'src/firefox/src/background.js',
+      settings: 'src/firefox/src/ui/settings.js',
+      settingsHtml: 'src/firefox/src/ui/settings.html',
+      panel: 'src/firefox/src/ui/sidepanel.js',
+      locale: 'src/firefox/src/ui/locales/en.js',
+    }],
+  ]) {
+    const agent = fs.readFileSync(path.join(ROOT, paths.agent), 'utf8');
+    const bg = fs.readFileSync(path.join(ROOT, paths.bg), 'utf8');
+    const settings = fs.readFileSync(path.join(ROOT, paths.settings), 'utf8');
+    const settingsHtml = fs.readFileSync(path.join(ROOT, paths.settingsHtml), 'utf8');
+    const panel = fs.readFileSync(path.join(ROOT, paths.panel), 'utf8');
+    const locale = fs.readFileSync(path.join(ROOT, paths.locale), 'utf8');
+
+    assert.match(agent, /this\.clarifyTimeoutSec = 60/, `${label}: agent default clarify timeout should be 60s`);
+    assert.match(agent, /_normalizeClarifyTimeoutSec/, `${label}: agent should clamp clarify timeout to 0–1200`);
+    assert.match(agent, /_settleClarification/, `${label}: clarify responses should settle once and clear timers`);
+    assert.match(agent, /source: 'timeout'/, `${label}: timed-out clarify should resolve with source timeout`);
+    assert.match(agent, /onUpdate\('clarify_auto'/, `${label}: agent should emit clarify_auto for UI lock`);
+    assert.match(agent, /timeoutSec > 0/, `${label}: timeout of 0 should wait indefinitely`);
+    // Permission / form confirm prompts reuse clarify plumbing but must not
+    // arm the auto-timeout (first option would grant access).
+    const permMatch = agent.match(/async _promptPermission\([\s\S]*?\n  \}/);
+    assert.ok(permMatch, `${label}: _promptPermission body missing`);
+    assert.doesNotMatch(permMatch[0], /timeoutSec|setTimeout/, `${label}: permission prompts must not auto-timeout`);
+    const submitMatch = agent.match(/async _promptSubmitConfirmation\([\s\S]*?\n  \}/);
+    assert.ok(submitMatch, `${label}: _promptSubmitConfirmation body missing`);
+    assert.doesNotMatch(submitMatch[0], /timeoutSec|setTimeout/, `${label}: form-submit prompts must not auto-timeout`);
+
+    assert.match(bg, /loadClarifyTimeout/, `${label}: background should load clarify timeout from storage`);
+    assert.match(bg, /changes\.clarifyTimeoutSec/, `${label}: background should hot-reload clarify timeout`);
+    assert.match(bg, /Math\.min\(1200, Math\.floor\(n\)\)/, `${label}: background should clamp clarify timeout to 1200s`);
+
+    assert.match(settingsHtml, /id="range-clarify-timeout"[^>]*min="0"[^>]*max="1200"[^>]*value="60"/, `${label}: settings should expose 0–1200s clarify timeout slider`);
+    assert.match(settings, /clarifyTimeoutSec/, `${label}: settings should persist clarifyTimeoutSec`);
+    assert.match(panel, /startClarifyCountdown/, `${label}: sidepanel should show clarify countdown`);
+    assert.match(panel, /case 'clarify_auto':/, `${label}: sidepanel should handle clarify_auto`);
+    assert.match(panel, /lockClarifyCardFromAuto/, `${label}: sidepanel should lock cards on auto-select`);
+    assert.match(locale, /st\.display\.clarify_timeout\.label/, `${label}: English locale should include clarify timeout label`);
+    assert.match(locale, /sp\.clarify\.auto_timeout/, `${label}: English locale should include countdown string`);
   }
 });
 
