@@ -70,7 +70,7 @@ function stringifyArgs(args) {
 // A trace tool result is a RAW value: a structured object ({success,error,...}),
 // a string, or the recorder's large-result marker { _truncated, length, head }.
 function renderResult(result) {
-  if (result == null) return { text: '(no result recorded)', failed: false };
+  if (result == null) return { text: '(missing tool result)', failed: true };
   if (typeof result === 'object' && result._truncated) {
     return {
       text: `${truncate(oneLine(String(result.head ?? '')), RESULT_LIMIT)}  [recorder-truncated, ${humanSize(result.length || 0)} total]`,

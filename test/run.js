@@ -1855,6 +1855,17 @@ test('trace export: unserializable tool results do not throw', () => {
   assert.match(markdown, /\[object Object\]|unserializable/);
 });
 
+test('trace export: missing tool results are rendered as failures', () => {
+  const { markdown, toolCount } = tracesToMarkdown([{
+    run: { runId: 'r-missing', userMessage: 'continue', model: 'test', status: 'error' },
+    events: [
+      { runId: 'r-missing', seq: 0, kind: 'tool', data: { name: 'click_ax', args: { ref_id: 'ref_13' }, result: undefined } },
+    ],
+  }]);
+  assert.equal(toolCount, 1);
+  assert.match(markdown, /click_ax[^\n]*✗ \(missing tool result\)/);
+});
+
 test('trace export: notes appear before the footer', () => {
   const { markdown } = tracesToMarkdown(TRACE_RUNS, { notes: ['2 of 3 turn(s) could not load their event log.'] });
   assert.match(markdown, /_Note: 2 of 3 turn\(s\) could not load their event log\._/);
@@ -19231,6 +19242,116 @@ test('accepted done emits successful result update after progress gate', async (
       1,
       `${AgentClass.name}: accepted done should emit one successful done update`,
     );
+  }
+});
+
+test('nullish page-tool responses become structured failures without interrupting the batch', async () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    for (const [toolName, expectedOutcomeUnknown] of [
+      ['get_accessibility_tree', false],
+      ['click_ax', true],
+    ]) {
+      const agent = new AgentClass({
+        getActive: () => ({ contextWindow: 128000, supportsVision: false }),
+        getVisionProvider: async () => null,
+      });
+      const tabId = toolName === 'click_ax' ? 811 : 810;
+      const messages = [];
+      const updates = [];
+      agent._ensureGateSetting = async () => false;
+      agent._skipPermissionGate = true;
+      agent._currentUrl = async () => 'https://github.com/account_verifications';
+      agent._rememberMastodonObservation = async () => null;
+      agent._recordProgressObservation = async () => null;
+      agent._autoRecordProgressAction = () => null;
+      agent._persist = () => {};
+      agent.executeTool = async () => undefined;
+
+      const args = toolName === 'click_ax' ? { ref_id: 'ref_13' } : { filter: 'interactive' };
+      const result = await agent._executeToolBatch(
+        tabId,
+        [{ id: `${toolName}_missing`, function: { name: toolName, arguments: JSON.stringify(args) } }],
+        messages,
+        (type, data) => updates.push({ type, data }),
+        { supportsVision: false },
+        null,
+        new Set([toolName]),
+        1,
+      );
+
+      assert.equal(result.action, 'continue', `${label}/${toolName}: missing result interrupted the batch`);
+      const update = updates.find(item => item.type === 'tool_result' && item.data?.name === toolName);
+      assert.equal(update?.data?.result?.errorCode, 'missing_tool_response', `${label}/${toolName}: structured error missing`);
+      assert.equal(update?.data?.result?.missingToolResponse, true, `${label}/${toolName}: missing-response marker absent`);
+      assert.equal(update?.data?.result?.outcomeUnknown, expectedOutcomeUnknown, `${label}/${toolName}: uncertain outcome classification wrong`);
+      const toolMessage = messages.find(message => message.tool_call_id === `${toolName}_missing`);
+      assert.match(toolMessage?.content || '', /missingToolResponse/, `${label}/${toolName}: model did not receive the normalized result`);
+      if (expectedOutcomeUnknown) {
+        assert.match(toolMessage?.content || '', /Do not repeat the action blindly/, `${label}/${toolName}: unsafe retry guidance missing`);
+      }
+    }
+  }
+});
+
+test('tool-result limiting is nullish-safe and preserves serializable falsy values', () => {
+  for (const AgentClass of [AgentCh, AgentFx]) {
+    const agent = new AgentClass({ getActive: () => ({ contextWindow: 128000, supportsVision: false }) });
+    for (const value of [undefined, null]) {
+      const parsed = JSON.parse(agent._limitToolResult(value));
+      assert.equal(parsed.errorCode, 'missing_tool_response', `${AgentClass.name}: nullish result was not normalized`);
+      assert.equal(parsed.missingToolResponse, true, `${AgentClass.name}: missing-response flag absent`);
+    }
+    assert.equal(agent._normalizeToolResult('read_page', false), false, `${AgentClass.name}: ordinary falsy value was incorrectly normalized`);
+    const circular = {};
+    circular.self = circular;
+    const circularResult = JSON.parse(agent._limitToolResult(circular));
+    assert.equal(circularResult.errorCode, 'unserializable_tool_response', `${AgentClass.name}: circular result still threw`);
+  }
+});
+
+test('unexpected run exceptions finalize traces as errors', async () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    for (const method of ['processMessage', 'processMessageStream']) {
+      const provider = {
+        supportsTools: true,
+        supportsVision: false,
+        promptTier: 'full',
+        contextWindow: 128000,
+        model: 'test-model',
+        name: 'test-provider',
+      };
+      const agent = new AgentClass({
+        getActive: () => provider,
+        getVisionProvider: async () => null,
+      });
+      const tabId = method === 'processMessageStream' ? 813 : 812;
+      let ended = null;
+      agent._hydrate = async () => {};
+      agent._manageContext = async () => {};
+      agent._enrichUserMessageWithCurrentPage = async (_tabId, _messages, content) => ({ role: 'user', content });
+      agent._plannerIsEnabled = () => true;
+      agent._getTabUrlTitle = async () => ({ tabUrl: 'https://example.com', tabTitle: 'Example' });
+      agent._maybeRunPlannerGate = async () => ({ proceed: true });
+      agent._startTraceRun = async () => {
+        agent.currentRunId.set(tabId, 'run_unexpected_error');
+        return 'run_unexpected_error';
+      };
+      agent._ensureProgressSessionForCurrentTask = async () => {
+        throw new Error('unexpected setup failure');
+      };
+      agent._endTraceRun = (_tabId, runId, status, finalContent) => {
+        ended = { runId, status, finalContent };
+        agent.currentRunId.delete(tabId);
+      };
+
+      await assert.rejects(
+        agent[method](tabId, 'continue', () => {}, 'act'),
+        /unexpected setup failure/,
+        `${label}/${method}: unexpected error was swallowed`,
+      );
+      assert.equal(ended?.status, 'error', `${label}/${method}: trace retained a successful status`);
+      assert.equal(ended?.finalContent, 'Error: unexpected setup failure', `${label}/${method}: trace error content missing`);
+    }
   }
 });
 

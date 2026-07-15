@@ -1152,6 +1152,21 @@ export class Agent {
     };
   }
 
+  _normalizeToolResult(fnName, result) {
+    if (result != null) return result;
+    const outcomeUnknown = Agent.STATE_CHANGE_TOOLS.has(fnName);
+    return {
+      success: false,
+      errorCode: 'missing_tool_response',
+      missingToolResponse: true,
+      outcomeUnknown,
+      error: `${fnName || 'Tool'} returned no result${outcomeUnknown ? '; the action may still have completed' : ''}.`,
+      hint: outcomeUnknown
+        ? 'Observe the current URL and page state before deciding what to do next. Do not repeat the action blindly.'
+        : 'The page may have navigated or reloaded while the result was being returned. Wait for it to settle, then retry the observation once.',
+    };
+  }
+
   _toolCallArgsWithReplayMethod(tabId, name, args) {
     if ((name !== 'fetch_url' && name !== 'research_url') || !args || args.method) return args;
     const replayRequestId = args.replayRequestId || args.apiReplayRequestId;
@@ -2317,7 +2332,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
       onUpdate('tool_call', { name: fnName, args: fnArgs });
       const _toolStart = Date.now();
-      const toolResult = await this.executeTool(tabId, fnName, fnArgs, onUpdate);
+      const rawToolResult = await this.executeTool(tabId, fnName, fnArgs, onUpdate);
+      const toolResult = this._normalizeToolResult(fnName, rawToolResult);
       const _toolLatency = Date.now() - _toolStart;
 
       // Pin any durable download handle this tool produced, so a later
@@ -7978,7 +7994,26 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    */
   _limitToolResult(result) {
     const maxResultChars = 8000; // ~2k tokens
-    let json = JSON.stringify(result);
+    const safeResult = result == null ? {
+      success: false,
+      errorCode: 'missing_tool_response',
+      missingToolResponse: true,
+      outcomeUnknown: false,
+      error: 'Tool returned no result.',
+    } : result;
+    let json;
+    try {
+      json = JSON.stringify(safeResult);
+    } catch {
+      json = JSON.stringify({
+        success: false,
+        errorCode: 'unserializable_tool_response',
+        error: 'Tool returned a result that could not be serialized.',
+      });
+    }
+    if (typeof json !== 'string') {
+      json = '{"success":false,"errorCode":"missing_tool_response","missingToolResponse":true,"outcomeUnknown":false,"error":"Tool returned no result."}';
+    }
     if (json.length <= maxResultChars) return json;
 
     // Try to trim the 'text' field specifically (page content)
@@ -12797,6 +12832,12 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
 
     this._persist(tabId);
     return finalResponse;
+    } catch (error) {
+      const message = error?.message || String(error);
+      _traceStatus = 'error';
+      finalResponse = `Error: ${message}`;
+      if (runId) trace.recordError(runId, null, 'agent', message);
+      throw error;
     } finally {
       this.currentCostState.delete(tabId);
       this._endTraceRun(tabId, runId, _traceStatus, finalResponse);
@@ -13149,6 +13190,12 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     messages.push({ role: 'assistant', content: summary });
     onUpdate('text', { content: summary });
     return finish(summary, 'max_steps');
+    } catch (error) {
+      const message = error?.message || String(error);
+      _traceStatus = 'error';
+      finalResponse = `Error: ${message}`;
+      if (runId) trace.recordError(runId, null, 'agent', message);
+      throw error;
     } finally {
       this._endTraceRun(tabId, runId, _traceStatus, finalResponse);
     }
