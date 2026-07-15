@@ -10476,7 +10476,7 @@ test('sidepanel preserves stale residual slash-command prompts without hidden ru
     const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
     assert.match(
       panel,
-      /function autoResizeInput\(\) \{\s*inputEl\.style\.height = 'auto';\s*if \(!inputEl\.value\) \{\s*inputEl\.style\.height = '';\s*updateSlashCommandHighlight\(\);\s*return;\s*\}\s*inputEl\.style\.height = Math\.min\(inputEl\.scrollHeight, 120\) \+ 'px';\s*updateSlashCommandHighlight\(\);\s*\}/,
+      /function autoResizeInput\(\) \{\s*const maxHeight = 120;\s*inputEl\.style\.height = 'auto';\s*if \(!inputEl\.value\) \{\s*inputEl\.style\.height = '';\s*inputEl\.style\.overflowY = 'hidden';\s*updateSlashCommandHighlight\(\);\s*return;\s*\}\s*(?:\/\/[^\n]*\n\s*)*const contentHeight = inputEl\.scrollHeight;\s*inputEl\.style\.height = Math\.min\(contentHeight, maxHeight\) \+ 'px';\s*inputEl\.style\.overflowY = contentHeight > maxHeight \? 'auto' : 'hidden';\s*updateSlashCommandHighlight\(\);\s*\}/,
       `${label}: empty composer should reset to its rows=1 height instead of autosizing to placeholder scrollHeight`,
     );
     assert.match(panel, /const tabInputDrafts = new Map\(\);/, `${label}: sidepanel should track per-tab composer drafts`);
