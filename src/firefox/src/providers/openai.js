@@ -47,9 +47,10 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     if (this.config.apiKey) {
       headers['Authorization'] = `Bearer ${this.config.apiKey}`;
     }
-    if (providerName === 'webbrain-cloud' && this.config.deviceGuid) {
-      headers['X-WebBrain-Device-Id'] = this.config.deviceGuid;
+    if (providerName === 'webbrain-cloud') {
+      if (this.config.deviceGuid) headers['X-WebBrain-Device-Id'] = this.config.deviceGuid;
       headers['X-WebBrain-Client'] = 'extension';
+      headers['X-WebBrain-Help-Improve'] = this.config.helpImproveWebBrain === false ? '0' : '1';
     }
     // OpenRouter-specific headers
     if (providerName === 'openrouter') {
@@ -152,6 +153,19 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     return !(this.config.omitToolsWhenImagesPresent && this._messagesContainImage(messages));
   }
 
+  _addWebBrainCloudContext(body, options) {
+    if (String(this.config.providerName || '').toLowerCase() !== 'webbrain-cloud') return;
+    const sessionId = String(options.webbrainSessionId || '').trim();
+    if (sessionId) body.session_id = sessionId.slice(0, 200);
+    const generationName = String(options.webbrainGenerationName || '').trim().toLowerCase();
+    if (generationName) {
+      const trace = body.trace && typeof body.trace === 'object' && !Array.isArray(body.trace)
+        ? body.trace
+        : {};
+      body.trace = { ...trace, generation_name: generationName.slice(0, 64) };
+    }
+  }
+
   async chat(messages, options = {}) {
     const body = {
       model: this.model,
@@ -169,6 +183,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     if (options.extraBody && typeof options.extraBody === 'object') {
       Object.assign(body, options.extraBody);
     }
+    this._addWebBrainCloudContext(body, options);
 
     const url = `${this.baseUrl}/chat/completions`;
     let res;
@@ -221,6 +236,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     if (options.extraBody && typeof options.extraBody === 'object') {
       Object.assign(body, options.extraBody);
     }
+    this._addWebBrainCloudContext(body, options);
     this._addStreamUsageOptions(body);
 
     const streamUrl = `${this.baseUrl}/chat/completions`;

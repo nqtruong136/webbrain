@@ -500,6 +500,7 @@ async function enqueueUserMemoryExtraction(payload = {}) {
       mode: ['ask', 'act', 'dev'].includes(payload.mode) ? payload.mode : 'ask',
       succeeded: payload.succeeded !== false,
       sourceContext,
+      conversationId: normalizeUserMemoryText(payload.conversationId, 200),
       attempts: 0,
       createdAt: Date.now(),
     });
@@ -542,7 +543,10 @@ async function drainUserMemoryExtractionQueue() {
           mode: job.mode,
           succeeded: job.succeeded,
           sourceContext: job.sourceContext,
-        }), { maxTokens: 600, temperature: 0 }, costState);
+        }), { maxTokens: 600, temperature: 0 }, costState, {
+          conversationId: job.conversationId || null,
+          generationName: 'memory',
+        });
         const operations = parseUserMemoryExtractionResult(result?.content || '');
         const applied = await applyUserMemoryExtractionOperationsToCurrentStore(job.id, operations);
         if (applied.changed) await syncAgentUserMemoryFromStorage();
@@ -741,7 +745,7 @@ chrome.runtime.onStartup?.addListener(async () => {
 // Listen for setting changes
 chrome.storage.onChanged.addListener((changes) => {
   if (PROFILE_SYNC_DATA_KEYS.some((key) => changes[key])) profileSync.noteChanges(changes).catch(() => {});
-  if (changes.providers || changes.activeProvider) providerManager.load().catch(() => {});
+  if (changes.providers || changes.activeProvider || changes.helpImproveWebBrain) providerManager.load().catch(() => {});
   if (changes.webbrainCloudBridgeEnabled || changes.webbrainCloudBridgeUrl) {
     cloudRunController.syncBridge().catch(() => {});
   }
@@ -1700,6 +1704,7 @@ async function handleMessage(msg, sender) {
         succeeded: msg.succeeded,
         sourceContext: msg.sourceContext,
         clarificationText: msg.clarificationText,
+        conversationId: msg.conversationId,
       });
       return { ok: true, ...result };
     }
@@ -1756,6 +1761,7 @@ async function handleMessage(msg, sender) {
           mode,
           succeeded: !updates.some((update) => update?.type === 'error'),
         });
+        userMemoryPayload.conversationId = await agent.getConversationId(tabId);
         userMemoryTurnContextTaken = true;
         enqueueUserMemoryExtractionAfterTurn(userMemoryPayload);
         return { content: result, updates, requestId: runUi.requestId, conversationId: await agent.getConversationId(tabId) };
@@ -1802,6 +1808,7 @@ async function handleMessage(msg, sender) {
           mode,
           succeeded: !userMemoryTurnHadError,
         });
+        userMemoryPayload.conversationId = await agent.getConversationId(tabId);
         userMemoryTurnContextTaken = true;
         enqueueUserMemoryExtractionAfterTurn(userMemoryPayload);
         return { content: result, requestId: runUi.requestId, conversationId: await agent.getConversationId(tabId) };
@@ -1845,6 +1852,7 @@ async function handleMessage(msg, sender) {
           mode,
           succeeded: !userMemoryTurnHadError,
         });
+        userMemoryPayload.conversationId = await agent.getConversationId(tabId);
         userMemoryTurnContextTaken = true;
         enqueueUserMemoryExtractionAfterTurn(userMemoryPayload);
         return { content: result, requestId: runUi.requestId, conversationId: await agent.getConversationId(tabId) };

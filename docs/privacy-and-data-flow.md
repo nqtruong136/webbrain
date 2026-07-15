@@ -33,16 +33,62 @@ and success state. It does not include page/tool results, raw trace events,
 screenshots, or attachment bodies. If the provider cost allowance is exhausted,
 the extractor is skipped silently.
 
-**No other data is sent to the provider.** The extension does not inject tracking, telemetry, or analytics.
+**No separate analytics payload is added to provider requests.** The request data above is sent only as needed to run the selected provider and agent features.
 
 ### Which provider receives the data?
 
 The user chooses their provider in Settings. Options include:
 
-- **Cloud providers**: OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Groq, OpenRouter, etc. — data leaves the user's machine for these
+- **WebBrain Cloud**: requests go through `api.webbrain.one`; selected interactions may be retained and used for evaluation, improvement, fine-tuning, and training while Help Improve WebBrain is enabled
+- **Bring-your-own cloud providers**: OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Groq, OpenRouter, etc. — requests go directly to the provider using the user's credentials and are never collected by WebBrain
 - **Local providers**: llama.cpp, Ollama, LM Studio, Jan, vLLM, SGLang — data stays on the user's machine
 
-The extension itself never receives or stores user data on any remote server.
+Local-model and bring-your-own API requests are never collected by WebBrain. WebBrain Cloud requests are processed and may be retained as described below.
+
+### WebBrain Cloud improvement data
+
+Help Improve WebBrain is available under Settings -> General -> Advanced and is
+on by default. When it is on, WebBrain may retain eligible Cloud prompts, model
+responses, relevant page text, tool calls, browser-agent actions, feedback, and
+task outcome information for evaluation, development, improvement, fine-tuning,
+training, safety, and browser-automation research. Screenshots and uploaded
+images may be processed to answer the request, but image bytes, base64 media,
+and image URLs are excluded from WebBrain's improvement database. The extension
+sends the current preference, stable conversation id, and an allowlisted
+generation label with every WebBrain Cloud model request. It never attaches
+those collection fields to local or bring-your-own providers.
+
+Only an explicit `X-WebBrain-Help-Improve: 1` is consent. A missing header,
+legacy client, or `0` is treated as opted out. Once any request opts a
+conversation out, the Cloud service permanently marks that opaque session
+ineligible. Turning the setting back on applies to the next new conversation;
+it cannot make the current conversation eligible again.
+
+Help Improve-off content is not retained in the improvement database and is
+routed through an OpenRouter workspace where content logging is disabled. This
+does not prevent the minimal metadata-only operational logging required to
+provide the service, enforce quotas, prevent abuse, maintain security, or debug
+failures. Requests sent to local models or directly to providers using the
+user's own credentials never pass through WebBrain Cloud and are never eligible
+for WebBrain training.
+
+For eligible completed generations, MySQL is WebBrain's canonical store. The
+service strips media, compresses the request/response payload, encrypts it with
+AES-256-GCM, and stores it with an opaque HMAC session id. Interrupted streams
+and failed generations are not stored as improvement content. Eligible requests
+also use an isolated OpenRouter workspace with private Input & Output Logging
+enabled as a redundant review copy. OpenRouter documents a minimum retention of
+three months and says data may be retained longer unless deletion is requested.
+Its separate **Use Inputs/Outputs** training/discount option remains disabled.
+OpenRouter logging is not treated as permanent storage or an image backup. See
+[OpenRouter Input & Output Logging](https://openrouter.ai/docs/guides/features/input-output-logging).
+
+Before retained Cloud interactions are used for model development, WebBrain
+applies technical measures designed to remove or mask direct identifiers,
+credentials, secrets, and other sensitive information. Raw Cloud interactions
+selected for improvement are retained for no longer than 12 months before
+deletion or de-identification. De-identified datasets may be retained for up to
+5 years for model development, evaluation, security, and reproducibility.
 
 ---
 
@@ -50,7 +96,7 @@ The extension itself never receives or stores user data on any remote server.
 
 ### Conversation History
 
-Stored in `chrome.storage.session` (Chrome) or in-memory (Firefox). Used to restore conversation across service-worker restarts. Never transmitted.
+Stored in `chrome.storage.session` (Chrome) or in-memory (Firefox). Used to restore conversation across service-worker restarts. Relevant conversation content is sent to the configured provider as request context; the stored copy is not separately synced to WebBrain.
 
 ### Trace Recorder
 
@@ -116,16 +162,21 @@ the URL + method to the active LLM conversation.
 
 ## Telemetry / Analytics
 
-**None.** The extension does not include any analytics SDK, telemetry, crash reporting, or usage tracking. There is no "phone home" endpoint.
+The extension does not include an analytics SDK, crash-reporting SDK, or a
+separate product-telemetry endpoint. When WebBrain Cloud is selected, the model
+request itself goes to `api.webbrain.one` and is subject to the Cloud data-use
+terms above. Operational request metadata is retained separately for quota,
+security, abuse prevention, and debugging.
 
 The only outbound HTTP requests are:
-1. **LLM provider API calls** (to URLs the user configured)
-2. **CapSolver API calls** (if the user enables CAPTCHA solving)
-3. **Content fetches** via `fetch_url` / `research_url` tools (to URLs the agent is asked to fetch)
-4. **Skill tool calls** (to the HTTPS endpoint(s) declared by network-capable enabled skills — see "Bundled Skills" below; the default email verification-code helper declares no endpoint)
-5. **User memory extraction calls** (only if auto-learn is enabled; sent to the configured LLM provider after a completed turn)
-6. **Encrypted Cloud Sync calls** to `https://api.webbrain.one/v1/sync` (only after a subscriber explicitly enables sync; vault content is encrypted before upload)
-7. **Slash-driven tab/screen recording** creates no outbound traffic (the .webm is saved to the Downloads folder via `chrome.downloads.download`)
+1. **WebBrain Cloud model calls** to `https://api.webbrain.one/v1` (when WebBrain Cloud is selected; the Help Improve WebBrain preference is sent with each request)
+2. **Other LLM provider API calls** (directly to URLs the user configured)
+3. **CapSolver API calls** (if the user enables CAPTCHA solving)
+4. **Content fetches** via `fetch_url` / `research_url` tools (to URLs the agent is asked to fetch)
+5. **Skill tool calls** (to the HTTPS endpoint(s) declared by network-capable enabled skills — see "Bundled Skills" below; the default email verification-code helper declares no endpoint)
+6. **User memory extraction calls** (only if auto-learn is enabled; sent to the configured LLM provider after a completed turn)
+7. **Encrypted Cloud Sync calls** to `https://api.webbrain.one/v1/sync` (only after a subscriber explicitly enables sync; vault content is encrypted before upload)
+8. **Slash-driven tab/screen recording** creates no outbound traffic (the .webm is saved to the Downloads folder via `chrome.downloads.download`)
 
 The opt-in `webRequest` API shortcut observer is off by default and does not
 create outbound requests; when enabled, it observes replay metadata for requests

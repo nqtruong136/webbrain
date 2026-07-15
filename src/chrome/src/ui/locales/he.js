@@ -690,4 +690,7 @@ export default {
   "sp.export_traces.no_conversation": "אין עדיין מה לייצא — התחילו שיחה קודם.",
   "sp.export_traces.partial": "שרשרת הכלים יוצאה, אך חלק מאירועי התורות לא נקראו.",
   "sp.export_traces.truncated": "שרשרת הכלים יוצאה. תורות ישנות עשויות לחסר אם לשיחה יש הרבה מעקבים.",
+  "st.display.help_improve.label": "עזרה בשיפור WebBrain",
+  "st.display.help_improve.desc_html": "אפשרו לשמור אינטראקציות נבחרות עם WebBrain Cloud ולהשתמש בהן להערכה, שיפור, כוונון עדין ואימון. מופעל כברירת מחדל. כבו כדי למנוע שימוש באינטראקציות Cloud עתידיות למטרות אלה. WebBrain לעולם אינו אוסף בקשות למודלים מקומיים או בקשות שנשלחות ישירות באמצעות פרטי ה-API שלכם. <a href=\"https://webbrain.one/privacy\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:var(--accent);\">מדיניות פרטיות →</a>",
+  "st.providers.webbrain_data_use.body": "שימוש יומי חינמי ב-WebBrain Cloud כלול. כאשר ״עזרה בשיפור WebBrain״ מופעלת כברירת מחדל, ייתכן ששיחות Cloud נבחרות יישמרו וישמשו להערכה, שיפור, כוונון עדין ואימון. כבו את האפשרות ב״כללי ← מתקדם״ כדי להחריג אינטראקציות Cloud עתידיות משימושים אלה. WebBrain לעולם אינו אוסף בקשות למודלים מקומיים או בקשות שנשלחות ישירות באמצעות פרטי ה-API שלכם. {privacyLink}. לשימוש נוסף, הירשמו דרך {subscribeLink}. נהלו את החיוב דרך {accountLink}.",
 };

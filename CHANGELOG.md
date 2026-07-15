@@ -4,6 +4,19 @@ All notable changes to WebBrain are documented in this file.
 
 This changelog was generated from the repository Git history and release tags. Versions without a Git tag are inferred from version-bump commits and the current `package.json` / browser manifest versions.
 
+## [23.3.6] - 2026-07-15
+
+### Added
+- Added a default-on **Help Improve WebBrain** control under Settings → General → Advanced in Chrome and Firefox. WebBrain Cloud requests now send the current choice as `X-WebBrain-Help-Improve: 1` or `0`; local-model and bring-your-own API requests never receive that header.
+
+### Changed
+- Updated the public privacy policy and developer data-flow documentation to disclose selected WebBrain Cloud interaction retention and model-improvement use, the future-interaction opt-out, a 12-month raw-data limit, and a five-year limit for de-identified datasets.
+- Added opaque per-conversation WebBrain Cloud session grouping across main, planner, compaction, intent, memory, and vision generations, with permanent opt-out tainting and no collection metadata on local or bring-your-own providers.
+- Added encrypted, compressed, text-and-tool-only Cloud improvement storage with image omission, authenticated session browsing, de-identified JSONL export, 12-month pruning, and isolated OpenRouter logging/no-logging key routing.
+
+### Tests
+- Added mirrored coverage for the default-on UI, persistence and live provider reload, Cloud-only request headers, locale completeness, and privacy-policy retention language.
+
 ## [23.3.3] - 2026-07-15
 
 ### Changed

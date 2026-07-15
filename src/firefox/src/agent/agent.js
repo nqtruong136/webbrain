@@ -329,6 +329,17 @@ export class Agent {
     return this.conversationIds.get(tabId) || null;
   }
 
+  _cloudGenerationOptions(provider, options = {}, { tabId = null, conversationId = null, generationName = 'main' } = {}) {
+    if (String(provider?.config?.providerName || '').toLowerCase() !== 'webbrain-cloud') return options;
+    const effectiveConversationId = conversationId || (tabId != null ? this.conversationIds.get(tabId) : null);
+    if (!effectiveConversationId) return options;
+    return {
+      ...options,
+      webbrainSessionId: String(effectiveConversationId),
+      webbrainGenerationName: String(generationName || 'main'),
+    };
+  }
+
   async getScratchpad(tabId) {
     await this._hydrate(tabId);
     const messages = this.conversations.get(tabId);
@@ -578,10 +589,12 @@ export class Agent {
       || /Subscribe for more usage:\s*https?:\/\/\S+/i.test(String(err?.message || ''));
   }
 
-  async _chatWithCostAllowance(provider, messages, options, costState) {
+  async _chatWithCostAllowance(provider, messages, options, costState, requestContext = null) {
     const before = await this._checkCostAllowance(provider, costState);
     if (before) throw this._costAllowanceError(before);
-    const result = await provider.chat(messages, options);
+    const result = await provider.chat(messages, requestContext
+      ? this._cloudGenerationOptions(provider, options, requestContext)
+      : options);
     if (result && typeof result.content === 'string') {
       result.content = Agent._stripReasoningTags(result.content);
     }
@@ -3066,7 +3079,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         maxTokens: 800,
         temperature: 0,
         extraBody: { chat_template_kwargs: { enable_thinking: false } },
-      }, effectiveCostState);
+      }, effectiveCostState, { tabId, generationName: 'vision' });
       const description = Agent._cleanVisionDescription(res?.content || '');
       if (!description) throw new Error('empty description');
       const latencyMs = Date.now() - started;
@@ -3222,7 +3235,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         maxTokens: 220,
         temperature: 0,
         extraBody: { chat_template_kwargs: { enable_thinking: false } },
-      }, costState);
+      }, costState, { tabId, generationName: 'vision' });
 
       const raw = res?.content || '';
       const rect = Agent._normalizeVisibleMediaLocation(raw, { width, height });
@@ -3995,6 +4008,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         plannerMessages,
         this._plannerChatOptions(provider),
         costState,
+        { tabId, generationName: 'planner' },
       );
       if (runId) {
         try {
@@ -4023,6 +4037,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           this._plannerRepairMessages(plannerMessages),
           this._plannerChatOptions(provider, true),
           costState,
+          { tabId, generationName: 'planner' },
         );
         plan = parsePlanFromContent(result.content);
       }
@@ -6000,7 +6015,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         temperature: 0,
         maxTokens: 320,
         extraBody: { chat_template_kwargs: { enable_thinking: false } },
-      }, opts.costState || this.currentCostState.get(tabId) || null);
+      }, opts.costState || this.currentCostState.get(tabId) || null, { tabId, generationName: 'intent' });
       const obj = Agent._extractFirstJsonObject(response?.content || '');
       return normalizeProgressIntent(obj, { taskText, pageScope, source: 'classifier' });
     } catch {
@@ -6994,7 +7009,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         const res = await this._chatWithCostAllowance(provider, [
           { role: 'system', content: 'Summarize this conversation history in 3-5 bullet points. Be very concise.' },
           { role: 'user', content: summaryText },
-        ], { maxTokens: 300, temperature: 0.2 }, costState);
+        ], { maxTokens: 300, temperature: 0.2 }, costState, { tabId, generationName: 'compaction' });
         if (res.content) {
           summaryText = 'Summary of earlier conversation:\n' + res.content;
         }
@@ -9518,7 +9533,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         this._logDebug({ type: 'llm_request', step: steps, provider: provider.constructor.name, messages: prunedMessages, options: chatOpts });
         const _llmStart = Date.now();
         if (runId) { try { await trace.recordLLMRequest(runId, steps, { providerClass: provider.constructor.name, model: provider.model, messageCount: prunedMessages.length, toolsCount: (chatOpts.tools || []).length }); } catch {} }
-        result = await this._chatWithCostAllowance(provider, prunedMessages, chatOpts, costState);
+        result = await this._chatWithCostAllowance(provider, prunedMessages, chatOpts, costState, { tabId, generationName: 'main' });
         if (result?.usage?.prompt_tokens) {
           this._lastInputTokens.set(tabId, result.usage.prompt_tokens);
           // Snapshot the conversation size at this reading so the next
@@ -9545,7 +9560,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
             const chatOpts = { tools: useTools ? tools : undefined, temperature: plannerTemperature, maxTokens: 4096 };
             const prunedMessages = this._pruneOldImages(messages, provider);
             this._logDebug({ type: 'llm_request_retry', step: steps, provider: provider.constructor.name, messages: prunedMessages, options: chatOpts });
-            result = await this._chatWithCostAllowance(provider, prunedMessages, chatOpts, costState);
+            result = await this._chatWithCostAllowance(provider, prunedMessages, chatOpts, costState, { tabId, generationName: 'main' });
             this._logDebug({ type: 'llm_response_retry', step: steps, content: result.content, toolCalls: result.toolCalls });
           } catch (e2) {
             this._logDebug({ type: 'llm_error_retry', step: steps, error: e2.message });
@@ -9568,7 +9583,7 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           try {
             const useTools2 = provider.supportsTools;
             const chatOpts2 = { tools: useTools2 ? tools : undefined, temperature: plannerTemperature, maxTokens: 4096 };
-            result = await this._chatWithCostAllowance(provider, this._pruneOldImages(messages, provider), chatOpts2, costState);
+            result = await this._chatWithCostAllowance(provider, this._pruneOldImages(messages, provider), chatOpts2, costState, { tabId, generationName: 'main' });
             this._logDebug({ type: 'llm_response_after_retry', step: steps, content: result.content, toolCalls: result.toolCalls });
           } catch (e2) {
             this._logDebug({ type: 'llm_error_final', step: steps, error: e2.message });
@@ -9907,7 +9922,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
         let toolCallsAccumulator = {};
         let hasToolCalls = false;
 
-        const streamOpts = { tools: provider.supportsTools ? tools : undefined, temperature: plannerTemperature, maxTokens: 4096 };
+        const streamOpts = this._cloudGenerationOptions(provider, {
+          tools: provider.supportsTools ? tools : undefined,
+          temperature: plannerTemperature,
+          maxTokens: 4096,
+        }, { tabId, generationName: 'main' });
         const prunedMessages = this._pruneOldImages(messages, provider);
         this._logDebug({ type: 'llm_stream_request', step: steps, provider: provider.constructor.name, messages: prunedMessages, options: streamOpts });
         const beforeCost = await this._checkCostAllowance(provider, costState);

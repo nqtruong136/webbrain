@@ -735,4 +735,7 @@ export default {
   "sp.export_traces.no_conversation": "Belum ada yang diekspor — mulai percakapan dulu.",
   "sp.export_traces.partial": "Rantai alat diekspor, tetapi beberapa peristiwa giliran tidak dapat dibaca.",
   "sp.export_traces.truncated": "Rantai alat diekspor. Giliran lama mungkin hilang jika percakapan ini punya banyak jejak.",
+  "st.display.help_improve.label": "Bantu Tingkatkan WebBrain",
+  "st.display.help_improve.desc_html": "Izinkan interaksi WebBrain Cloud tertentu disimpan dan digunakan untuk evaluasi, peningkatan, penyempurnaan, dan pelatihan. Aktif secara default. Nonaktifkan agar interaksi Cloud mendatang tidak digunakan untuk tujuan tersebut. WebBrain tidak pernah mengumpulkan permintaan model lokal atau permintaan yang dikirim langsung dengan kredensial API Anda sendiri. <a href=\"https://webbrain.one/privacy\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:var(--accent);\">Kebijakan privasi →</a>",
+  "st.providers.webbrain_data_use.body": "Penggunaan harian gratis WebBrain Cloud sudah termasuk. Saat Bantu Tingkatkan WebBrain aktif secara default, percakapan Cloud tertentu dapat disimpan dan digunakan untuk evaluasi, peningkatan, penyempurnaan, dan pelatihan. Nonaktifkan di Umum → Lanjutan agar interaksi Cloud mendatang tidak digunakan untuk tujuan tersebut. WebBrain tidak pernah mengumpulkan permintaan model lokal atau permintaan yang dikirim langsung dengan kredensial API Anda sendiri. {privacyLink}. Untuk penggunaan lebih banyak, berlangganan di {subscribeLink}. Kelola penagihan di {accountLink}.",
 };

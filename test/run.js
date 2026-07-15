@@ -9344,6 +9344,7 @@ test('settings moves profile and memory controls into Memory while CAPTCHA stays
     assert.match(html, /\.general-search-hidden \{ display: none !important; \}/, `${label}: General search should force-hide filtered rows/cards`);
 
     for (const id of [
+      'toggle-help-improve',
       'toggle-screenshot-fallback',
       'range-clarify-timeout',
       'toggle-site-adapters',
@@ -9385,6 +9386,28 @@ test('settings moves profile and memory controls into Memory while CAPTCHA stays
     }
 
     assert.match(html, /\.advanced-settings \{[\s\S]*?margin: 22px 0 32px;[\s\S]*?padding: 16px 0 22px;[\s\S]*?border-bottom: 1px solid var\(--border\);/, `${label}: Advanced should have bottom padding and a clear lower boundary`);
+  }
+});
+
+test('Help Improve WebBrain is default-on, persisted, and reloads Cloud request config', () => {
+  for (const [label, prefix, runtime] of [
+    ['chrome', 'src/chrome', 'chrome'],
+    ['firefox', 'src/firefox', 'browser'],
+  ]) {
+    const html = fs.readFileSync(path.join(ROOT, prefix, 'src/ui/settings.html'), 'utf8');
+    const settings = fs.readFileSync(path.join(ROOT, prefix, 'src/ui/settings.js'), 'utf8');
+    const locale = fs.readFileSync(path.join(ROOT, prefix, 'src/ui/locales/en.js'), 'utf8');
+    const manager = fs.readFileSync(path.join(ROOT, prefix, 'src/providers/manager.js'), 'utf8');
+    const background = fs.readFileSync(path.join(ROOT, prefix, 'src/background.js'), 'utf8');
+
+    assert.match(html, /id="toggle-help-improve" checked/, `${label}: Help Improve should be on by default in General Advanced`);
+    assert.match(settings, /helpImproveToggle\.checked = stored\.helpImproveWebBrain !== false/, `${label}: missing default-on storage hydration`);
+    assert.match(settings, new RegExp(`${runtime}\\.storage\\.local\\.set\\(\\{ helpImproveWebBrain: helpImproveToggle\\.checked \\}\\)`), `${label}: setting should persist`);
+    assert.match(locale, /'st\.display\.help_improve\.label': 'Help Improve WebBrain'/, `${label}: setting label missing`);
+    assert.match(locale, /On by default[^']*Local-model and bring-your-own API requests are never collected by WebBrain/, `${label}: setting disclosure should explain its default and scope`);
+    assert.match(manager, /const HELP_IMPROVE_WEBBRAIN_KEY = 'helpImproveWebBrain';/, `${label}: provider manager setting key missing`);
+    assert.match(manager, /helpImproveWebBrain = data\[HELP_IMPROVE_WEBBRAIN_KEY\] !== false/, `${label}: Cloud provider config should default improvement use on`);
+    assert.match(background, /changes\.providers \|\| changes\.activeProvider \|\| changes\.helpImproveWebBrain/, `${label}: Cloud provider config should reload after opt-out changes`);
   }
 });
 
@@ -15733,6 +15756,79 @@ test('_defaultConfigs: chrome and firefox share the same provider set', () => {
       chDefaults[id].category, fxDefaults[id].category,
       `provider ${id}: category differs (chrome=${chDefaults[id].category}, firefox=${fxDefaults[id].category})`
     );
+  }
+});
+
+test('WebBrain Cloud sends the Help Improve preference without leaking it to BYO providers', () => {
+  for (const Provider of [OpenAIProviderCh, OpenAIProviderFx]) {
+    const defaultOn = new Provider({ providerName: 'webbrain-cloud', deviceGuid: 'device-123' });
+    assert.equal(defaultOn._headers()['X-WebBrain-Help-Improve'], '1');
+    assert.equal(defaultOn._headers()['X-WebBrain-Device-Id'], 'device-123');
+    assert.equal(defaultOn._headers()['X-WebBrain-Client'], 'extension');
+
+    const optedOut = new Provider({ providerName: 'webbrain-cloud', helpImproveWebBrain: false });
+    assert.equal(optedOut._headers()['X-WebBrain-Help-Improve'], '0');
+    assert.equal(optedOut._headers()['X-WebBrain-Device-Id'], undefined);
+    assert.equal(optedOut._headers()['X-WebBrain-Client'], 'extension');
+
+    const bringYourOwn = new Provider({ providerName: 'openai', apiKey: 'test-key' });
+    assert.equal(bringYourOwn._headers()['X-WebBrain-Help-Improve'], undefined);
+    assert.equal(bringYourOwn._headers()['X-WebBrain-Client'], undefined);
+  }
+});
+
+test('WebBrain Cloud groups every generation in a stable conversation session without touching local or BYO calls', () => {
+  for (const [label, AgentClass, Provider, prefix] of [
+    ['chrome', AgentCh, OpenAIProviderCh, 'src/chrome'],
+    ['firefox', AgentFx, OpenAIProviderFx, 'src/firefox'],
+  ]) {
+    const tabId = label === 'chrome' ? 731 : 732;
+    const agent = new AgentClass({});
+    agent.getConversation(tabId, 'ask');
+    const firstConversationId = agent.conversationIds.get(tabId);
+    assert.match(firstConversationId, /^conv_/, `${label}: new conversation should mint an id`);
+
+    const cloud = { config: { providerName: 'webbrain-cloud' } };
+    const main = agent._cloudGenerationOptions(cloud, { temperature: 0 }, { tabId, generationName: 'main' });
+    const planner = agent._cloudGenerationOptions(cloud, {}, { tabId, generationName: 'planner' });
+    assert.equal(main.webbrainSessionId, firstConversationId, `${label}: main call should carry the conversation id`);
+    assert.equal(planner.webbrainSessionId, firstConversationId, `${label}: planner call should share the main session`);
+    assert.equal(planner.webbrainGenerationName, 'planner', `${label}: planner call should be labeled`);
+
+    const byoOptions = agent._cloudGenerationOptions({ config: { providerName: 'openai' } }, { temperature: 0 }, { tabId, generationName: 'memory' });
+    assert.deepEqual(byoOptions, { temperature: 0 }, `${label}: BYO provider received Cloud collection fields`);
+    const localOptions = agent._cloudGenerationOptions({ config: { providerName: 'llama.cpp' } }, {}, { tabId, generationName: 'main' });
+    assert.deepEqual(localOptions, {}, `${label}: local provider received Cloud collection fields`);
+
+    agent.clearConversation(tabId);
+    agent.getConversation(tabId, 'ask');
+    const secondConversationId = agent.conversationIds.get(tabId);
+    assert.notEqual(secondConversationId, firstConversationId, `${label}: starting a new conversation should rotate the session id`);
+
+    const cloudProvider = new Provider({ providerName: 'webbrain-cloud' });
+    const cloudBody = {};
+    cloudProvider._addWebBrainCloudContext(cloudBody, {
+      webbrainSessionId: firstConversationId,
+      webbrainGenerationName: 'compaction',
+    });
+    assert.equal(cloudBody.session_id, firstConversationId, `${label}: Cloud request body should include session_id`);
+    assert.equal(cloudBody.trace?.generation_name, 'compaction', `${label}: Cloud request body should include the generation label`);
+
+    const byoProvider = new Provider({ providerName: 'openai', apiKey: 'test-key' });
+    const byoBody = {};
+    byoProvider._addWebBrainCloudContext(byoBody, {
+      webbrainSessionId: firstConversationId,
+      webbrainGenerationName: 'main',
+    });
+    assert.deepEqual(byoBody, {}, `${label}: BYO request body should not include Cloud session fields`);
+
+    const agentSource = fs.readFileSync(path.join(ROOT, prefix, 'src/agent/agent.js'), 'utf8');
+    const backgroundSource = fs.readFileSync(path.join(ROOT, prefix, 'src/background.js'), 'utf8');
+    for (const generationName of ['main', 'planner', 'compaction', 'intent', 'vision']) {
+      assert.match(agentSource, new RegExp(`generationName: '${generationName}'`), `${label}: ${generationName} calls should be labeled`);
+    }
+    assert.match(backgroundSource, /generationName: 'memory'/, `${label}: memory extraction calls should be labeled`);
+    assert.match(backgroundSource, /conversationId: await agent\.getConversationId\(tabId\)/, `${label}: background memory jobs should retain the conversation id`);
   }
 });
 
@@ -23899,10 +23995,31 @@ test('settings exposes custom skills tab and packaged skills resource directory'
 
   const privacyPolicy = fs.readFileSync(path.join(ROOT, 'web/privacy.html'), 'utf8');
   assert.match(privacyPolicy, /Last updated: July 15, 2026/, 'privacy policy date should cover the default OTP data-flow change');
+  assert.match(privacyPolicy, /Local models and bring-your-own API:[\s\S]*never collected by WebBrain/i, 'privacy TL;DR should exclude local and BYO requests');
+  assert.match(privacyPolicy, /WebBrain Cloud:[\s\S]*evaluation, improvement, fine-tuning, and training/i, 'privacy TL;DR should disclose Cloud improvement use');
+  assert.match(privacyPolicy, /Help Improve WebBrain[\s\S]*on by default/i, 'privacy policy should disclose the default-on setting');
+  assert.match(privacyPolicy, /Settings → General → Advanced/, 'privacy policy should identify the opt-out path');
+  assert.match(privacyPolicy, /Missing consent, legacy clients, and disabled requests are opted out/i, 'privacy policy should treat missing consent as opt-out');
+  assert.match(privacyPolicy, /next new conversation[\s\S]*cannot make the current conversation eligible again/i, 'privacy policy should explain permanent conversation tainting');
+  assert.match(privacyPolicy, /Screenshots and uploaded images may be processed for inference[\s\S]*strips image URLs, base64 media, and image bytes/i, 'privacy policy should distinguish inference processing from improvement storage');
+  assert.match(privacyPolicy, /OpenRouter documents[\s\S]*minimum retention of three months[\s\S]*may be retained longer/i, 'privacy policy should disclose OpenRouter logging retention');
+  assert.match(privacyPolicy, /Use Inputs\/Outputs[\s\S]*option is disabled/i, 'privacy policy should distinguish OpenRouter logging from its training option');
+  assert.match(privacyPolicy, /no longer than <strong>12 months<\/strong>/, 'privacy policy should cap raw improvement retention at 12 months');
+  assert.match(privacyPolicy, /De-identified datasets may be retained for up to <strong>5 years<\/strong>/, 'privacy policy should cap de-identified retention at 5 years');
+  assert.doesNotMatch(privacyPolicy, /anonymi[sz]/i, 'privacy policy should use de-identified rather than anonymized');
+  assert.doesNotMatch(privacyPolicy, /Private Cloud/i, 'privacy policy should not claim an unavailable Private Cloud mode');
   assert.match(privacyPolicy, /Mid and Full runs send[^.]*skill IDs, names, summaries, and optional canonical semantic intents/i, 'privacy policy should disclose the semantic skill catalog');
   assert.match(privacyPolicy, /planner receives the same routing-only catalog/i, 'privacy policy should disclose planner skill routing');
   assert.match(privacyPolicy, /Compact sends no skill catalog, instructions, or tools/i, 'privacy policy should disclose Compact skill isolation');
   assert.match(privacyPolicy, /full instructions and compatible tools are sent only after/i, 'privacy policy should disclose on-demand full skill loading');
+
+  const privacyDocs = fs.readFileSync(path.join(ROOT, 'docs/privacy-and-data-flow.md'), 'utf8');
+  assert.match(privacyDocs, /WebBrain Cloud improvement data/, 'developer privacy docs should cover Cloud improvement data');
+  assert.match(privacyDocs, /MySQL is WebBrain's canonical store/, 'developer privacy docs should name the canonical improvement store');
+  assert.match(privacyDocs, /AES-256-GCM/, 'developer privacy docs should disclose encrypted payload storage');
+  assert.match(privacyDocs, /missing header,[\s\S]*treated as opted out/i, 'developer privacy docs should define missing consent');
+  assert.match(privacyDocs, /12 months before[\s\S]*de-identification/, 'developer privacy docs should match raw retention');
+  assert.match(privacyDocs, /De-identified datasets may be retained for up to[\s\S]*5 years/, 'developer privacy docs should match de-identified retention');
 
   const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
   const litterboxChangelogEntry = changelog.indexOf('Added an opt-in packaged Litterbox temporary file-share skill');

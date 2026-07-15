@@ -147,7 +147,7 @@ if (globalThis.browser?.storage?.onChanged) {
     cloudReady = true;
     localModelChoices = [];
     if (providerBody) {
-      providerBody.textContent = 'WebBrain Cloud is ready with a free daily allowance. Requests go through api.webbrain.one; debug and quota logs store metadata only by default, not prompt text, screenshots, or responses.';
+      providerBody.textContent = 'WebBrain Cloud is ready with a free daily allowance. Selected Cloud conversations may be retained and used to improve WebBrain while Help Improve WebBrain is on by default. You can turn it off in Settings → General → Advanced.';
     }
     if (providerStatus) {
       providerStatus.textContent = '';
