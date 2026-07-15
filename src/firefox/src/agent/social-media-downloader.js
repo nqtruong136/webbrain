@@ -909,6 +909,14 @@ window.SocialMediaDownloader = (() => {
     return '.bin';
   };
 
+  const _mseEntryHasMuxedAudioVideo = entry => {
+    const mime = String(entry && entry.mime || '');
+    if (!/^video\//i.test(mime)) return false;
+    const hasVideoCodec = /(?:avc1|avc3|hvc1|hev1|vp08|vp09|av01|theora)/i.test(mime);
+    const hasAudioCodec = /(?:mp4a|aac|ac-3|ec-3|opus|vorbis)/i.test(mime);
+    return hasVideoCodec && hasAudioCodec;
+  };
+
   // Group captured SourceBuffers by their parent MediaSource. Each
   // MediaSource ≈ one stream on the page — typically one reel on
   // infinite-feed viewers like Instagram /reels/, where the player
@@ -1022,12 +1030,21 @@ window.SocialMediaDownloader = (() => {
   //   'all'   → every captured group
   // Default 'all' preserves the pre-v4 contract for direct console
   // callers of saveMse() — only download_social_media plumbs the mode.
-  const saveMse = async ({ prefix = 'mse', minBytes = 1, mode = 'all' } = {}) => {
+  const saveMse = async ({ prefix = 'mse', minBytes = 1, mode = 'all', requireMuxedAudioVideo = false } = {}) => {
     const groups = _groupMseBuffers(minBytes);
     const primaryOnly = mode === 'main' || mode === 'auto';
     const toSave = (primaryOnly && groups.length > 1)
       ? [_pickPrimaryMseGroup(groups)]
       : groups;
+    if (requireMuxedAudioVideo && toSave.some((group) => (
+      group.entries.length !== 1 || !_mseEntryHasMuxedAudioVideo(group.entries[0])
+    ))) {
+      const error = new Error(
+        'The browser MSE capture contains split or unverifiably muxed media. No files were saved because a video request must produce one file with audio included.',
+      );
+      error.code = 'split_mse_requires_server_merge';
+      throw error;
+    }
     let i = 1;
     const saved = [];
     for (const group of toSave) {
@@ -1134,12 +1151,16 @@ window.SocialMediaDownloader = (() => {
     // get the legacy `mse_capture_available` recommendation.
     mseSavedFiles = null,
     mseSaveError = null,
+    mseSaveCode = null,
+    completedCount = 0,
     pageUrl = (typeof location !== 'undefined' ? location.href : ''),
   } = {}) => {
     let parsed = null;
     try { parsed = new URL(pageUrl); } catch (_) { /* malformed */ }
     const href = parsed ? parsed.href : String(pageUrl || '');
     const path = parsed ? (parsed.pathname + parsed.search) : '';
+
+    if (Number(completedCount) > 0) return null;
 
     // YouTube watch / shorts pages — if no googlevideo URL came back,
     // the actual stream is signatureCipher-only or Widevine-locked.
@@ -1177,6 +1198,15 @@ window.SocialMediaDownloader = (() => {
     //     _buildRecommendation. NOT consumed by download_social_media
     //     anymore.
     if (mseBytes > 0) {
+      if (mseSaveCode === 'split_mse_requires_server_merge') {
+        return {
+          kind: 'split_mse_unmerged',
+          message:
+            'The browser fallback detected split or unverifiably muxed media. ' +
+            'It intentionally saved nothing because the requested video must be one file with audio included. ' +
+            'Use the dedicated public-media downloader for server-side finalization; if that service already failed, report its failure honestly.',
+        };
+      }
       if (Array.isArray(mseSavedFiles) && mseSavedFiles.length > 0) {
         return null; // bytes saved — nothing to recommend
       }

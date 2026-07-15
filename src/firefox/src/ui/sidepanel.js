@@ -3874,7 +3874,8 @@ async function parseSlashCommands(text, tabId = currentTabId) {
 
   if (command.value === '/export' && action === 'conversation') {
     const messages = messagesEl.querySelectorAll('.message');
-    let md = '# WebBrain Conversation\n\n';
+    const webbrainVersion = browser.runtime.getManifest().version || 'unknown';
+    let md = `# WebBrain Conversation\n\n_Exported with WebBrain v${webbrainVersion}_\n\n`;
     for (const msg of messages) {
       const textEl = msg.querySelector('.message-text');
       if (!textEl) continue;
