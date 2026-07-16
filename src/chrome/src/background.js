@@ -2355,6 +2355,8 @@ function waitForTabLoadMCP(tabId, timeout = 15000) {
   });
 }
 
+let mcpVisualIndicatorTimeout = null;
+
 // Xử lý các tool gọi từ MCP
 async function handleToolExecutionMCP(toolName, params = {}, tabId = null) {
   let targetTabId = tabId;
@@ -2369,6 +2371,10 @@ async function handleToolExecutionMCP(toolName, params = {}, tabId = null) {
 
   // Bật viền sáng báo hiệu AI đang hoạt động (ngoại trừ lệnh screenshot)
   if (toolName !== "screenshot") {
+    if (mcpVisualIndicatorTimeout) {
+      clearTimeout(mcpVisualIndicatorTimeout);
+      mcpVisualIndicatorTimeout = null;
+    }
     await chrome.tabs.sendMessage(targetTabId, { type: "WB_SHOW_AGENT_INDICATORS" }).catch(() => {
       return chrome.scripting.executeScript({
         target: { tabId: targetTabId },
@@ -2578,11 +2584,13 @@ async function handleToolExecutionMCP(toolName, params = {}, tabId = null) {
     result = await dispatchToContentScriptMCP(targetTabId, toolName, params);
   }
 
-  // Tắt viền sáng sau 1.2 giây
+  // Tắt viền sáng sau 8 giây nhàn rỗi (Debounced)
   if (toolName !== "screenshot") {
-    setTimeout(() => {
+    if (mcpVisualIndicatorTimeout) clearTimeout(mcpVisualIndicatorTimeout);
+    mcpVisualIndicatorTimeout = setTimeout(() => {
       chrome.tabs.sendMessage(targetTabId, { type: "WB_HIDE_AGENT_INDICATORS" }).catch(() => {});
-    }, 1200);
+      mcpVisualIndicatorTimeout = null;
+    }, 8000);
   }
 
   return result;
@@ -2595,7 +2603,7 @@ async function dispatchToContentScriptMCP(tabId, toolName, params) {
   
   // Đảm bảo content script đã được tiêm
   try {
-    await chrome.tabs.sendMessage(tabId, { action: "ping" });
+    await chrome.tabs.sendMessage(tabId, { target: 'content', action: "ping" });
   } catch (e) {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -2610,6 +2618,7 @@ async function dispatchToContentScriptMCP(tabId, toolName, params) {
 
   try {
     return await chrome.tabs.sendMessage(tabId, {
+      target: 'content',
       action: actionName,
       params
     });
@@ -2848,8 +2857,22 @@ async function processNextCrawler() {
     }
 
     if (!tabId) {
-      const tab = await chrome.tabs.create({ url, active: true });
+      const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const activeTab = activeTabs[0];
+      
+      const createProperties = { url, active: true };
+      if (activeTab) {
+        createProperties.windowId = activeTab.windowId;
+        createProperties.index = activeTab.index + 1;
+      }
+      
+      const tab = await chrome.tabs.create(createProperties);
       tabId = tab.id;
+      
+      // Nếu tab đang hoạt động thuộc nhóm tab, đưa tab mới vào cùng nhóm
+      if (activeTab && activeTab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+        await chrome.tabs.group({ tabIds: tabId, groupId: activeTab.groupId }).catch(() => {});
+      }
     }
 
     crawlerTabId = tabId;
@@ -2880,6 +2903,40 @@ async function processNextCrawler() {
 
     await humanizeTabCrawler(tabId);
     await new Promise(r => setTimeout(r, 700));
+
+    // Inject hiệu ứng viền xanh nhấp nháy báo hiệu cào AI
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const id = 'shopee-crawler-visual-indicator';
+        if (document.getElementById(id)) return;
+        const div = document.createElement('div');
+        div.id = id;
+        div.style.cssText = `
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          border: 4px solid #10b981;
+          box-shadow: inset 0 0 20px rgba(16, 185, 129, 0.6);
+          pointer-events: none;
+          z-index: 9999999;
+          animation: shopee-crawler-glow 2s infinite ease-in-out;
+        `;
+        const style = document.createElement('style');
+        style.id = 'shopee-crawler-visual-style';
+        style.textContent = `
+          @keyframes shopee-crawler-glow {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+          }
+        `;
+        document.head.appendChild(style);
+        document.body.appendChild(div);
+      }
+    }).catch(() => {});
 
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -2976,7 +3033,17 @@ async function finishBatchCrawler(q) {
   crawlerIsRunning = false;
   chrome.alarms?.clear('crawler_next_item');
   if (crawlerTabId) {
-    chrome.tabs.remove(crawlerTabId).catch(() => { });
+    // Không đóng tab nữa, chỉ đổi viền xanh lá sang xanh dương báo hiệu hoàn tất
+    chrome.scripting.executeScript({
+      target: { tabId: crawlerTabId },
+      func: () => {
+        const div = document.getElementById('shopee-crawler-visual-indicator');
+        if (div) {
+          div.style.borderColor = '#3b82f6';
+          div.style.boxShadow = 'inset 0 0 20px rgba(59, 130, 246, 0.6)';
+        }
+      }
+    }).catch(() => {});
     crawlerTabId = null;
   }
   await setCrawlerQueue({ status: 'done' });
