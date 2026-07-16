@@ -2230,3 +2230,970 @@ async function loadProvidersForRecordingFinalize() {
     await providerManager.load();
   }
 }
+
+// ============================================================================
+// ==================== WEB BRAIN ULTIMATE INTEGRATION ========================
+// ============================================================================
+
+// ======================== MCP WEB SOCKET CLIENT =============================
+let mcpSocket = null;
+let mcpStatus = "disconnected";
+let mcpTools = [
+  "get_accessibility_tree", "click_ax", "type_ax", "set_field", "hover", "scroll",
+  "press_keys", "click", "type_text", "get_selection", "read_page", "read_page_source",
+  "extract_data", "get_interactive_elements", "navigate", "new_tab", "go_back",
+  "go_forward", "screenshot", "get_window_info", "resize_window", "wait_for_element",
+  "wait_for_stable", "execute_js", "list_downloads", "download_files"
+];
+let mcpLogs = [];
+
+function logMcp(action, details, success = true) {
+  mcpLogs.unshift({
+    timestamp: new Date().toLocaleTimeString(),
+    action,
+    details,
+    success
+  });
+  if (mcpLogs.length > 50) mcpLogs.pop();
+  // Gửi cập nhật trực tiếp đến sidepanel nếu đang mở
+  chrome.runtime.sendMessage({
+    target: 'sidepanel-mcp',
+    action: 'mcp_log_update',
+    logs: mcpLogs,
+    status: mcpStatus
+  }).catch(() => {});
+}
+
+async function connectWebSocket() {
+  if (mcpSocket) {
+    try { mcpSocket.close(); } catch(e){}
+  }
+  
+  mcpStatus = "connecting";
+  logMcp("System", "Đang kết nối tới WebSocket Server ws://localhost:8545...", true);
+  
+  mcpSocket = new WebSocket("ws://localhost:8545");
+  
+  mcpSocket.onopen = () => {
+    mcpStatus = "connected";
+    logMcp("System", "Kết nối WebSocket thành công!", true);
+  };
+  
+  mcpSocket.onclose = () => {
+    mcpStatus = "disconnected";
+    logMcp("System", "Mất kết nối WebSocket. Sẽ tự động kết nối lại sau 5 giây...", false);
+    mcpSocket = null;
+    setTimeout(connectWebSocket, 5000);
+  };
+  
+  mcpSocket.onerror = (err) => {
+    mcpStatus = "disconnected";
+    logMcp("Error", "Lỗi kết nối WebSocket server.", false);
+  };
+  
+  mcpSocket.onmessage = async (event) => {
+    let request;
+    try {
+      request = JSON.parse(event.data);
+    } catch (e) {
+      console.error("Lỗi parse dữ liệu WebSocket:", e);
+      return;
+    }
+    
+    const { id, toolName, params, tabId } = request;
+    logMcp("Tool Call", `Gọi tool: ${toolName}`, true);
+    
+    const result = await handleToolExecutionMCP(toolName, params, tabId);
+    
+    if (mcpSocket && mcpSocket.readyState === WebSocket.OPEN) {
+      mcpSocket.send(JSON.stringify({
+        id,
+        result
+      }));
+      logMcp("Tool Return", `Tool ${toolName} hoàn thành: ${result.success ? "Thành công" : "Thất bại"}`, result.success);
+    }
+  };
+}
+
+// Bắt đầu kết nối WebSocket MCP khi khởi động background
+connectWebSocket();
+
+// Hàm đảm bảo tab thuộc nhóm "WebBrain-MCP"
+async function ensureTabInGroupMCP(tabId) {
+  try {
+    const groups = await chrome.tabGroups.query({ title: "WebBrain-MCP" });
+    if (groups.length > 0) {
+      const groupId = groups[0].id;
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.groupId !== groupId) {
+        await chrome.tabs.group({ groupId: groupId, tabIds: [tabId] });
+      }
+    } else {
+      const groupId = await chrome.tabs.group({ tabIds: [tabId] });
+      await chrome.tabGroups.update(groupId, { title: "WebBrain-MCP", color: "blue" });
+    }
+  } catch (err) {
+    console.warn("⚠️ Không thể đưa tab vào nhóm WebBrain-MCP:", err.message);
+  }
+}
+
+// Chờ tab tải xong dùng cho MCP
+function waitForTabLoadMCP(tabId, timeout = 15000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, timeout);
+    function listener(id, info) {
+      if (id === tabId && info.status === 'complete') {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+// Xử lý các tool gọi từ MCP
+async function handleToolExecutionMCP(toolName, params = {}, tabId = null) {
+  let targetTabId = tabId;
+  if (!targetTabId) {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    targetTabId = activeTab?.id;
+  }
+
+  if (!targetTabId) {
+    return { success: false, error: "Không tìm thấy tab trình duyệt đang hoạt động để tương tác." };
+  }
+
+  // Bật viền sáng báo hiệu AI đang hoạt động (ngoại trừ lệnh screenshot)
+  if (toolName !== "screenshot") {
+    await chrome.tabs.sendMessage(targetTabId, { type: "WB_SHOW_AGENT_INDICATORS" }).catch(() => {
+      return chrome.scripting.executeScript({
+        target: { tabId: targetTabId },
+        files: [
+          'src/content/accessibility-tree.js',
+          'src/content/content.js',
+          'src/content/agent-visual-indicator.js'
+        ]
+      }).then(() => {
+        return chrome.tabs.sendMessage(targetTabId, { type: "WB_SHOW_AGENT_INDICATORS" });
+      }).catch(() => {});
+    });
+  }
+
+  let result = undefined;
+
+  try {
+    switch (toolName) {
+      case "navigate": {
+        if (!params.url) {
+          result = { success: false, error: "Tham số 'url' là bắt buộc." };
+          break;
+        }
+        await chrome.tabs.update(targetTabId, { url: params.url });
+        await ensureTabInGroupMCP(targetTabId);
+        await waitForTabLoadMCP(targetTabId);
+        result = { success: true, message: `Đã điều hướng tab ${targetTabId} đến URL ${params.url} và đưa vào nhóm WebBrain-MCP.` };
+        break;
+      }
+      case "new_tab": {
+        const newTab = await chrome.tabs.create({ url: params.url || "about:blank" });
+        await ensureTabInGroupMCP(newTab.id);
+        result = { success: true, tabId: newTab.id, message: "Đã mở tab mới và đưa vào nhóm WebBrain-MCP thành công." };
+        break;
+      }
+      case "go_back": {
+        await chrome.tabs.goBack(targetTabId);
+        await waitForTabLoadMCP(targetTabId);
+        result = { success: true };
+        break;
+      }
+      case "go_forward": {
+        await chrome.tabs.goForward(targetTabId);
+        await waitForTabLoadMCP(targetTabId);
+        result = { success: true };
+        break;
+      }
+      case "screenshot": {
+        await chrome.tabs.sendMessage(targetTabId, { type: "WB_HIDE_FOR_TOOL_USE" }).catch(() => {});
+        await new Promise(r => setTimeout(r, 150));
+        const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: "png" });
+        await chrome.tabs.sendMessage(targetTabId, { type: "WB_SHOW_AFTER_TOOL_USE" }).catch(() => {});
+        result = { success: true, screenshot: dataUrl };
+        break;
+      }
+      case "read_page_source": {
+        const scriptResult = await chrome.scripting.executeScript({
+          target: { tabId: targetTabId },
+          func: () => document.documentElement.outerHTML
+        });
+        result = { success: true, html: scriptResult[0]?.result };
+        break;
+      }
+      case "get_selection": {
+        const scriptResult = await chrome.scripting.executeScript({
+          target: { tabId: targetTabId },
+          func: () => window.getSelection()?.toString() || ""
+        });
+        result = { success: true, text: scriptResult[0]?.result };
+        break;
+      }
+      case "get_window_info": {
+        const win = await chrome.windows.getCurrent();
+        const tabs = await chrome.tabs.query({ currentWindow: true });
+        result = { success: true, width: win.width, height: win.height, tabsCount: tabs.length };
+        break;
+      }
+      case "resize_window": {
+        if (!params.width || !params.height) {
+          result = { success: false, error: "width và height là bắt buộc." };
+          break;
+        }
+        const win = await chrome.windows.getCurrent();
+        await chrome.windows.update(win.id, { width: Number(params.width), height: Number(params.height) });
+        result = { success: true, message: `Đã thay đổi kích thước cửa sổ thành ${params.width}x${params.height}` };
+        break;
+      }
+      case "wait_for_stable": {
+        const checkStable = () => {
+          return new Promise((resolve) => {
+            if (document.readyState === 'complete') resolve(true);
+            else {
+              window.addEventListener('load', () => resolve(true));
+            }
+          });
+        };
+        await chrome.scripting.executeScript({
+          target: { tabId: targetTabId },
+          func: checkStable
+        });
+        result = { success: true, stable: true };
+        break;
+      }
+      case "execute_js": {
+        if (!params.code) {
+          result = { success: false, error: "Tham số 'code' là bắt buộc." };
+          break;
+        }
+        const scriptResult = await chrome.scripting.executeScript({
+          target: { tabId: targetTabId },
+          func: (codeStr) => {
+            return new Promise(async (resolve) => {
+              try {
+                const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+                const fn = new AsyncFunction('resolve', codeStr);
+                const res = await fn(resolve);
+                if (res !== undefined) resolve(res);
+              } catch (e) {
+                resolve({ error: e.message || String(e) });
+              }
+            });
+          },
+          args: [params.code]
+        });
+        result = { success: true, result: scriptResult[0]?.result };
+        break;
+      }
+      case "list_downloads": {
+        const items = await chrome.downloads.search(params || {});
+        result = { success: true, downloads: items };
+        break;
+      }
+      case "download_files": {
+        if (!params.url) {
+          result = { success: false, error: "Tham số 'url' là bắt buộc." };
+          break;
+        }
+        const downloadId = await chrome.downloads.download({
+          url: params.url,
+          filename: params.filename || undefined
+        });
+        result = { success: true, downloadId };
+        break;
+      }
+    }
+  } catch (err) {
+    result = { success: false, error: `Lỗi thao tác trình duyệt: ${err.message}` };
+  }
+
+  // Nếu chưa xử lý, chuyển tiếp tới content script
+  if (result === undefined) {
+    result = await dispatchToContentScriptMCP(targetTabId, toolName, params);
+  }
+
+  // Tắt viền sáng sau 1.2 giây
+  if (toolName !== "screenshot") {
+    setTimeout(() => {
+      chrome.tabs.sendMessage(targetTabId, { type: "WB_HIDE_AGENT_INDICATORS" }).catch(() => {});
+    }, 1200);
+  }
+
+  return result;
+}
+
+// Chuyển tiếp tới content script cho MCP
+async function dispatchToContentScriptMCP(tabId, toolName, params) {
+  let actionName = toolName;
+  if (actionName === "type_text") actionName = "type";
+  
+  // Đảm bảo content script đã được tiêm
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: "ping" });
+  } catch (e) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: [
+        "src/content/accessibility-tree.js",
+        "src/content/content.js",
+        "src/content/agent-visual-indicator.js"
+      ]
+    });
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  try {
+    return await chrome.tabs.sendMessage(tabId, {
+      action: actionName,
+      params
+    });
+  } catch (err) {
+    return { success: false, error: `Không thể gửi lệnh đến content script: ${err.message}` };
+  }
+}
+
+// ======================== SHOPEE CRAWLER QUEUE ==============================
+let crawlerIsRunning = false;
+let crawlerIsPaused = false;
+let crawlerTabId = null;
+let crawlerCurrentRunId = 0;
+let crawlerIsProcessingNext = false;
+const DEFAULT_CRAWLER_API_KEY = "AIzaSyBZYC_16KSBY9SpxFtOXaBGTS6tVtce0gs";
+
+chrome.alarms?.create('crawler_keepalive', { periodInMinutes: 0.4 });
+chrome.alarms?.onAlarm?.addListener((alarm) => {
+  if (alarm.name === 'crawler_keepalive') {
+    chrome.storage.local.get('crawler_queue', () => { });
+  }
+  if (alarm.name === 'crawler_next_item') {
+    processNextCrawler();
+  }
+});
+
+async function getCrawlerQueue() {
+  const { crawler_queue } = await chrome.storage.local.get('crawler_queue');
+  return crawler_queue || {
+    links: [],
+    index: 0,
+    results: [],
+    status: 'idle',
+    geminiApiKey: DEFAULT_CRAWLER_API_KEY,
+    delayMin: 3000,
+    delayMax: 7000,
+    errorCount: 0,
+    captchaCount: 0
+  };
+}
+
+async function setCrawlerQueue(patch) {
+  const q = await getCrawlerQueue();
+  const updated = { ...q, ...patch };
+  await chrome.storage.local.set({ crawler_queue: updated });
+  return updated;
+}
+
+function sendCrawlerProgress(status, extra = {}) {
+  chrome.storage.local.set({
+    crawler_progress: {
+      status,
+      index: extra.index ?? 0,
+      total: extra.total ?? 0,
+      isComplete: extra.isComplete ?? false,
+      isPaused: extra.isPaused ?? false,
+      isCaptcha: extra.isCaptcha ?? false,
+      errorCount: extra.errorCount ?? 0,
+      resumeIndex: extra.resumeIndex ?? null,
+      timestamp: Date.now()
+    }
+  });
+  // Gửi cập nhật trực tiếp đến sidebar crawler tab
+  chrome.runtime.sendMessage({
+    target: 'sidepanel-crawler',
+    action: 'crawler_progress_update',
+    status,
+    extra
+  }).catch(() => {});
+}
+
+async function humanizeTabCrawler(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        return new Promise((resolve) => {
+          const steps = 5 + Math.floor(Math.random() * 3);
+          let current = 0;
+          const waveScroll = () => {
+            if (current >= steps) {
+              resolve();
+              return;
+            }
+            const goUp = current > 0 && Math.random() < 0.25;
+            const distance = (180 + Math.random() * 220) * (goUp ? -0.35 : 1);
+            const speed = Math.random() < 0.3 ? 'auto' : 'smooth';
+            window.scrollBy({ top: distance, left: 0, behavior: speed });
+            current += 1;
+            const pause = 600 + Math.random() * 600;
+            setTimeout(waveScroll, pause);
+          };
+          waveScroll();
+          const moveCount = 3 + Math.floor(Math.random() * 2);
+          for (let i = 0; i < moveCount; i++) {
+            setTimeout(() => {
+              document.dispatchEvent(new MouseEvent('mousemove', {
+                clientX: 100 + Math.random() * 500,
+                clientY: 100 + Math.random() * 400,
+                bubbles: true
+              }));
+            }, 150 + i * 250);
+          }
+        });
+      }
+    });
+  } catch (err) {
+    console.warn("Humanize execution failed:", err.message);
+  }
+}
+
+async function detectCaptchaCrawler(tabId) {
+  try {
+    const result = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const title = document.title.toLowerCase();
+        const body = document.body?.innerText?.toLowerCase() || '';
+        const isCaptcha =
+          title.includes('captcha') ||
+          title.includes('verify') ||
+          title.includes('robot') ||
+          title.includes('security check') ||
+          body.includes('please verify you are a human') ||
+          body.includes('vui lòng xác minh') ||
+          body.includes('kiểm tra bảo mật') ||
+          body.includes('tôi không phải robot') ||
+          document.querySelector('iframe[src*="recaptcha"]') !== null ||
+          document.querySelector('[class*="captcha"]') !== null ||
+          document.querySelector('[id*="captcha"]') !== null;
+
+        const isBlocked =
+          title.includes('access denied') ||
+          title.includes('403') ||
+          body.includes('access denied') ||
+          body.includes('unusual traffic');
+
+        return { isCaptcha, isBlocked };
+      }
+    });
+    return result?.[0]?.result || { isCaptcha: false, isBlocked: false };
+  } catch {
+    return { isCaptcha: false, isBlocked: false };
+  }
+}
+
+async function processNextCrawler() {
+  if (!crawlerIsRunning || crawlerIsPaused) return;
+  if (crawlerIsProcessingNext) return;
+  crawlerIsProcessingNext = true;
+  chrome.alarms?.clear('crawler_next_item');
+
+  const q = await getCrawlerQueue();
+  if (q.status === 'stopped' || q.status === 'paused') {
+    crawlerIsRunning = q.status !== 'stopped';
+    crawlerIsProcessingNext = false;
+    return;
+  }
+  if (q.index >= q.links.length) {
+    await finishBatchCrawler(q);
+    crawlerIsProcessingNext = false;
+    return;
+  }
+
+  const url = q.links[q.index];
+  const pctDone = q.links.length > 0 ? Math.round((q.index / q.links.length) * 100) : 0;
+  sendCrawlerProgress(`🔄 [${q.index + 1}/${q.links.length}] ${pctDone}% · Đang tải trang...`, {
+    index: q.index,
+    total: q.links.length,
+    errorCount: q.errorCount
+  });
+
+  let result = { url, Name: '', Price: '', Sold: '', Rating: '', Brand: '', Description: '', failed: false, errorType: null };
+  let captchaDetected = false;
+  let tabId = crawlerTabId;
+  let windowId = null;
+
+  try {
+    if (tabId) {
+      try {
+        await chrome.tabs.update(tabId, { url, active: true });
+      } catch {
+        tabId = null;
+      }
+    }
+
+    if (!tabId) {
+      const tab = await chrome.tabs.create({ url, active: true });
+      tabId = tab.id;
+    }
+
+    crawlerTabId = tabId;
+    await waitForTabLoadMCP(tabId, 25000);
+
+    const tabInfo = await chrome.tabs.get(tabId).catch(() => null);
+    windowId = tabInfo?.windowId;
+
+    await new Promise(r => setTimeout(r, 3000));
+
+    const captchaCheck = await detectCaptchaCrawler(tabId);
+    if (captchaCheck.isCaptcha || captchaCheck.isBlocked) {
+      captchaDetected = true;
+      await setCrawlerQueue({ captchaCount: (q.captchaCount || 0) + 1 });
+      crawlerIsPaused = true;
+      await setCrawlerQueue({ status: 'paused' });
+      sendCrawlerProgress(`🤖 Phát hiện CAPTCHA! Tạm dừng để bạn tự giải trên trình duyệt...`, {
+        index: q.index,
+        total: q.links.length,
+        isPaused: true,
+        isCaptcha: true,
+        resumeIndex: q.index,
+        errorCount: q.errorCount
+      });
+      crawlerIsProcessingNext = false;
+      return;
+    }
+
+    await humanizeTabCrawler(tabId);
+    await new Promise(r => setTimeout(r, 700));
+
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        return new Promise((resolve) => {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          setTimeout(resolve, 2000);
+        });
+      }
+    }).catch(() => { });
+    await new Promise(r => setTimeout(r, 400));
+
+    const textData = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => document.body.innerText
+    });
+    const innerText = textData?.[0]?.result || '';
+
+    let base64Image = null;
+    if (q.useVision) {
+      base64Image = await captureScreenshotSafeCrawler(windowId, tabId, 50);
+    }
+
+    sendCrawlerProgress(`🧠 AI [${q.index + 1}/${q.links.length}] · Đang phân tích dữ liệu...`, {
+      index: q.index,
+      total: q.links.length,
+      errorCount: q.errorCount
+    });
+
+    let aiData;
+    if (q.apiProvider === 'openai') {
+      aiData = await callOpenAICompatibleAPICrawler(q.apiEndpoint, q.geminiApiKey, q.modelName, base64Image, innerText, url);
+    } else {
+      aiData = await callGeminiAPICrawler(q.geminiApiKey, base64Image, innerText, url);
+    }
+
+    result = {
+      url,
+      Name: aiData.name || '',
+      Price: aiData.price || '',
+      Sold: aiData.sold || '',
+      Rating: aiData.rating || '',
+      Brand: aiData.brand || '',
+      Description: aiData.description || '',
+      failed: false,
+      errorType: null
+    };
+
+  } catch (err) {
+    console.error('Crawl link error:', err);
+    result.failed = true;
+    result.errorType = err.message;
+    await setCrawlerQueue({ errorCount: (q.errorCount || 0) + 1 });
+  }
+
+  if (!captchaDetected) {
+    const updatedQ = await getCrawlerQueue();
+    const newResults = [...(updatedQ.results || []), result];
+    const newIndex = q.index + 1;
+
+    await chrome.storage.local.set({
+      crawler_queue: { ...updatedQ, results: newResults, index: newIndex },
+      crawler_scrapedData: newResults
+    });
+
+    if (newIndex >= q.links.length) {
+      await finishBatchCrawler({ ...updatedQ, results: newResults, index: newIndex });
+      crawlerIsProcessingNext = false;
+      return;
+    }
+
+    const delay = updatedQ.delayMin + Math.random() * (updatedQ.delayMax - updatedQ.delayMin);
+    sendCrawlerProgress(`⏳ Đang chờ ${(delay / 1000).toFixed(0)}s trước sản phẩm tiếp theo...`, {
+      index: newIndex,
+      total: q.links.length,
+      errorCount: updatedQ.errorCount + (result.failed ? 1 : 0)
+    });
+
+    chrome.alarms?.create('crawler_next_item', { delayInMinutes: delay / 60000 });
+  }
+  crawlerIsProcessingNext = false;
+}
+
+async function finishBatchCrawler(q) {
+  crawlerIsRunning = false;
+  chrome.alarms?.clear('crawler_next_item');
+  if (crawlerTabId) {
+    chrome.tabs.remove(crawlerTabId).catch(() => { });
+    crawlerTabId = null;
+  }
+  await setCrawlerQueue({ status: 'done' });
+  sendCrawlerProgress(`🎉 Hoàn tất cào ${q.links.length} sản phẩm!`, {
+    index: q.links.length,
+    total: q.links.length,
+    isComplete: true
+  });
+}
+
+async function captureScreenshotSafeCrawler(windowId, tabId, quality = 50) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      if (windowId) await chrome.windows.update(windowId, { focused: true }).catch(() => { });
+      if (tabId) await chrome.tabs.update(tabId, { active: true }).catch(() => { });
+      await new Promise(r => setTimeout(r, 1200));
+
+      let dataUrl = windowId 
+        ? await chrome.tabs.captureVisibleTab(windowId, { format: 'jpeg', quality })
+        : await chrome.tabs.captureVisibleTab({ format: 'jpeg', quality });
+        
+      if (dataUrl) return dataUrl.split(',')[1];
+    } catch (err) {
+      if (attempt === 0) { await new Promise(r => setTimeout(r, 1000)); continue; }
+    }
+  }
+  return null;
+}
+
+function extractAndParseJSONCrawler(text) {
+  try {
+    return JSON.parse(text.trim());
+  } catch (e) {
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      const candidate = text.substring(firstBrace, lastBrace + 1);
+      try {
+        return JSON.parse(candidate);
+      } catch (innerError) {
+        const cleaned = candidate.replace(/,\s*([\]}])/g, '$1').replace(/[\u200B-\u200D\uFEFF]/g, "");
+        try { return JSON.parse(cleaned); } catch (finalError) {
+          throw new Error(`JSON parse error: ${finalError.message}`);
+        }
+      }
+    }
+    throw new Error("No JSON block found");
+  }
+}
+
+async function callGeminiAPICrawler(apiKey, base64Image, innerText, url) {
+  const model = "gemini-2.5-flash";
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const promptText = `Bạn là một chuyên gia trích xuất dữ liệu thương mại điện tử chuyên nghiệp.
+Dưới đây là bức ảnh chụp màn hình trang sản phẩm Shopee kết hợp với nội dung văn bản thô (InnerText) của trang đó.
+Nhiệm vụ của bạn là đọc kỹ bức ảnh và văn bản để trích xuất chính xác các thông tin sau:
+1. Tên sản phẩm (name)
+2. Giá bán hiện tại (price - ví dụ: "160.500" hoặc khoảng giá nếu có biến thể)
+3. Lượt bán (sold - ví dụ: "3.1k" hoặc "150", nếu chưa bán được ghi "0")
+4. Đánh giá trung bình (rating - ví dụ: "4.9", nếu chưa có ghi "0" hoặc "Chưa có đánh giá")
+5. Thương hiệu (brand - ví dụ: "OEM", "No Brand", hoặc tên hãng sản xuất cụ thể)
+6. Mô tả sản phẩm (description - Tóm tắt ngắn gọn hoặc lấy 2-3 câu mô tả chính của sản phẩm, nếu không có ghi "")
+
+Đường dẫn sản phẩm: ${url}
+Hãy trả về kết quả dưới định dạng JSON duy nhất khớp với schema được yêu cầu.`;
+
+  const requestBody = {
+    contents: [{
+      parts: [
+        { text: promptText },
+        { text: "Văn bản thô của trang:\n" + innerText }
+      ]
+    }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          name: { type: "STRING" },
+          price: { type: "STRING" },
+          sold: { type: "STRING" },
+          rating: { type: "STRING" },
+          brand: { type: "STRING" },
+          description: { type: "STRING" }
+        },
+        required: ["name", "price", "sold", "rating", "brand", "description"]
+      }
+    }
+  };
+
+  if (base64Image) {
+    requestBody.contents[0].parts.push({
+      inlineData: {
+        mimeType: "image/jpeg",
+        data: base64Image
+      }
+    });
+  }
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) throw new Error(`Gemini Error: ${response.status}`);
+  const responseText = await response.text();
+  const result = extractAndParseJSONCrawler(responseText);
+  const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!jsonText) throw new Error("No data returned");
+  return extractAndParseJSONCrawler(jsonText);
+}
+
+async function callOpenAICompatibleAPICrawler(endpoint, apiKey, modelName, base64Image, innerText, url) {
+  const cleanEndpoint = endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+  const targetUrl = `${cleanEndpoint}/chat/completions`;
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
+  const systemPrompt = `Bạn là một chuyên gia trích xuất dữ liệu thương mại điện tử chuyên nghiệp.
+Nhiệm vụ của bạn là đọc thông tin trang sản phẩm Shopee để trích xuất chính xác các trường sau:
+1. Tên sản phẩm (name)
+2. Giá bán hiện tại (price - ví dụ: "160.500" hoặc khoảng giá nếu có biến thể)
+3. Lượt bán (sold - ví dụ: "3.1k" hoặc "150", nếu chưa bán được ghi "0")
+4. Đánh giá trung bình (rating - ví dụ: "4.9", nếu chưa có ghi "0" hoặc "Chưa có đánh giá")
+5. Thương hiệu (brand - ví dụ: "OEM", "No Brand", hoặc tên hãng sản xuất cụ thể)
+6. Mô tả sản phẩm (description - Tóm tắt ngắn gọn hoặc lấy 2-3 câu mô tả chính của sản phẩm, nếu không có ghi "")
+
+Hãy trả về kết quả dưới định dạng JSON duy nhất và không chứa các thẻ markdown bao quanh, theo cấu trúc mẫu:
+{"name": "Tên", "price": "Giá", "sold": "Bán", "rating": "Đánh giá", "brand": "Nhãn", "description": "Mô tả"}`;
+
+  const userContent = [{
+    type: "text",
+    text: `Đường dẫn sản phẩm: ${url}\n\nVăn bản thô của trang:\n${innerText}`
+  }];
+
+  if (base64Image) {
+    userContent.push({
+      type: "image_url",
+      image_url: { url: `data:image/jpeg;base64,${base64Image}` }
+    });
+  }
+
+  const requestBody = {
+    model: modelName,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userContent }
+    ],
+    temperature: 0.1
+  };
+
+  if (modelName.includes('chat') || modelName.includes('deepseek') || modelName.includes('gpt')) {
+    requestBody.response_format = { type: "json_object" };
+  }
+
+  const response = await fetch(targetUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) throw new Error(`OpenAI Error: ${response.status}`);
+  const responseText = await response.text();
+  const result = extractAndParseJSONCrawler(responseText);
+  const contentText = result.choices?.[0]?.message?.content;
+  if (!contentText) throw new Error("No content returned");
+  return extractAndParseJSONCrawler(contentText);
+}
+
+// ======================== CENTRAL MESSAGE ROUTER (3-IN-1) ===================
+chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
+  if (req.target === 'crawler' || req.action === 'DOWNLOAD_IMAGES') {
+    handleCrawlerMessage3in1(req, sender, sendResponse);
+    return true;
+  }
+  if (req.target === 'mcp') {
+    handleMcpMessage3in1(req, sender, sendResponse);
+    return true;
+  }
+});
+
+async function handleMcpMessage3in1(req, sender, sendResponse) {
+  if (req.action === 'GET_STATUS') {
+    sendResponse({ status: mcpStatus, port: 8545, tools: mcpTools, logs: mcpLogs });
+  } else if (req.action === 'RECONNECT') {
+    connectWebSocket();
+    sendResponse({ ok: true });
+  }
+}
+
+async function handleCrawlerMessage3in1(req, sender, sendResponse) {
+  switch (req.action) {
+    case 'START_BATCH': {
+      if (crawlerIsRunning) {
+        sendResponse({ ok: false, error: 'already_running' });
+        break;
+      }
+      const { links, geminiApiKey, delayMin, delayMax, apiProvider, apiEndpoint, modelName, useVision } = req.payload;
+      chrome.alarms?.clear('crawler_next_item');
+      crawlerIsProcessingNext = false;
+
+      await chrome.storage.local.set({
+        crawler_queue: {
+          links,
+          index: 0,
+          results: [],
+          status: 'running',
+          geminiApiKey: geminiApiKey || DEFAULT_CRAWLER_API_KEY,
+          delayMin: Number(delayMin) * 1000 || 3000,
+          delayMax: Number(delayMax) * 1000 || 7000,
+          errorCount: 0,
+          captchaCount: 0,
+          apiProvider: apiProvider || 'gemini',
+          apiEndpoint: apiEndpoint || 'http://localhost:20128/v1',
+          modelName: modelName || 'deepseek-chat',
+          useVision: useVision !== undefined ? useVision : true
+        },
+        crawler_scrapedData: []
+      });
+
+      crawlerIsRunning = true;
+      crawlerIsPaused = false;
+      crawlerCurrentRunId++;
+      processNextCrawler();
+      sendResponse({ ok: true });
+      break;
+    }
+    case 'STOP_BATCH': {
+      crawlerIsRunning = false;
+      crawlerIsPaused = false;
+      crawlerCurrentRunId++;
+      crawlerIsProcessingNext = false;
+      chrome.alarms?.clear('crawler_next_item');
+      if (crawlerTabId) {
+        chrome.tabs.remove(crawlerTabId).catch(() => { });
+        crawlerTabId = null;
+      }
+      const q = await setCrawlerQueue({ status: 'stopped' });
+      sendCrawlerProgress('⏹️ Đã dừng tiến trình crawl.', {
+        index: q.index,
+        total: q.links.length,
+        isComplete: true
+      });
+      sendResponse({ ok: true });
+      break;
+    }
+    case 'PAUSE_BATCH': {
+      if (!crawlerIsRunning || crawlerIsPaused) {
+        sendResponse({ ok: false });
+        break;
+      }
+      crawlerIsPaused = true;
+      crawlerIsProcessingNext = false;
+      chrome.alarms?.clear('crawler_next_item');
+      const q = await setCrawlerQueue({ status: 'paused' });
+      sendCrawlerProgress(`⏸️ Đã tạm dừng tại ${q.index}/${q.links.length}`, {
+        index: q.index,
+        total: q.links.length,
+        isPaused: true,
+        resumeIndex: q.index
+      });
+      sendResponse({ ok: true });
+      break;
+    }
+    case 'RESUME_BATCH': {
+      const q = await getCrawlerQueue();
+      if (q.status === 'stopped') {
+        sendResponse({ ok: false, error: 'session_stopped' });
+        break;
+      }
+      if (!crawlerIsPaused && crawlerIsRunning) {
+        sendResponse({ ok: false, error: 'not_paused' });
+        break;
+      }
+      chrome.alarms?.clear('crawler_next_item');
+      crawlerIsProcessingNext = false;
+      crawlerIsRunning = true;
+      crawlerIsPaused = false;
+      await setCrawlerQueue({ status: 'running' });
+      sendCrawlerProgress(`▶️ Tiếp tục cào từ sản phẩm thứ ${q.index + 1}...`, {
+        index: q.index,
+        total: q.links.length
+      });
+      crawlerCurrentRunId++;
+      processNextCrawler();
+      sendResponse({ ok: true });
+      break;
+    }
+    case 'GET_STATUS': {
+      sendResponse({ isRunning: crawlerIsRunning, isPaused: crawlerIsPaused, currentTabId: crawlerTabId });
+      break;
+    }
+    case 'DOWNLOAD_IMAGES': {
+      const res = await handleDownloadImagesCrawler(req.payload);
+      sendResponse(res);
+      break;
+    }
+  }
+}
+
+async function handleDownloadImagesCrawler(payload) {
+  try {
+    const { title, productId, urls } = payload;
+    if (!urls || !urls.length) return { success: false, error: 'no_urls' };
+
+    const safeName = (title || 'product')
+      .replace(/[<>:"/\\|?*]/g, '')
+      .replace(/\s+/g, '_')
+      .substring(0, 30)
+      .trim();
+
+    const folderName = `${safeName}_${productId}`;
+    let count = 0;
+
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        const u = urls[i];
+        const lastPart = (u.split('/').pop() || '').split('?')[0];
+        const name = lastPart.replace(/[<>:"/\\|?*]/g, '') || `image_${i + 1}`;
+        const ext = name.includes('.') ? '' : '.jpg';
+        await chrome.downloads.download({
+          url: u,
+          filename: `shopee-downloads/${folderName}/${name}${ext}`
+        });
+        count++;
+      } catch (e) {
+        console.error('Image download error:', e);
+      }
+    }
+    return { success: true, count };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
