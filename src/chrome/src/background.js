@@ -2243,7 +2243,7 @@ let mcpTools = [
   "press_keys", "click", "type_text", "get_selection", "read_page", "read_page_source",
   "extract_data", "get_interactive_elements", "navigate", "new_tab", "go_back",
   "go_forward", "screenshot", "get_window_info", "resize_window", "wait_for_element",
-  "wait_for_stable", "execute_js", "list_downloads", "download_files"
+  "wait_for_stable", "execute_js", "list_downloads", "download_files", "upload_file"
 ];
 let mcpLogs = [];
 
@@ -2513,6 +2513,61 @@ async function handleToolExecutionMCP(toolName, params = {}, tabId = null) {
         result = { success: true, downloadId };
         break;
       }
+      case "upload_file": {
+        if (!params.selector) {
+          result = { success: false, error: "Tham số 'selector' là bắt buộc." };
+          break;
+        }
+        if (!params.files || !params.files.length) {
+          result = { success: false, error: "Tham số 'files' (mảng đường dẫn file) là bắt buộc." };
+          break;
+        }
+        
+        result = await new Promise((resolve) => {
+          chrome.debugger.attach({ tabId: targetTabId }, "1.3", async () => {
+            if (chrome.runtime.lastError) {
+              return resolve({ success: false, error: chrome.runtime.lastError.message });
+            }
+            
+            // 1. DOM.getDocument to get root element nodeId
+            chrome.debugger.sendCommand({ tabId: targetTabId }, "DOM.getDocument", {}, (docRes) => {
+              if (chrome.runtime.lastError || !docRes || !docRes.root) {
+                chrome.debugger.detach({ tabId: targetTabId });
+                return resolve({ success: false, error: "Không thể lấy cấu trúc DOM trang." });
+              }
+              
+              const rootNodeId = docRes.root.nodeId;
+              
+              // 2. DOM.querySelector to get target element nodeId
+              chrome.debugger.sendCommand({ tabId: targetTabId }, "DOM.querySelector", {
+                nodeId: rootNodeId,
+                selector: params.selector
+              }, (queryRes) => {
+                if (chrome.runtime.lastError || !queryRes || !queryRes.nodeId) {
+                  chrome.debugger.detach({ tabId: targetTabId });
+                  return resolve({ success: false, error: `Không tìm thấy phần tử: ${params.selector}` });
+                }
+                
+                const elementNodeId = queryRes.nodeId;
+                
+                // 3. DOM.setFileInputFiles to attach local files
+                chrome.debugger.sendCommand({ tabId: targetTabId }, "DOM.setFileInputFiles", {
+                  nodeId: elementNodeId,
+                  files: Array.isArray(params.files) ? params.files : [params.files]
+                }, (setRes) => {
+                  const error = chrome.runtime.lastError;
+                  chrome.debugger.detach({ tabId: targetTabId });
+                  if (error) {
+                    return resolve({ success: false, error: error.message });
+                  }
+                  resolve({ success: true });
+                });
+              });
+            });
+          });
+        });
+        break;
+      }
     }
   } catch (err) {
     result = { success: false, error: `Lỗi thao tác trình duyệt: ${err.message}` };
@@ -2701,6 +2756,57 @@ async function detectCaptchaCrawler(tabId) {
   }
 }
 
+function extractProductMedia() {
+  const imgSet = new Set();
+  const urls = [];
+  const pushUrl = (u) => {
+    if (!u) return;
+    const clean = u.split('?')[0].split('@')[0];
+    if (!imgSet.has(clean)) {
+      imgSet.add(clean);
+      urls.push(clean);
+    }
+  };
+
+  const heroImg = document.querySelector('img[elementtiming="shopee:heroComponentPaint"]');
+  let container = heroImg ? heroImg.closest('.flex, .flex-column') : null;
+  if (!container) container = document.querySelector('.TMw1ot, .xxW0BG, .UdI7e2');
+  
+  const scanRoots = [];
+  if (container) scanRoots.push(container);
+  const thumbnailBox = document.querySelector('.airUhU') || document.querySelector('[data-sqe="image"]');
+  if (thumbnailBox && !scanRoots.includes(thumbnailBox)) scanRoots.push(thumbnailBox);
+  if (!scanRoots.length) scanRoots.push(document);
+
+  scanRoots.forEach(root => {
+    root.querySelectorAll('img').forEach(img => {
+      if (img.closest('#shopee-product-rating, [data-sqe="rating"], [data-sqe="review"], .product-ratings, .product-rating, .product-review')) return;
+      const src = img.currentSrc || img.src || img.getAttribute('data-src');
+      pushUrl(src);
+      
+      const srcset = img.getAttribute('srcset') || img.getAttribute('data-srcset');
+      if (srcset) {
+        const items = srcset.split(',').map(x => x.trim()).filter(Boolean);
+        if (items.length) {
+          const highestRes = items[items.length - 1].split(' ')[0];
+          pushUrl(highestRes);
+        }
+      }
+    });
+  });
+
+  const finalUrls = urls.filter(u => /img\.susercontent\.com\/file\//.test(u) || /cf\.shopee\.vn\/file\//.test(u));
+  const resultUrls = finalUrls.length ? finalUrls : urls;
+
+  const videoEl = document.querySelector('video');
+  const videoUrl = videoEl ? (videoEl.currentSrc || videoEl.src || videoEl.getAttribute('data-src') || '') : '';
+
+  return {
+    images: resultUrls,
+    video: videoUrl
+  };
+}
+
 async function processNextCrawler() {
   if (!crawlerIsRunning || crawlerIsPaused) return;
   if (crawlerIsProcessingNext) return;
@@ -2727,7 +2833,7 @@ async function processNextCrawler() {
     errorCount: q.errorCount
   });
 
-  let result = { url, Name: '', Price: '', Sold: '', Rating: '', Brand: '', Description: '', failed: false, errorType: null };
+  let result = { url, Name: '', Price: '', Sold: '', Rating: '', Brand: '', Description: '', Images: [], Video: '', failed: false, errorType: null };
   let captchaDetected = false;
   let tabId = crawlerTabId;
   let windowId = null;
@@ -2792,6 +2898,13 @@ async function processNextCrawler() {
     });
     const innerText = textData?.[0]?.result || '';
 
+    // Extract product media links
+    const mediaData = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: extractProductMedia
+    }).catch(() => null);
+    const media = mediaData?.[0]?.result || { images: [], video: "" };
+
     let base64Image = null;
     if (q.useVision) {
       base64Image = await captureScreenshotSafeCrawler(windowId, tabId, 50);
@@ -2818,6 +2931,8 @@ async function processNextCrawler() {
       Rating: aiData.rating || '',
       Brand: aiData.brand || '',
       Description: aiData.description || '',
+      Images: media.images || [],
+      Video: media.video || '',
       failed: false,
       errorType: null
     };

@@ -19,6 +19,9 @@ document.addEventListener('DOMContentLoaded', () => {
       tab.classList.add('active');
 
       const target = tab.dataset.tab;
+      // Lưu trạng thái tab đang chọn
+      chrome.storage.local.set({ sidebar_active_tab: target });
+
       if (target === 'chat') {
         chatContent.classList.remove('hidden');
         mcpContent.classList.add('hidden');
@@ -36,12 +39,52 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Khôi phục trạng thái tab đã chọn trước đó
+  chrome.storage.local.get(['sidebar_active_tab'], (res) => {
+    if (chrome.runtime.lastError) return;
+    const activeTab = res.sidebar_active_tab || 'chat';
+    const targetTabBtn = document.querySelector(`.sidebar-tab[data-tab="${activeTab}"]`);
+    if (targetTabBtn && !targetTabBtn.classList.contains('active')) {
+      targetTabBtn.click();
+    }
+  });
+
   // ======================== 2. MCP SERVER CONTROLS ========================
   const mcpStatusBadge = document.getElementById('mcpStatusBadge');
   const mcpStatusText = document.getElementById('mcpStatusText');
   const mcpReconnectBtn = document.getElementById('mcpReconnectBtn');
   const mcpLogList = document.getElementById('mcpLogList');
   const mcpToolList = document.getElementById('mcpToolList');
+
+  const mcpToolExplanations = {
+    'get_accessibility_tree': 'Đọc cấu trúc Accessibility Tree của trang để AI hiểu sơ đồ các phần tử và các thẻ hỗ trợ khả năng đọc/điều khiển.',
+    'click_ax': 'Click chuột vào một phần tử dựa trên thuộc tính Accessibility của nó (độ chính xác cao hơn so với CSS Selector thông thường).',
+    'type_ax': 'Nhập văn bản vào một ô nhập liệu dựa trên thuộc tính Accessibility của ô đó.',
+    'set_field': 'Điền nhanh giá trị cho một ô nhập liệu xác định bằng CSS Selector.',
+    'hover': 'Di chuyển con trỏ chuột ảo đến phần tử chỉ định để kích hoạt hiệu ứng hover (rê chuột).',
+    'scroll': 'Cuộn trang lên, xuống, sang trái hoặc sang phải theo khoảng cách hoặc đến phần tử chỉ định.',
+    'press_keys': 'Gửi chuỗi phím bấm từ bàn phím đến trang web (ví dụ: Enter, Tab, ArrowDown...).',
+    'click': 'Click chuột trái vào phần tử dựa trên CSS Selector.',
+    'type_text': 'Gõ văn bản trực tiếp vào phần tử dựa trên CSS Selector.',
+    'get_selection': 'Đọc đoạn văn bản hiện đang được bôi đen (lựa chọn) trên trang.',
+    'read_page': 'Đọc toàn bộ nội dung văn bản thuần (innerText) của trang web hiện tại.',
+    'read_page_source': 'Đọc mã nguồn HTML gốc của trang web hiện tại.',
+    'extract_data': 'Trích xuất dữ liệu có cấu trúc từ trang web bằng AI dựa trên prompt chỉ thị của bạn.',
+    'get_interactive_elements': 'Quét và lấy danh sách tất cả các phần tử có khả năng tương tác (nút bấm, liên kết, ô nhập liệu) trên trang.',
+    'navigate': 'Điều giúp tab hiện tại chuyển hướng đến một địa chỉ URL mới.',
+    'new_tab': 'Mở một tab trình duyệt mới với địa chỉ URL chỉ định.',
+    'go_back': 'Quay lại trang trước đó trong lịch sử duyệt web của tab.',
+    'go_forward': 'Đi tới trang tiếp theo trong lịch sử duyệt web của tab.',
+    'screenshot': 'Chụp ảnh màn hình trực quan của trang web hiện tại dưới dạng ảnh PNG.',
+    'get_window_info': 'Đọc thông tin kích thước và trạng thái của cửa sổ trình duyệt hiện tại.',
+    'resize_window': 'Thay đổi kích thước chiều rộng, chiều cao của cửa sổ trình duyệt.',
+    'wait_for_element': 'Tạm dừng và chờ cho đến khi phần tử khớp với CSS Selector xuất hiện trên trang.',
+    'wait_for_stable': 'Chờ cho trang web ổn định (không còn các yêu cầu mạng hoặc chuyển động DOM đang chạy).',
+    'execute_js': 'Thực thi trực tiếp một đoạn mã JavaScript tuỳ chỉnh trên trang web và trả về kết quả.',
+    'list_downloads': 'Liệt kê danh sách các tệp tin đã tải xuống từ trình duyệt.',
+    'download_files': 'Tải tệp tin từ một đường dẫn URL chỉ định về máy local của bạn.',
+    'upload_file': 'Tải tệp tin local lên trang web thông qua API debugger (CDP setFileInputFiles) giúp vượt rào bảo mật sandbox.'
+  };
 
   function updateMcpStatus() {
     chrome.runtime.sendMessage({ target: 'mcp', action: 'GET_STATUS' }, (res) => {
@@ -63,8 +106,22 @@ document.addEventListener('DOMContentLoaded', () => {
       // Render tools list
       if (res.tools && res.tools.length) {
         mcpToolList.innerHTML = res.tools
-          .map(t => `<div class="mcp-tool-item" title="${t}">${t}</div>`)
+          .map(t => `<div class="mcp-tool-item" style="cursor: pointer;" data-tool="${t}" title="Click để xem ý nghĩa">${t}</div>`)
           .join('');
+
+        // Lắng nghe click giải nghĩa
+        mcpToolList.querySelectorAll('.mcp-tool-item').forEach(item => {
+          item.addEventListener('click', () => {
+            const toolName = item.dataset.tool;
+            const explanation = mcpToolExplanations[toolName] || 'Không có mô tả chi tiết cho công cụ này.';
+            document.getElementById('mcp-detail-title').textContent = `🛠️ ${toolName}`;
+            document.getElementById('mcp-detail-desc').textContent = explanation;
+
+            // Highlight tool đang xem
+            mcpToolList.querySelectorAll('.mcp-tool-item').forEach(t => t.style.borderColor = '');
+            item.style.borderColor = 'var(--accent-color, #6c63ff)';
+          });
+        });
       } else {
         mcpToolList.innerHTML = `<div style="grid-column: span 2; font-size:11px; color:#7e7e8a;">Không có tool nào.</div>`;
       }
