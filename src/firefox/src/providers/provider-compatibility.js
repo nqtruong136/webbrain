@@ -48,14 +48,21 @@ export function isOfficialOpenAIConfig(config = {}) {
   if (providerName && providerName !== 'openai') return false;
   try {
     const url = new URL(config.baseUrl || 'https://api.openai.com/v1');
-    return url.protocol === 'https:' && url.hostname.toLowerCase() === 'api.openai.com';
+    return url.protocol === 'https:'
+      && url.hostname.toLowerCase() === 'api.openai.com'
+      && url.pathname.replace(/\/+$/, '') === '/v1';
   } catch {
     return false;
   }
 }
 
 export function shouldUseOpenAIResponsesApi(config = {}) {
-  return isOfficialOpenAIConfig(config) && /^gpt-5\.6(?:-|$)/i.test(String(config.model || '').trim());
+  if (!isOfficialOpenAIConfig(config)) return false;
+  // Match the official GPT-5.6 family only (base alias + Sol/Terra/Luna, with
+  // optional dated suffixes). Proxies and non-OpenAI providers stay on Chat
+  // Completions even when the model id contains "gpt-5.6".
+  const model = String(config.model || '').trim().toLowerCase();
+  return /^gpt-5\.6(?:$|-(?:sol|terra|luna)(?:$|-))/.test(model);
 }
 
 export function detectedCompatibilityPreset(config = {}) {
