@@ -24870,12 +24870,15 @@ test('settings exposes custom skills tab and packaged skills resource directory'
   ]);
 
   const privacyPolicy = fs.readFileSync(path.join(ROOT, 'web/privacy.html'), 'utf8');
+  const privacyDataFlow = fs.readFileSync(path.join(ROOT, 'docs/privacy-and-data-flow.md'), 'utf8');
   assert.match(privacyPolicy, /Last updated: July 16, 2026/, 'privacy policy date should cover legacy default-on Cloud capture');
   assert.match(privacyPolicy, /Local models and bring-your-own API:[\s\S]*never collected by WebBrain/i, 'privacy TL;DR should exclude local and BYO requests');
   assert.match(privacyPolicy, /WebBrain Cloud:[\s\S]*evaluation, improvement, fine-tuning, and training/i, 'privacy TL;DR should disclose Cloud improvement use');
   assert.match(privacyPolicy, /Help Improve WebBrain[\s\S]*on by default/i, 'privacy policy should disclose the default-on setting');
   assert.match(privacyPolicy, /Settings → General/, 'privacy policy should identify the opt-out path');
   assert.doesNotMatch(privacyPolicy, /Help Improve WebBrain[^<\n]*Settings → General → Advanced|Settings → General → Advanced[^<\n]*Help Improve WebBrain/, 'privacy policy should not use the old Help Improve opt-out path');
+  assert.match(privacyDataFlow, /Help Improve WebBrain is available under Settings -> General and is/, 'data-flow documentation should identify the visible Help Improve location');
+  assert.doesNotMatch(privacyDataFlow, /Settings -> General -> Advanced/, 'data-flow documentation should not use the old Help Improve opt-out path');
   assert.match(privacyPolicy, /Older WebBrain Cloud clients[\s\S]*default-on setting[\s\S]*install the latest WebBrain client/i, 'privacy policy should disclose legacy default-on capture and the opt-out upgrade path');
   assert.match(privacyPolicy, /next new conversation[\s\S]*cannot make the current conversation eligible again/i, 'privacy policy should explain permanent conversation tainting');
   assert.match(privacyPolicy, /Screenshots and uploaded images may be processed for inference[\s\S]*strips image URLs, base64 media, and image bytes/i, 'privacy policy should distinguish inference processing from improvement storage');
