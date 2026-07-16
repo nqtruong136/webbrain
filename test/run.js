@@ -479,6 +479,12 @@ const { AzureOpenAIProvider: AzureOpenAIProviderCh } = await import(
 const { AzureOpenAIProvider: AzureOpenAIProviderFx } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/providers/azure-openai.js').replace(/\\/g, '/')
 );
+const ProviderCompatibilityCh = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/providers/provider-compatibility.js').replace(/\\/g, '/')
+);
+const ProviderCompatibilityFx = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/providers/provider-compatibility.js').replace(/\\/g, '/')
+);
 const { AwsBedrockProvider: AwsBedrockProviderCh } = await import(
   'file://' + path.join(ROOT, 'src/chrome/src/providers/aws-bedrock.js').replace(/\\/g, '/')
 );
@@ -10366,6 +10372,44 @@ test('settings exposes a Cloudflare account ID field before the base URL templat
   }
 });
 
+test('settings exposes collapsed compatibility controls only for compatible provider types', () => {
+  for (const [label, settingsRel, htmlRel, PM] of [
+    ['chrome', 'src/chrome/src/ui/settings.js', 'src/chrome/src/ui/settings.html', ProviderManagerCh],
+    ['firefox', 'src/firefox/src/ui/settings.js', 'src/firefox/src/ui/settings.html', ProviderManagerFx],
+  ]) {
+    const settings = fs.readFileSync(path.join(ROOT, settingsRel), 'utf8');
+    const html = fs.readFileSync(path.join(ROOT, htmlRel), 'utf8');
+    assert.match(
+      settings,
+      /id !== 'webbrain_cloud' && \['openai', 'llamacpp', 'azure_openai'\]\.includes\(config\.type\)/,
+      `${label}: compatibility controls should exclude Cloud, Anthropic, and Bedrock`,
+    );
+    for (const text of [
+      'Advanced model compatibility',
+      'Compatibility preset',
+      'Reasoning',
+      'System prompt role',
+      'Token limit field',
+      'Custom request body (JSON)',
+      'Reset to automatic',
+    ]) {
+      assert.match(settings, new RegExp(text.replace(/[()]/g, '\\$&')), `${label}: missing ${text}`);
+    }
+    assert.match(settings, /data-key="compat\.reasoningEffort"/, `${label}: reasoning setting should persist under compat`);
+    assert.match(settings, /data-key="extraBody" data-type="json"/, `${label}: custom body textarea should be typed as JSON`);
+    assert.match(settings, /parseProviderExtraBodyJson\(input\.value\)/, `${label}: Save and Test should reject invalid JSON before updating the provider`);
+    assert.match(settings, /textarea\[data-provider/, `${label}: provider save should include the JSON textarea`);
+    assert.match(html, /\.provider-compatibility \{/, `${label}: compatibility disclosure styling missing`);
+    assert.match(html, /textarea\[aria-invalid="true"\]/, `${label}: invalid JSON needs a visible error state`);
+
+    const defaults = new PM()._defaultConfigs();
+    assert.equal(defaults.openai.model, 'gpt-5.6-terra', `${label}: Terra should be the new-install OpenAI default`);
+    for (const model of ['gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-5.6']) {
+      assert.match(settings, new RegExp(`['"]${model.replace('.', '\\.')}['"]`), `${label}: model picker missing ${model}`);
+    }
+  }
+});
+
 test('settings scopes WebBrain Cloud billing button to provider card only', () => {
   for (const [label, settingsRel, htmlRel] of [
     ['chrome', 'src/chrome/src/ui/settings.js', 'src/chrome/src/ui/settings.html'],
@@ -14411,6 +14455,7 @@ test('inferContextWindow: model-aware cloud/router defaults and local 16k fallba
     for (const providerName of ['lmstudio', 'jan', 'vllm', 'sglang', 'localai']) {
       assert.equal(infer({ category: 'local', providerName, model: 'qwen3.7-plus' }), 16384);
     }
+    assert.equal(infer({ category: 'cloud', providerName: 'openai', model: 'gpt-5.6-terra' }), 1050000);
     assert.equal(infer({ category: 'cloud', providerName: 'openai', model: 'gpt-5.5-pro' }), 1050000);
     assert.equal(infer({ category: 'cloud', providerName: 'openai', model: 'gpt-5.5' }), 400000);
     assert.equal(infer({ category: 'cloud', providerName: 'anthropic', model: 'claude-opus-4-8' }), 1000000);
@@ -16106,6 +16151,228 @@ test('OpenAI-compatible local providers always use legacy request token fields',
       assert.equal(body.max_tokens, 123, `${providerName} should use max_tokens`);
       assert.equal(body.max_completion_tokens, undefined, `${providerName} should not use max_completion_tokens`);
     }
+  }
+});
+
+test('provider compatibility defaults preserve legacy chat request bodies', () => {
+  const messages = [{ role: 'system', content: 'rules' }, { role: 'user', content: 'hello' }];
+  for (const Provider of [OpenAIProviderCh, OpenAIProviderFx]) {
+    const provider = new Provider({
+      category: 'cloud',
+      providerName: 'custom',
+      baseUrl: 'https://example.test/v1',
+      model: 'gpt-4o',
+    });
+    assert.deepEqual(provider._buildChatCompletionsBody(messages, { temperature: 0.2, maxTokens: 123 }, false), {
+      model: 'gpt-4o',
+      messages,
+      stream: false,
+      temperature: 0.2,
+      max_tokens: 123,
+    });
+    assert.deepEqual(provider._buildChatCompletionsBody(messages, { temperature: 0.2, maxTokens: 123 }, true), {
+      model: 'gpt-4o',
+      messages,
+      stream: true,
+      temperature: 0.2,
+      max_tokens: 123,
+    });
+  }
+  for (const Provider of [LlamaCppProviderCh, LlamaCppProviderFx]) {
+    const provider = new Provider({ baseUrl: 'http://localhost:8080' });
+    assert.deepEqual(provider._buildRequestBody(messages, { temperature: 0.2, maxTokens: 123 }, false), {
+      messages,
+      temperature: 0.2,
+      stream: false,
+      max_tokens: 123,
+    });
+  }
+  for (const Provider of [AzureOpenAIProviderCh, AzureOpenAIProviderFx]) {
+    const provider = new Provider({
+      baseUrl: 'https://x.openai.azure.com',
+      model: 'deployment',
+      apiVersion: '2024-10-21',
+      supportsStreamUsageOptions: false,
+    });
+    assert.deepEqual(provider._buildRequestBody(messages, { temperature: 0.2, maxTokens: 123 }, false), {
+      messages,
+      stream: false,
+      temperature: 0.2,
+      max_tokens: 123,
+    });
+  }
+});
+
+test('provider compatibility maps reasoning, roles, token fields, and per-call overrides safely', () => {
+  const originalMessages = [{ role: 'system', content: 'rules' }, { role: 'user', content: 'hello' }];
+  for (const compat of [ProviderCompatibilityCh, ProviderCompatibilityFx]) {
+    const qwenConfig = {
+      providerName: 'vllm',
+      model: 'Qwen/Qwen3.6-27B',
+      compat: { reasoningEffort: 'high', systemPromptRole: 'developer', maxTokensField: 'max_completion_tokens' },
+      extraBody: { chat_template_kwargs: { custom_flag: true }, repetition_penalty: 1.05 },
+    };
+    const mapped = compat.mapProviderMessages(originalMessages, qwenConfig);
+    assert.equal(mapped[0].role, 'developer');
+    assert.equal(originalMessages[0].role, 'system', 'role mapping must not mutate stored history');
+
+    const body = { messages: mapped };
+    compat.addConfiguredMaxTokens(body, 99, qwenConfig, 'max_tokens');
+    const merged = compat.mergeProviderRequestBody(body, qwenConfig, {
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    assert.equal(merged.max_completion_tokens, 99);
+    assert.equal(merged.max_tokens, undefined);
+    assert.deepEqual(merged.chat_template_kwargs, { custom_flag: true, enable_thinking: false });
+    assert.equal(merged.repetition_penalty, 1.05);
+    assert.equal(qwenConfig.extraBody.chat_template_kwargs.custom_flag, true, 'request merging must not mutate saved config');
+
+    assert.deepEqual(compat.compatibilityRequestBody({
+      providerName: 'deepseek',
+      model: 'deepseek-v4',
+      compat: { reasoningEffort: 'off' },
+    }), { chat_template_kwargs: { thinking: false } });
+    assert.deepEqual(compat.compatibilityRequestBody({
+      providerName: 'openrouter',
+      compat: { reasoningEffort: 'medium' },
+    }), { reasoning: { effort: 'medium' } });
+    assert.deepEqual(compat.compatibilityRequestBody({
+      providerName: 'custom',
+      baseUrl: 'https://proxy.example/v1',
+      model: 'gpt-5.6-terra',
+      compat: { preset: 'openai', reasoningEffort: 'off' },
+    }), { reasoning_effort: 'none' });
+
+    assert.throws(
+      () => compat.parseProviderExtraBodyJson('{"model":"blocked"}'),
+      /reserved fields: model/,
+    );
+    assert.throws(() => compat.parseProviderExtraBodyJson('[]'), /must be a JSON object/);
+    assert.throws(() => compat.parseProviderExtraBodyJson('{bad'), /not valid JSON/);
+    assert.deepEqual(
+      compat.mergeProviderRequestBody({ model: 'safe', stream: false }, {
+        extraBody: { model: 'override', stream: true, temperature: 0.4 },
+      }),
+      { model: 'safe', stream: false, temperature: 0.4 },
+    );
+  }
+});
+
+test('official GPT-5.6 uses Responses while older and custom OpenAI-compatible endpoints stay on Chat Completions', () => {
+  const tools = [{
+    type: 'function',
+    function: {
+      name: 'click',
+      description: 'Click something',
+      parameters: { type: 'object', properties: { ref: { type: 'string' } }, required: ['ref'] },
+    },
+  }];
+  const messages = [
+    { role: 'system', content: 'rules' },
+    { role: 'user', content: 'go' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'click', arguments: '{"ref":"r1"}' } }] },
+    { role: 'tool', tool_call_id: 'call_1', content: '{"ok":true}' },
+  ];
+  for (const Provider of [OpenAIProviderCh, OpenAIProviderFx]) {
+    const provider = new Provider({
+      category: 'cloud',
+      providerName: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-5.6-terra',
+      compat: { reasoningEffort: 'high', systemPromptRole: 'developer' },
+    });
+    assert.equal(provider._usesResponsesApi(), true);
+    const body = provider._buildResponsesBody(messages, { tools, maxTokens: 321 }, false);
+    assert.equal(body.max_output_tokens, 321);
+    assert.equal(body.max_completion_tokens, undefined);
+    assert.equal(body.messages, undefined);
+    assert.deepEqual(body.reasoning, { effort: 'high' });
+    assert.equal(body.input[0].role, 'developer');
+    assert.deepEqual(body.input[2], {
+      type: 'function_call',
+      call_id: 'call_1',
+      name: 'click',
+      arguments: '{"ref":"r1"}',
+    });
+    assert.deepEqual(body.input[3], {
+      type: 'function_call_output',
+      call_id: 'call_1',
+      output: '{"ok":true}',
+    });
+    assert.deepEqual(body.tools[0], {
+      type: 'function',
+      name: 'click',
+      description: 'Click something',
+      parameters: tools[0].function.parameters,
+      strict: false,
+    });
+
+    const parsed = provider._parseResponsesData({
+      output: [
+        { type: 'reasoning', summary: [{ type: 'summary_text', text: 'Checked the page.' }] },
+        { type: 'message', content: [{ type: 'output_text', text: 'Done' }] },
+        { type: 'function_call', call_id: 'call_2', name: 'click', arguments: '{"ref":"r2"}' },
+      ],
+      usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+    });
+    assert.equal(parsed.content, 'Done');
+    assert.equal(parsed.reasoningContent, 'Checked the page.');
+    assert.equal(parsed.toolCalls[0].id, 'call_2');
+    assert.equal(parsed.usage.prompt_tokens, 10);
+    assert.equal(parsed.usage.completion_tokens, 4);
+
+    assert.equal(new Provider({
+      providerName: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-5.5',
+    })._usesResponsesApi(), false);
+    assert.equal(new Provider({
+      providerName: 'openai',
+      baseUrl: 'https://proxy.example/v1',
+      model: 'gpt-5.6-terra',
+    })._usesResponsesApi(), false);
+  }
+});
+
+test('official GPT-5.6 streaming uses Responses events for text, tools, and usage', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const Provider of [OpenAIProviderCh, OpenAIProviderFx]) {
+      let capturedUrl = '';
+      let capturedBody = null;
+      globalThis.fetch = async (url, options = {}) => {
+        capturedUrl = String(url);
+        capturedBody = JSON.parse(options.body);
+        const events = [
+          { type: 'response.output_text.delta', delta: 'Hello' },
+          { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', call_id: 'call_1', name: 'click', arguments: '' } },
+          { type: 'response.function_call_arguments.delta', output_index: 1, delta: '{"ref":"r1"}' },
+          { type: 'response.completed', response: { usage: { input_tokens: 8, output_tokens: 3, total_tokens: 11 } } },
+        ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
+        return new Response(events, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      };
+      const provider = new Provider({
+        category: 'cloud',
+        providerName: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-5.6-terra',
+        compat: { reasoningEffort: 'low' },
+      });
+      const chunks = [];
+      for await (const chunk of provider.chatStream([{ role: 'user', content: 'hello' }], { maxTokens: 10 })) {
+        chunks.push(chunk);
+      }
+      assert.equal(capturedUrl, 'https://api.openai.com/v1/responses');
+      assert.equal(capturedBody.stream, true);
+      assert.deepEqual(capturedBody.reasoning, { effort: 'low' });
+      assert.equal(chunks[0].content, 'Hello');
+      assert.equal(chunks[1].content[0].id, 'call_1');
+      assert.equal(chunks[2].content[0].function.arguments, '{"ref":"r1"}');
+      assert.equal(chunks[3].usage.prompt_tokens, 8);
+      assert.equal(chunks.at(-1).type, 'done');
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 

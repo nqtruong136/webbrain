@@ -269,7 +269,7 @@ export class ProviderManager {
         label: 'OpenAI',
         providerName: 'openai',
         baseUrl: 'https://api.openai.com/v1',
-        model: 'gpt-5.5',
+        model: 'gpt-5.6-terra',
         inputCostPerMillionUsd: 5,
         outputCostPerMillionUsd: 22.5,
         supportsStreamUsageOptions: true,

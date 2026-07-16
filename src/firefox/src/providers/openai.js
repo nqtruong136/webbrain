@@ -1,5 +1,6 @@
 import { BaseLLMProvider } from './base.js';
 import { fetchWithTimeout } from './fetch-timeout.js';
+import { shouldUseOpenAIResponsesApi } from './provider-compatibility.js';
 
 /**
  * Provider for OpenAI-compatible APIs (ChatGPT, OpenRouter, any OpenAI-compatible endpoint).
@@ -73,12 +74,8 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
   }
 
   _addMaxTokens(body, options) {
-    const max = options.maxTokens ?? 4096;
-    if (this._isNewOpenAIContract()) {
-      body.max_completion_tokens = max;
-    } else {
-      body.max_tokens = max;
-    }
+    const fallback = this._isNewOpenAIContract() ? 'max_completion_tokens' : 'max_tokens';
+    this._addConfiguredMaxTokens(body, options, fallback);
   }
 
   _addTemperature(body, options) {
@@ -166,26 +163,160 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     }
   }
 
-  async chat(messages, options = {}) {
-    const body = {
+  _usesResponsesApi() {
+    return shouldUseOpenAIResponsesApi(this.config);
+  }
+
+  _buildChatCompletionsBody(messages, options = {}, stream = false) {
+    let body = {
       model: this.model,
-      messages,
-      stream: false,
+      messages: this._mapMessages(messages),
+      stream,
     };
     this._addTemperature(body, options);
     this._addMaxTokens(body, options);
-
     if (this._shouldSendTools(messages, options)) {
       body.tools = options.tools;
       body.tool_choice = options.toolChoice || 'auto';
     }
-
-    if (options.extraBody && typeof options.extraBody === 'object') {
-      Object.assign(body, options.extraBody);
-    }
+    body = this._mergeConfiguredRequestBody(body, options);
     this._addWebBrainCloudContext(body, options);
+    if (stream) this._addStreamUsageOptions(body);
+    return body;
+  }
 
-    const url = `${this.baseUrl}/chat/completions`;
+  _responsesContent(content, role) {
+    if (!Array.isArray(content)) return content;
+    return content.map((block) => {
+      if (!block || typeof block !== 'object') return block;
+      if (block.type === 'text') {
+        return { type: role === 'assistant' ? 'output_text' : 'input_text', text: block.text || '' };
+      }
+      if (block.type === 'image_url' || block.type === 'image') {
+        const imageUrl = typeof block.image_url === 'string' ? block.image_url : block.image_url?.url;
+        return {
+          type: 'input_image',
+          image_url: imageUrl || block.source?.data || '',
+          ...(block.image_url?.detail ? { detail: block.image_url.detail } : {}),
+        };
+      }
+      return block;
+    });
+  }
+
+  _responsesInput(messages) {
+    const input = [];
+    for (const message of this._mapMessages(messages)) {
+      if (!message || typeof message !== 'object') continue;
+      if (message.role === 'tool') {
+        const output = typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content ?? '');
+        input.push({ type: 'function_call_output', call_id: message.tool_call_id, output });
+        continue;
+      }
+      if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
+        if (message.content) {
+          input.push({ role: 'assistant', content: this._responsesContent(message.content, 'assistant') });
+        }
+        for (const toolCall of message.tool_calls) {
+          input.push({
+            type: 'function_call',
+            call_id: toolCall.id,
+            name: toolCall.function?.name || '',
+            arguments: toolCall.function?.arguments || '{}',
+          });
+        }
+        continue;
+      }
+      input.push({
+        role: message.role,
+        content: this._responsesContent(message.content, message.role),
+      });
+    }
+    return input;
+  }
+
+  _responsesTools(tools) {
+    return (tools || []).map((tool) => {
+      if (tool?.type !== 'function') return tool;
+      const fn = tool.function || {};
+      return {
+        type: 'function',
+        name: fn.name || '',
+        description: fn.description || '',
+        parameters: fn.parameters || { type: 'object', properties: {} },
+        strict: fn.strict === true,
+      };
+    });
+  }
+
+  _buildResponsesBody(messages, options = {}, stream = false) {
+    let body = {
+      model: this.model,
+      input: this._responsesInput(messages),
+      stream,
+      store: false,
+      max_output_tokens: options.maxTokens ?? 4096,
+    };
+    if (this._shouldSendTools(messages, options)) {
+      body.tools = this._responsesTools(options.tools);
+      body.tool_choice = options.toolChoice || 'auto';
+    }
+    body = this._mergeConfiguredRequestBody(body, options);
+    if (typeof body.reasoning_effort === 'string') {
+      body.reasoning = { ...(body.reasoning || {}), effort: body.reasoning_effort };
+      delete body.reasoning_effort;
+    }
+    return body;
+  }
+
+  _normalizeResponsesUsage(usage) {
+    if (!usage || typeof usage !== 'object') return null;
+    return {
+      ...usage,
+      prompt_tokens: usage.prompt_tokens ?? usage.input_tokens ?? 0,
+      completion_tokens: usage.completion_tokens ?? usage.output_tokens ?? 0,
+      total_tokens: usage.total_tokens ?? ((usage.input_tokens || 0) + (usage.output_tokens || 0)),
+    };
+  }
+
+  _parseResponsesData(data) {
+    const output = Array.isArray(data?.output) ? data.output : [];
+    const text = [];
+    const reasoning = [];
+    const toolCalls = [];
+    for (const item of output) {
+      if (item?.type === 'message' && Array.isArray(item.content)) {
+        for (const block of item.content) {
+          if (block?.type === 'output_text' && block.text) text.push(block.text);
+          if (block?.type === 'refusal' && block.refusal) text.push(block.refusal);
+        }
+      } else if (item?.type === 'function_call') {
+        toolCalls.push({
+          id: item.call_id || item.id || '',
+          type: 'function',
+          function: { name: item.name || '', arguments: item.arguments || '{}' },
+        });
+      } else if (item?.type === 'reasoning' && Array.isArray(item.summary)) {
+        for (const part of item.summary) if (part?.text) reasoning.push(part.text);
+      }
+    }
+    return {
+      content: text.join(''),
+      reasoningContent: reasoning.join('\n'),
+      toolCalls: toolCalls.length ? toolCalls : null,
+      usage: this._normalizeResponsesUsage(data?.usage),
+      raw: data,
+    };
+  }
+
+  async chat(messages, options = {}) {
+    const useResponses = this._usesResponsesApi();
+    const body = useResponses
+      ? this._buildResponsesBody(messages, options, false)
+      : this._buildChatCompletionsBody(messages, options, false);
+    const url = `${this.baseUrl}/${useResponses ? 'responses' : 'chat/completions'}`;
     let res;
     try {
       res = await fetchWithTimeout(url, {
@@ -207,6 +338,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     try { data = await res.json(); } catch {
       throw new Error(`${this.name} returned invalid JSON in chat response.`);
     }
+    if (useResponses) return this._parseResponsesData(data);
     const choice = data.choices?.[0];
     const message = choice?.message;
 
@@ -220,26 +352,11 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
   }
 
   async *chatStream(messages, options = {}) {
-    const body = {
-      model: this.model,
-      messages,
-      stream: true,
-    };
-    this._addTemperature(body, options);
-    this._addMaxTokens(body, options);
-
-    if (this._shouldSendTools(messages, options)) {
-      body.tools = options.tools;
-      body.tool_choice = options.toolChoice || 'auto';
-    }
-
-    if (options.extraBody && typeof options.extraBody === 'object') {
-      Object.assign(body, options.extraBody);
-    }
-    this._addWebBrainCloudContext(body, options);
-    this._addStreamUsageOptions(body);
-
-    const streamUrl = `${this.baseUrl}/chat/completions`;
+    const useResponses = this._usesResponsesApi();
+    const body = useResponses
+      ? this._buildResponsesBody(messages, options, true)
+      : this._buildChatCompletionsBody(messages, options, true);
+    const streamUrl = `${this.baseUrl}/${useResponses ? 'responses' : 'chat/completions'}`;
     let res;
     try {
       res = await fetchWithTimeout(streamUrl, {
@@ -278,17 +395,44 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
         }
         try {
           const json = JSON.parse(payload);
-          if (json.usage) {
-            yield { type: 'usage', usage: json.usage };
-          }
-          const delta = json.choices?.[0]?.delta;
-          if (delta?.content) {
-            yield { type: 'text', content: delta.content };
-          }
-          if (delta?.tool_calls) {
-            yield { type: 'tool_call', content: delta.tool_calls };
+          if (useResponses) {
+            if (json.type === 'response.output_text.delta' && json.delta) {
+              yield { type: 'text', content: json.delta };
+            } else if (json.type === 'response.output_item.added' && json.item?.type === 'function_call') {
+              yield {
+                type: 'tool_call',
+                content: [{
+                  index: json.output_index ?? 0,
+                  id: json.item.call_id || json.item.id || '',
+                  function: { name: json.item.name || '', arguments: json.item.arguments || '' },
+                }],
+              };
+            } else if (json.type === 'response.function_call_arguments.delta' && json.delta) {
+              yield {
+                type: 'tool_call',
+                content: [{
+                  index: json.output_index ?? 0,
+                  function: { arguments: json.delta },
+                }],
+              };
+            } else if (json.type === 'response.completed') {
+              const usage = this._normalizeResponsesUsage(json.response?.usage);
+              if (usage) yield { type: 'usage', usage };
+              yield { type: 'done', content: '' };
+              return;
+            } else if (json.type === 'response.failed' || json.type === 'error') {
+              const streamError = new Error(json.response?.error?.message || json.error?.message || json.message || 'Responses API stream failed.');
+              streamError.name = 'ResponsesStreamError';
+              throw streamError;
+            }
+          } else {
+            if (json.usage) yield { type: 'usage', usage: json.usage };
+            const delta = json.choices?.[0]?.delta;
+            if (delta?.content) yield { type: 'text', content: delta.content };
+            if (delta?.tool_calls) yield { type: 'tool_call', content: delta.tool_calls };
           }
         } catch (e) {
+          if (e?.name === 'ResponsesStreamError') throw e;
           console.warn(`[${this.name}] malformed SSE chunk skipped:`, payload?.slice(0, 120), e?.message);
         }
       }
