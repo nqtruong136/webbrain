@@ -16004,6 +16004,8 @@ test('GPT-5.6 Responses request preserves reasoning and converts messages and to
     assert.equal(body.store, false);
     assert.deepEqual(body.include, ['reasoning.encrypted_content']);
     assert.equal(body.max_output_tokens, 1234);
+    assert.equal(provider._responsesBody([], { maxTokens: 5 }, false).max_output_tokens, 16);
+    assert.equal(provider._responsesBody([], { maxTokens: 16 }, false).max_output_tokens, 16);
     assert.deepEqual(body.reasoning, { effort: 'medium' });
     assert.equal(body.messages, undefined);
     assert.equal(body.max_completion_tokens, undefined);
@@ -16030,6 +16032,14 @@ test('GPT-5.6 Responses request preserves reasoning and converts messages and to
 
     const disabled = provider._responsesBody([], { extraBody: { reasoning_effort: 'none' } }, false);
     assert.deepEqual(disabled.reasoning, { effort: 'none' }, 'an explicit none remains an opt-out, not the default');
+
+    const compatibleProviderBody = {};
+    new Provider({
+      providerName: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'openai/gpt-5.6-terra',
+    })._addMaxTokens(compatibleProviderBody, { maxTokens: 5 });
+    assert.equal(compatibleProviderBody.max_tokens, 5, 'compatible providers should keep their requested token cap');
   }
 });
 

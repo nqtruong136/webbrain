@@ -1,6 +1,8 @@
 import { BaseLLMProvider } from './base.js';
 import { fetchWithFallback } from './fetch-with-fallback.js';
 
+const OPENAI_RESPONSES_MIN_MAX_OUTPUT_TOKENS = 16;
+
 /**
  * Provider for OpenAI-compatible APIs (ChatGPT, OpenRouter, any OpenAI-compatible endpoint).
  */
@@ -310,6 +312,12 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     return name ? { type: 'function', name } : 'auto';
   }
 
+  _responsesMaxOutputTokens(options) {
+    const max = Number(options.maxTokens ?? 4096);
+    if (!Number.isFinite(max)) return 4096;
+    return Math.max(OPENAI_RESPONSES_MIN_MAX_OUTPUT_TOKENS, Math.floor(max));
+  }
+
   _responsesBody(messages, options, stream) {
     const body = {
       model: this.model,
@@ -317,7 +325,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
       stream,
       store: false,
       include: ['reasoning.encrypted_content'],
-      max_output_tokens: options.maxTokens ?? 4096,
+      max_output_tokens: this._responsesMaxOutputTokens(options),
       // Keep reasoning enabled. `none` would recreate the workaround the
       // Responses migration is specifically intended to avoid.
       reasoning: {
