@@ -1586,7 +1586,7 @@ async function handleMessage(msg, sender) {
       });
     }
     case 'stop_tab_recording':
-      return await stopTabRecording();
+      return await stopTabRecording({ expectedRecordingId: msg.expectedRecordingId || null });
     case 'recording_capture_ended':
       return await stopTabRecording({ reason: 'capture_ended' });
     case 'get_recording_state':

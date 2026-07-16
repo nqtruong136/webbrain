@@ -576,6 +576,74 @@ function buildSlashCommandDetailHtml(command) {
   return lines.join('<br>');
 }
 
+// Hidden run-capture suffixes. These deliberately stay out of SLASH_COMMANDS,
+// autocomplete, and /help: they modify a normal prompt instead of acting as
+// standalone commands. Examples:
+//   Update the checkout form /record
+//   Test the menu /screenshot --save-as menu-test.png
+function parseTrailingRunCaptureDirective(value) {
+  const text = String(value || '').trim();
+  const match = /(?:^|[ \t\r\n])(\/record|\/screenshot)(?:[ \t]+(--save-as)(?:[ \t]+([^\r\n]+))?)?[ \t]*$/i.exec(text);
+  if (!match) return null;
+
+  const prompt = text.slice(0, match.index).trimEnd();
+  // Preserve the existing standalone /record and /screenshot behavior.
+  if (!prompt) return null;
+
+  const kind = match[1].slice(1).toLowerCase();
+  if (!match[2]) return { kind, prompt, saveAs: null };
+
+  const rawSaveAs = String(match[3] || '').trim();
+  if (!rawSaveAs) return { kind, prompt, saveAs: null, error: 'missing-save-as' };
+
+  const quote = rawSaveAs[0];
+  let saveAs = rawSaveAs;
+  if (quote === '"' || quote === "'") {
+    if (rawSaveAs.length < 2 || rawSaveAs.at(-1) !== quote) {
+      return { kind, prompt, saveAs: null, error: 'invalid-save-as' };
+    }
+    saveAs = rawSaveAs.slice(1, -1).trim();
+  }
+  if (!saveAs) return { kind, prompt, saveAs: null, error: 'missing-save-as' };
+  return { kind, prompt, saveAs };
+}
+
+function trailingRunCaptureUsage(kind) {
+  return `/${kind === 'record' ? 'record' : 'screenshot'} [--save-as <filename>]`;
+}
+
+function sanitizeRunCaptureSaveAs(value) {
+  const filename = String(value || '')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .split(/[\\/]/)
+    .pop()
+    .trim()
+    .replace(/[<>:"|?*]/g, '-')
+    .replace(/[. ]+$/g, '');
+  if (!filename || filename === '.' || filename === '..') return '';
+  return filename.slice(0, 180);
+}
+
+function runCaptureTimestamp(date = new Date()) {
+  return date.toISOString().replace(/[:.]/g, '-').replace(/T/, '_').slice(0, 19);
+}
+
+function buildRunScreenshotFilenames(saveAs, date = new Date()) {
+  const requested = sanitizeRunCaptureSaveAs(saveAs);
+  const stem = (requested.replace(/\.png$/i, '') || `webbrain-run-${runCaptureTimestamp(date)}`).slice(0, 170);
+  return {
+    before: `${stem}-before.png`,
+    after: `${stem}-after.png`,
+  };
+}
+
+function buildRunRecordingFilename(saveAs) {
+  const requested = sanitizeRunCaptureSaveAs(saveAs);
+  if (!requested) return null;
+  const stem = requested.replace(/\.webm$/i, '').replace(/[. ]+$/g, '') || 'webbrain-recording';
+  return `${stem.slice(0, 175)}.webm`;
+}
+
 function showSlashInvocationError(invocation) {
   if (invocation?.error === 'unknown-command') {
     showComposerToast(t('sp.slash.unknown_command', { command: invocation.commandToken }), { duration: 5000 });
@@ -4175,6 +4243,60 @@ function modeForMessageText(text) {
   return agentMode;
 }
 
+async function captureAndSaveRunScreenshot(tabId, filename) {
+  let tab = tabId == null ? null : await browser.tabs.get(tabId);
+  if (!tab || tab.windowId == null) {
+    throw new Error('The run tab is no longer available.');
+  }
+  // `new_tab` activates its result by default. Bring the originating run tab
+  // back before the after-capture so captureVisibleTab snapshots the page the
+  // run actually operated on instead of failing after saving only "before".
+  if (!tab.active) {
+    tab = await browser.tabs.update(tabId, { active: true });
+  }
+  if (!tab?.active || tab.windowId == null) {
+    throw new Error('The run tab could not be activated for capture.');
+  }
+  const dataUrl = await browser.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+  const downloadId = await browser.downloads.download({
+    url: dataUrl,
+    filename,
+    saveAs: false,
+    conflictAction: 'uniquify',
+  });
+  return { filename, downloadId };
+}
+
+async function startTrailingRunCapture(directive, tabId) {
+  if (directive.kind === 'record') {
+    throw new Error(t('sp.slash.unsupported', {
+      usage: trailingRunCaptureUsage('record'),
+    }));
+  }
+  const filenames = buildRunScreenshotFilenames(directive.saveAs);
+  const before = await captureAndSaveRunScreenshot(tabId, filenames.before);
+  return { kind: 'screenshot', filenames, before };
+}
+
+async function finishTrailingRunCapture(state, tabId) {
+  if (!state) return;
+  state.after = await captureAndSaveRunScreenshot(tabId, state.filenames.after);
+  if (currentTabId === tabId) {
+    showComposerToast(t('sp.record.saved', {
+      filename: `${state.filenames.before}, ${state.filenames.after}`,
+    }), { duration: 6000 });
+  }
+}
+
+function reportTrailingRunCaptureError(directive, error, tabId) {
+  if (currentTabId !== tabId || renderedTabId !== tabId) return;
+  const message = error?.message || String(error || 'unknown error');
+  const html = directive?.kind === 'record'
+    ? tSystemHtml('sp.record.error', { error: message })
+    : tSystemHtml('sp.screenshot.error', { msg: message });
+  addPersistentSlashMessage(systemHtml(html));
+}
+
 function updateApiBadge() {
   let badge = document.getElementById('api-badge');
   if (apiMutationsAllowed) {
@@ -4200,6 +4322,7 @@ async function sendMessage(extraChatParams = {}) {
   stopListening();
   let text = inputEl.value.trim();
   if (!text) return;
+  const submittedText = text;
   const tabId = currentTabId;
   const requestId = createRunRequestId(tabId);
   text = normalizeScreenshotCommandText(text);
@@ -4235,6 +4358,17 @@ async function sendMessage(extraChatParams = {}) {
       return false;
     }
     return enqueueQueuedComposerMessage(tabId, text);
+  }
+  let runCaptureDirective = null;
+  if (!retryOptions) {
+    runCaptureDirective = parseTrailingRunCaptureDirective(text);
+    if (runCaptureDirective?.error) {
+      showComposerToast(t('sp.slash.invalid_usage', {
+        usage: trailingRunCaptureUsage(runCaptureDirective.kind),
+      }), { duration: 5000 });
+      return false;
+    }
+    if (runCaptureDirective) text = runCaptureDirective.prompt;
   }
   const modeForSend = retryOptions?.mode || modeOverride || modeForMessageText(text);
   const apiMutationsAllowedForSend = retryOptions
@@ -4282,6 +4416,25 @@ async function sendMessage(extraChatParams = {}) {
     setTabAbortRequested(tabId, false);
     syncSendButtonState();
     return false;
+  }
+
+  let runCaptureState = null;
+  if (runCaptureDirective) {
+    try {
+      runCaptureState = await startTrailingRunCapture(runCaptureDirective, tabId);
+    } catch (error) {
+      reportTrailingRunCaptureError(runCaptureDirective, error, tabId);
+      setTabProcessing(tabId, false);
+      setTabAbortRequested(tabId, false);
+      if (sameTabId(currentTabId, tabId) && sameTabId(renderedTabId, tabId)) {
+        inputEl.value = submittedText;
+        saveInputDraftForTab(tabId, submittedText);
+        autoResizeInput();
+        updateSlashCommandAutocomplete();
+        syncSendButtonState();
+      }
+      return false;
+    }
   }
 
   let assistantEl = null;
@@ -4387,6 +4540,14 @@ async function sendMessage(extraChatParams = {}) {
       renderAgentErrorUpdate({ message: e.message }, tabId, requestId);
     }
   } finally {
+    if (runCaptureState) {
+      try {
+        await finishTrailingRunCapture(runCaptureState, tabId);
+      } catch (error) {
+        console.warn('[WebBrain] trailing run capture failed to finish:', error);
+        reportTrailingRunCaptureError(runCaptureDirective, error, tabId);
+      }
+    }
     if (localRunRequestIds.get(tabId) === requestId) localRunRequestIds.delete(tabId);
     if (activeChatPayloadsByTab.get(tabId) === activePayloadState) {
       scheduleActiveChatPayloadCleanup(tabId, activePayloadState);

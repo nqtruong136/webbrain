@@ -24,10 +24,20 @@ function loadSlashCommandRuntime(panelRel) {
   assert.notEqual(start, -1, `${panelRel}: slash command metadata missing`);
   assert.notEqual(end, -1, `${panelRel}: slash parser boundary missing`);
   const block = source.slice(start, end);
-  return Function('escapeHtml', 't', `${block}\nreturn { SLASH_COMMANDS, SLASH_HELP_OPTION, slashCommandOptions, slashCommandIsDiscoverable, slashOptionIsDiscoverable, slashOptionIsAvailable, findSlashCommand, parseSlashInvocation, slashInvocationIsOutOfBand, buildSlashCommandHelpHtml, buildSlashCommandDetailHtml };`)(
+  return Function('escapeHtml', 't', `${block}\nreturn { SLASH_COMMANDS, SLASH_HELP_OPTION, slashCommandOptions, slashCommandIsDiscoverable, slashOptionIsDiscoverable, slashOptionIsAvailable, findSlashCommand, parseSlashInvocation, slashInvocationIsOutOfBand, buildSlashCommandHelpHtml, buildSlashCommandDetailHtml, parseTrailingRunCaptureDirective, trailingRunCaptureUsage, sanitizeRunCaptureSaveAs, buildRunScreenshotFilenames, buildRunRecordingFilename };`)(
     (value) => String(value),
     (key) => key,
   );
+}
+
+function loadRunScreenshotRuntime(panelRel, apiName, api) {
+  const source = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+  const start = source.indexOf('async function captureAndSaveRunScreenshot(');
+  const end = source.indexOf('async function startTrailingRunCapture(', start);
+  assert.notEqual(start, -1, `${panelRel}: run screenshot helper missing`);
+  assert.notEqual(end, -1, `${panelRel}: run screenshot helper boundary missing`);
+  const block = source.slice(start, end);
+  return Function(apiName, `${block}\nreturn { captureAndSaveRunScreenshot };`)(api);
 }
 
 function loadSlashAutocompleteRuntime(panelRel) {
@@ -8828,6 +8838,116 @@ test('canonical slash parser handles flags, values, casing, termination, and har
   }
 });
 
+test('hidden trailing run-capture suffixes wrap normal prompts without entering slash help', () => {
+  for (const [label, panelRel] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js'],
+  ]) {
+    const runtime = loadSlashCommandRuntime(panelRel);
+
+    assert.deepEqual(
+      runtime.parseTrailingRunCaptureDirective('Update the checkout form /record'),
+      { kind: 'record', prompt: 'Update the checkout form', saveAs: null },
+      `${label}: /record suffix should be stripped from a normal prompt`,
+    );
+    assert.deepEqual(
+      runtime.parseTrailingRunCaptureDirective('Test the menu\n/screenshot --save-as "menu state.png"'),
+      { kind: 'screenshot', prompt: 'Test the menu', saveAs: 'menu state.png' },
+      `${label}: quoted screenshot filename should be parsed`,
+    );
+    assert.deepEqual(
+      runtime.parseTrailingRunCaptureDirective('/act fix it /record --SAVE-AS ../demo.webm'),
+      { kind: 'record', prompt: '/act fix it', saveAs: '../demo.webm' },
+      `${label}: suffix parsing should preserve a leading mode command and parse flags case-insensitively`,
+    );
+    assert.equal(runtime.parseTrailingRunCaptureDirective('/record'), null, `${label}: standalone /record must keep its existing behavior`);
+    assert.equal(runtime.parseTrailingRunCaptureDirective('/screenshot'), null, `${label}: standalone /screenshot must keep its existing behavior`);
+    assert.equal(runtime.parseTrailingRunCaptureDirective('Explain /record --unknown'), null, `${label}: invalid prose-like suffixes must remain normal prompt text`);
+    assert.equal(runtime.parseTrailingRunCaptureDirective('Do it /recording'), null, `${label}: longer slash words must not match /record`);
+    assert.equal(runtime.parseTrailingRunCaptureDirective('Do it /record --save-as').error, 'missing-save-as', `${label}: missing recording filename should fail locally`);
+    assert.equal(runtime.parseTrailingRunCaptureDirective('Do it /screenshot --save-as "unterminated.png').error, 'invalid-save-as', `${label}: unmatched filename quotes should fail locally`);
+
+    assert.equal(runtime.buildRunRecordingFilename('../demo.webm'), 'demo.webm', `${label}: recording save-as should be basename-only`);
+    assert.deepEqual(
+      runtime.buildRunScreenshotFilenames('../menu state.png', new Date('2026-07-16T12:34:56Z')),
+      { before: 'menu state-before.png', after: 'menu state-after.png' },
+      `${label}: screenshot save-as should generate paired before/after names`,
+    );
+    assert.deepEqual(
+      runtime.buildRunScreenshotFilenames(null, new Date('2026-07-16T12:34:56Z')),
+      {
+        before: 'webbrain-run-2026-07-16_12-34-56-before.png',
+        after: 'webbrain-run-2026-07-16_12-34-56-after.png',
+      },
+      `${label}: unnamed screenshots should receive a shared timestamp`,
+    );
+    assert.doesNotMatch(runtime.buildSlashCommandHelpHtml(), /--save-as/, `${label}: hidden suffix flag must stay out of /help`);
+
+    const panel = fs.readFileSync(path.join(ROOT, panelRel), 'utf8');
+    const sendMatch = panel.match(/async function sendMessage\(extraChatParams(?: = \{\})?\) \{[\s\S]*?\n  return accepted;\n\}/);
+    assert.ok(sendMatch, `${label}: sendMessage missing`);
+    const sendBody = sendMatch[0];
+    const parseIdx = sendBody.indexOf('parseTrailingRunCaptureDirective(text)');
+    const startIdx = sendBody.indexOf('startTrailingRunCapture(runCaptureDirective, tabId)');
+    const chatIdx = sendBody.indexOf("sendToBackground('chat'");
+    const finishIdx = sendBody.indexOf('await finishTrailingRunCapture(runCaptureState, tabId)');
+    assert.ok(parseIdx >= 0 && startIdx > parseIdx && chatIdx > startIdx, `${label}: capture should parse and start before chat dispatch`);
+    assert.ok(finishIdx > chatIdx && sendBody.slice(sendBody.lastIndexOf('} finally {')).includes('finishTrailingRunCapture'), `${label}: capture should finish from the run finally path`);
+    assert.match(panel, /(chrome|browser)\.downloads\.download\(\{[\s\S]*?filename,[\s\S]*?conflictAction: 'uniquify'/, `${label}: paired screenshots should save through Downloads`);
+  }
+
+  const chromePanel = fs.readFileSync(path.join(ROOT, 'src/chrome/src/ui/sidepanel.js'), 'utf8');
+  const firefoxPanel = fs.readFileSync(path.join(ROOT, 'src/firefox/src/ui/sidepanel.js'), 'utf8');
+  const background = fs.readFileSync(path.join(ROOT, 'src/chrome/src/background.js'), 'utf8');
+  const host = fs.readFileSync(path.join(ROOT, 'src/chrome/src/recorder/host.js'), 'utf8');
+  assert.match(chromePanel, /startTrailingRunCapture[\s\S]*?start_tab_recording[\s\S]*?filename: buildRunRecordingFilename\(directive\.saveAs\)/, 'chrome: trailing /record should pass the requested filename to the recorder');
+  assert.match(firefoxPanel, /startTrailingRunCapture[\s\S]*?directive\.kind === 'record'[\s\S]*?sp\.slash\.unsupported/, 'firefox: unsupported trailing recording should fail before the run');
+  assert.match(background, /case 'stop_tab_recording':[\s\S]*?expectedRecordingId: msg\.expectedRecordingId \|\| null/, 'chrome: automatic cleanup should scope stop to the recording it started');
+  assert.match(host, /recordingId:[\s\S]*?filename: normalizeRecordingFilename\(options\.filename\)/, 'chrome: recorder state should persist the custom filename and session identity');
+  assert.match(host, /opts\.expectedRecordingId[\s\S]*?reason: 'different-recording'/, 'chrome: run cleanup must not stop a newer recording');
+  assert.match(host, /if \(opts\.expectedRecordingId\) return \{ ok: true, alreadyStopped: true \};[\s\S]*?broadcast\('stopped'/, 'chrome: scoped cleanup after a manual stop should not overwrite the saved recording result');
+  assert.match(host, /const filename = recordingState\.filename \|\| `webbrain-recording-\$\{stamp\}\.webm`;/, 'chrome: custom filename should override only the default timestamped recording name');
+});
+
+test('run screenshot capture reactivates the originating tab before saving', async () => {
+  for (const [label, panelRel, apiName] of [
+    ['chrome', 'src/chrome/src/ui/sidepanel.js', 'chrome'],
+    ['firefox', 'src/firefox/src/ui/sidepanel.js', 'browser'],
+  ]) {
+    let tab = { id: 42, windowId: 7, active: false };
+    const updates = [];
+    const captures = [];
+    const downloads = [];
+    const api = {
+      tabs: {
+        get: async (tabId) => ({ ...tab, id: tabId }),
+        update: async (tabId, changes) => {
+          updates.push({ tabId, changes });
+          tab = { ...tab, ...changes, id: tabId };
+          return { ...tab };
+        },
+        captureVisibleTab: async (windowId, options) => {
+          captures.push({ windowId, options });
+          return 'data:image/png;base64,capture';
+        },
+      },
+      downloads: {
+        download: async (options) => {
+          downloads.push(options);
+          return 99;
+        },
+      },
+    };
+    const runtime = loadRunScreenshotRuntime(panelRel, apiName, api);
+    const result = await runtime.captureAndSaveRunScreenshot(42, 'run-after.png');
+
+    assert.deepEqual(updates, [{ tabId: 42, changes: { active: true } }], `${label}: inactive run tab should be reactivated`);
+    assert.deepEqual(captures, [{ windowId: 7, options: { format: 'png' } }], `${label}: capture should use the reactivated tab's window`);
+    assert.equal(downloads[0].filename, 'run-after.png', `${label}: after screenshot should be saved under the requested filename`);
+    assert.deepEqual(result, { filename: 'run-after.png', downloadId: 99 });
+  }
+});
+
 test('slash autocomplete progressively suggests only available unused flags', () => {
   const chrome = loadSlashAutocompleteRuntime('src/chrome/src/ui/sidepanel.js');
   const firefox = loadSlashAutocompleteRuntime('src/firefox/src/ui/sidepanel.js');
@@ -16480,6 +16600,35 @@ test('GPT-5.6 Responses streaming emits text, tool calls, usage, and replay item
       assert.equal(chunks[2].usage.prompt_tokens, 8);
       assert.equal(chunks[3].type, 'done');
       assert.deepEqual(chunks[3].responseItems, output);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('GPT-5.6 Responses streaming rejects EOF or [DONE] before a terminal response event', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const ending of ['', 'data: [DONE]\n\n']) {
+      const sse = `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'partial' })}\n\n${ending}`;
+      globalThis.fetch = async () => new Response(sse, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+      for (const Provider of [OpenAIProviderCh, OpenAIProviderFx]) {
+        const provider = new Provider({
+          providerName: 'openai',
+          baseUrl: 'https://api.openai.com/v1',
+          model: 'gpt-5.6-terra',
+        });
+        const chunks = [];
+        await assert.rejects(async () => {
+          for await (const chunk of provider.chatStream([{ role: 'user', content: 'hello' }])) {
+            chunks.push(chunk);
+          }
+        }, /ended before a terminal response event/);
+        assert.deepEqual(chunks, [{ type: 'text', content: 'partial' }]);
+      }
     }
   } finally {
     globalThis.fetch = originalFetch;
